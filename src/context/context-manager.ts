@@ -18,8 +18,6 @@ export class ContextManager {
   private systemMessage: MessageData | null = null;
   private compressionStrategy: CompressionStrategy;
   private _isCompressed = false;
-  /** Optional model name for tiktoken-aware token counting. */
-  private modelName?: string;
 
   constructor(config?: Partial<ContextConfig>) {
     this.config = {
@@ -30,14 +28,6 @@ export class ContextManager {
     this.compressionStrategy = new SlidingWindowCompression(
       this.config.compression
     );
-  }
-
-  /**
-   * Optionally set the model name so token counting uses tiktoken's
-   * model-specific encoding (e.g. "gpt-4o" → o200k_base).
-   */
-  setModelName(model: string): void {
-    this.modelName = model;
   }
 
   /**
@@ -72,19 +62,17 @@ export class ContextManager {
 
   /**
    * Approximate token count of all messages in the window.
-   * When a model name has been set (via setModelName), uses tiktoken
-   * for model-specific encoding accuracy.
    */
   getCurrentTokens(): number {
     let total = 0;
     // System message overhead
     if (this.systemMessage) {
-      total += 3 + countTokens(this.systemMessage.content, this.modelName);
+      total += 3 + countTokens(this.systemMessage.content);
     }
     // Per-message overhead + content
     for (const msg of this.messages) {
       total += 3; // role overhead
-      total += countTokens(msg.content, this.modelName);
+      total += countTokens(msg.content);
     }
     return total;
   }

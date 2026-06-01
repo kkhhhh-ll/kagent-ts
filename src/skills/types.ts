@@ -43,5 +43,4 @@ export interface SkillStatus {
   description: string;
   active: boolean;
   loadedAt?: Date;
-  keywordMatch?: string;
 }

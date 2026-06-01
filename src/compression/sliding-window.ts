@@ -19,7 +19,6 @@ export class SlidingWindowCompression implements CompressionStrategy {
    */
   constructor(config?: Partial<CompressionConfig>) {
     this.config = {
-      strategy: "sliding_window",
       keepLastN: config?.keepLastN ?? 20,
       keepSystemMessages: config?.keepSystemMessages ?? true,
     };
@@ -40,21 +39,6 @@ export class SlidingWindowCompression implements CompressionStrategy {
     // 2. Take the last N messages
     const recent = messages.slice(-this.config.keepLastN);
     preserved.push(...recent);
-
-    // 3. De-duplicate system message if it appears both in messages and param
-    if (systemMessage && this.config.keepSystemMessages) {
-      // If the system message from the param also appeared in the recent slice,
-      // remove the duplicate from the recent slice
-      const systemIndex = preserved.findIndex(
-        (m, i) =>
-          i > 0 && m.role === "system" && m.content === systemMessage.content
-      );
-      if (systemIndex > 0) {
-        // The system message from the param is at index 0.
-        // Remove the duplicate entry later in the list.
-        preserved.splice(systemIndex, 1);
-      }
-    }
 
     const removed = originalLength + (systemMessage ? 1 : 0) - preserved.length;
 

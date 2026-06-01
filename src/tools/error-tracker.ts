@@ -141,18 +141,10 @@ export class ToolErrorTracker {
   private activeTraceByTool: Map<string, string> = new Map();
   private storageDir: string;
   private persistImmediately: boolean;
-  private sessionId?: string;
 
   constructor(config?: ErrorTrackerConfig) {
     this.storageDir = config?.storageDir ?? ".error-traces";
     this.persistImmediately = config?.persistImmediately ?? true;
-  }
-
-  /**
-   * Set a session identifier that will be attached to all traces.
-   */
-  setSessionId(id: string): void {
-    this.sessionId = id;
   }
 
   // ─── Event Recording ────────────────────────────────────────────────────
@@ -468,7 +460,6 @@ export class ToolErrorTracker {
     const trace: ToolErrorTrace = {
       traceId,
       toolName,
-      sessionId: this.sessionId,
       createdAt: now,
       updatedAt: now,
       resolved: false,
@@ -511,7 +502,6 @@ export class ToolErrorTracker {
           resolvedCount: summaries.filter((s) => s.resolved).length,
           openCount: summaries.filter((s) => !s.resolved).length,
           updatedAt: nowISO(),
-          sessionId: this.sessionId,
           traces: summaries,
         },
         null,

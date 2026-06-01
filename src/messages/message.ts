@@ -43,13 +43,6 @@ export class Message {
   }
 
   /**
-   * Serialize to JSON for file persistence.
-   */
-  toJSON(): string {
-    return JSON.stringify(this.toDict());
-  }
-
-  /**
    * Deserialize a Message from a MessageData object.
    */
   static fromData(data: MessageData): Message {
@@ -58,14 +51,6 @@ export class Message {
       tool_call_id: data.tool_call_id,
       tool_calls: data.tool_calls,
     });
-  }
-
-  /**
-   * Deserialize a Message from a JSON string.
-   */
-  static fromJSON(json: string): Message {
-    const data: MessageData = JSON.parse(json);
-    return Message.fromData(data);
   }
 
   /**
