@@ -4,3 +4,4 @@ dist/
 .kagent-sessions/
 .error-traces/
 *.tgz
+.npmrc
