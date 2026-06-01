@@ -134,7 +134,7 @@ export class PlanSolveAgent extends Agent {
 
   async run(input: string): Promise<string> {
     // ── Phase 0: Progressive disclosure ──────────────────────────────
-    if (this.enableSkillAutoDetect && this.skillManager.activeCount >= 0) {
+    if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
       const activated = this.skillManager.detectAndActivate(input);
       if (activated.length > 0) {
         this.rebuildSystemPrompt();

@@ -324,6 +324,13 @@ export class SkillManager {
   }
 
   /**
+   * Get the total number of registered skills (active or inactive).
+   */
+  get count(): number {
+    return this.registry.size;
+  }
+
+  /**
    * Get the number of active skills.
    */
   get activeCount(): number {

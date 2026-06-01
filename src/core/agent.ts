@@ -167,11 +167,11 @@ export abstract class Agent {
   /** Whether auto-checkpointing is enabled. */
   protected checkpointingEnabled = false;
 
-  /** Abort controller for cancellation (SIGINT / user abort). */
-  protected abortController: AbortController;
+  /** Whether the current run has been cancelled by the user. */
+  protected _cancelled = false;
 
   constructor(config: AgentConfig) {
-    this.abortController = new AbortController();
+    this._cancelled = false;
     this.llm = config.llm;
     this.contextManager = config.contextManager ?? new ContextManager();
 
@@ -340,19 +340,18 @@ export abstract class Agent {
   /**
    * Cancel the current run.
    *
-   * This triggers the AbortSignal (passed to the LLM provider) and prevents
-   * any further checkpoint saves. Call this when the user presses SIGINT
-   * to discard the session rather than persisting it.
+   * Prevents any further checkpoint saves. Call this when the user presses
+   * SIGINT to discard the session rather than persisting it.
    */
   cancel(): void {
-    this.abortController.abort();
+    this._cancelled = true;
   }
 
   /**
    * Whether the run has been cancelled by the user.
    */
   get isCancelled(): boolean {
-    return this.abortController.signal.aborted;
+    return this._cancelled;
   }
 
   // ─── User Preferences ──────────────────────────────────────────────────
