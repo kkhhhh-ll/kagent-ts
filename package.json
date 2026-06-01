@@ -1,0 +1,56 @@
+{
+  "name": "kagent-ts",
+  "version": "0.1.0",
+  "description": "A TypeScript agent framework — ReAct / Plan-Solve agent loops, tool management with circuit breaker, session persistence and resume, file-based progressive skills, and user preference injection.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
+    "test": "echo \"No tests yet — see src/ for manual test patterns\""
+  },
+  "keywords": [
+    "agent",
+    "llm",
+    "react",
+    "plan-solve",
+    "ai",
+    "framework",
+    "typescript",
+    "openai",
+    "agents",
+    "tool-use"
+  ],
+  "license": "MIT",
+  "author": "kyk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kkhhhh-ll/kagent-ts"
+  },
+  "homepage": "https://github.com/kkhhhh-ll/kagent-ts#readme",
+  "bugs": {
+    "url": "https://github.com/kkhhhh-ll/kagent-ts/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "openai": "^4.80.0"
+  },
+  "optionalDependencies": {
+    "tiktoken": "^1.0.22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

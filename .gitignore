@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.kagent/
+.kagent-sessions/
+.error-traces/
+*.tgz
