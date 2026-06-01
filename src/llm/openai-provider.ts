@@ -103,7 +103,7 @@ export interface OpenAIRetryConfig {
  */
 export interface OpenAIConfig {
   apiKey: string;
-  model?: string;
+  model: string;
   temperature?: number;
   maxTokens?: number;
   baseURL?: string;
@@ -138,7 +138,14 @@ export class OpenAIProvider implements LLMProvider {
       apiKey: config.apiKey,
       baseURL: config.baseURL,
     });
-    this.model = config.model ?? "gpt-4o";
+    if (!config.model) {
+      throw new Error(
+        "OpenAIProvider: `model` is required. " +
+        "Provide a model name (e.g. \"gpt-4o\", \"gpt-4o-mini\", \"claude-sonnet-4-6\") " +
+        "when constructing the provider."
+      );
+    }
+    this.model = config.model;
     this.temperature = config.temperature ?? 0.7;
     this.maxTokens = config.maxTokens ?? 4096;
     this.timeout = config.timeout;

@@ -36,17 +36,30 @@ function countWithTiktoken(text: string, model?: string): number {
   if (!tk) throw new Error("tiktoken not loaded");
 
   let enc: any;
-  try {
-    // Try to get the encoding for the requested model
-    enc = tk.encoding_for_model(model ?? "gpt-4o");
-  } catch {
-    // Unknown model — use o200k_base (covers GPT-4o, GPT-4o-mini)
-    // Fall back to cl100k_base for older models if o200k_base also fails
+
+  // When a model name is provided, try `encoding_for_model` first
+  if (model) {
     try {
-      enc = tk.get_encoding("o200k_base");
+      enc = tk.encoding_for_model(model);
     } catch {
-      enc = tk.get_encoding("cl100k_base");
+      // Unknown model name — fall through to generic encoding below
+      enc = null;
     }
+    if (enc) {
+      try {
+        return enc.encode(text).length;
+      } finally {
+        enc.free();
+      }
+    }
+  }
+
+  // No model name or unknown model — use o200k_base (covers GPT-4o, GPT-4o-mini)
+  // Fall back to cl100k_base for older models if o200k_base also fails
+  try {
+    enc = tk.get_encoding("o200k_base");
+  } catch {
+    enc = tk.get_encoding("cl100k_base");
   }
 
   try {
@@ -65,7 +78,7 @@ function countWithTiktoken(text: string, model?: string): number {
  *
  * @param text  The text to count tokens in.
  * @param model The OpenAI model name for accurate encoding (e.g. "gpt-4o", "gpt-4o-mini").
- *              Defaults to "gpt-4o". Only used when tiktoken is available.
+ *              When omitted, uses the generic o200k_base encoding.
  */
 export function countTokens(text: string, model?: string): number {
   if (!text) return 0;
