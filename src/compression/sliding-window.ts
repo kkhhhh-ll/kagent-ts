@@ -19,6 +19,7 @@ export class SlidingWindowCompression implements CompressionStrategy {
    */
   constructor(config?: Partial<CompressionConfig>) {
     this.config = {
+      strategy: "sliding_window",
       keepLastN: config?.keepLastN ?? 20,
       keepSystemMessages: config?.keepSystemMessages ?? true,
     };
