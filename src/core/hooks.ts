@@ -1,5 +1,7 @@
 import { LLMResponse } from "../llm/interface";
 import { LLMNetworkError } from "../llm/openai-provider";
+import { MessageData } from "../messages/types";
+import { Tool } from "../tools/types";
 
 /**
  * Lifecycle hooks for agent execution.
@@ -13,8 +15,12 @@ import { LLMNetworkError } from "../llm/openai-provider";
 export interface AgentHooks {
   // ─── LLM Lifecycle ───────────────────────────────────────────────────
 
-  /** Called before each LLM chat() call. */
-  onLLMStart?: () => void;
+  /**
+   * Called before each LLM chat() call.
+   * @param messages The full context messages being sent to the LLM.
+   * @param tools    The tools available to the LLM for this call.
+   */
+  onLLMStart?: (messages: MessageData[], tools: Tool[]) => void;
 
   /** Called after a successful LLM response. */
   onLLMEnd?: (response: LLMResponse) => void;

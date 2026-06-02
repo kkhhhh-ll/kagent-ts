@@ -85,3 +85,8 @@ export type {
 
 // Utils
 export { countTokens, countMessageTokens } from "./utils/token-counter";
+
+// Trace — session execution trace logger
+export { TraceLogger } from "./trace/trace-logger";
+export type { TraceLoggerConfig } from "./trace/trace-logger";
+export type { AgentTraceEvent, AgentTraceEventType } from "./trace/types";

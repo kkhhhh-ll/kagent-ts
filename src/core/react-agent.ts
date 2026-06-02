@@ -119,7 +119,9 @@ export class ReActAgent extends Agent {
         this.sessionManager?.deleteSession(
           this.sessionManager.getSessionId(),
         );
-        return "Execution cancelled by user. Session discarded.";
+        const cancelMsg = "Execution cancelled by user. Session discarded.";
+        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        return cancelMsg;
       }
 
       // Check and compress if needed
@@ -129,7 +131,7 @@ export class ReActAgent extends Agent {
       const contextMessages = this.contextManager.getContextMessages();
 
       // Call the LLM with all registered tools — with network error handling
-      this.hooks.onLLMStart?.();
+      for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
       let response: LLMResponse;
       try {
         response = await this.llm.chat(
@@ -138,12 +140,12 @@ export class ReActAgent extends Agent {
         );
       } catch (err: unknown) {
         if (err instanceof LLMNetworkError) {
-          this.hooks.onLLMError?.(err);
+          for (const h of this.hooks) h.onLLMError?.(err);
           return this.handleNetworkError(err, iteration + 1);
         }
         throw err; // Unknown error — propagate
       }
-      this.hooks.onLLMEnd?.(response);
+      for (const h of this.hooks) h.onLLMEnd?.(response);
 
       // Parse the response content as structured JSON
       const parsed = parseReActResponse(response.content);
@@ -165,7 +167,7 @@ export class ReActAgent extends Agent {
         // Log the reasoning thought and capture as error analysis
         if (parsed.thought) {
           console.log(`[Thought] ${parsed.thought}`);
-          this.hooks.onThought?.(parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
           this.captureAnalysisFromThought(parsed.thought);
         }
 
@@ -177,7 +179,7 @@ export class ReActAgent extends Agent {
             args = {};
           }
 
-          this.hooks.onToolStart?.(toolCall.function.name, args);
+          for (const h of this.hooks) h.onToolStart?.(toolCall.function.name, args);
 
           // Execute via ToolRegistry — includes circuit breaker protection
           let result: string;
@@ -193,9 +195,9 @@ export class ReActAgent extends Agent {
 
           // Determine success vs error and fire appropriate hook
           if (result.startsWith("Error")) {
-            this.hooks.onToolError?.(toolCall.function.name, result);
+            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result);
           } else {
-            this.hooks.onToolEnd?.(toolCall.function.name, result);
+            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result);
           }
 
           // Track this result for error analysis if it indicates a failure
@@ -222,7 +224,7 @@ export class ReActAgent extends Agent {
 
       // No tool calls — extract the final answer from the JSON
       if ("answer" in parsed && parsed.answer) {
-        this.hooks.onFinish?.(parsed.answer);
+        for (const h of this.hooks) h.onFinish?.(parsed.answer);
         // Save final checkpoint as completed
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
@@ -236,7 +238,7 @@ export class ReActAgent extends Agent {
         consecutiveEmptyIterations++;
 
         console.log(`[Thought] ${parsed.thought}`);
-        this.hooks.onThought?.(parsed.thought);
+        for (const h of this.hooks) h.onThought?.(parsed.thought);
         this.captureAnalysisFromThought(parsed.thought);
 
         // If stuck in unproductive thought-only loop, inject format reminder
@@ -256,7 +258,7 @@ export class ReActAgent extends Agent {
             "Please try rephrasing or breaking it down into smaller, more specific steps.";
           const stuckAssistantMessage = Message.assistant(stuckMsg);
           this.contextManager.addMessage(stuckAssistantMessage.toDict());
-          this.hooks.onFinish?.(stuckMsg);
+          for (const h of this.hooks) h.onFinish?.(stuckMsg);
           return stuckMsg;
         }
 
@@ -275,7 +277,7 @@ export class ReActAgent extends Agent {
           "Please try rephrasing or breaking it down into smaller, more specific steps.";
         const stuckAssistantMessage = Message.assistant(stuckMsg);
         this.contextManager.addMessage(stuckAssistantMessage.toDict());
-        this.hooks.onFinish?.(stuckMsg);
+        for (const h of this.hooks) h.onFinish?.(stuckMsg);
         return stuckMsg;
       }
     }
@@ -286,7 +288,7 @@ export class ReActAgent extends Agent {
       `Please try breaking your request into smaller steps.`;
     const timeoutAssistantMessage = Message.assistant(timeoutMsg);
     this.contextManager.addMessage(timeoutAssistantMessage.toDict());
-    this.hooks.onFinish?.(timeoutMsg);
+    for (const h of this.hooks) h.onFinish?.(timeoutMsg);
     return timeoutMsg;
   }
 

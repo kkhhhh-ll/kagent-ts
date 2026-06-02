@@ -72,9 +72,9 @@ export interface AgentConfig {
 
   /**
    * Lifecycle hooks for observing agent execution.
-   * All hooks are optional.
+   * Accepts a single AgentHooks or an array of them.
    */
-  hooks?: AgentHooks;
+  hooks?: AgentHooks | AgentHooks[];
 
   // ─── User Preferences ───────────────────────────────────────────────
 
@@ -152,7 +152,7 @@ export abstract class Agent {
   protected preferenceManager?: PreferenceManager;
 
   /** Lifecycle hooks for observing agent execution. */
-  protected hooks: AgentHooks = {};
+  protected hooks: AgentHooks[] = [];
 
   /**
    * Trace ID of the most recent tool error waiting for LLM analysis.
@@ -222,7 +222,8 @@ export abstract class Agent {
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
 
     // ── Hooks ──────────────────────────────────────────────────────────────
-    this.hooks = config.hooks ?? {};
+    const rawHooks = config.hooks ?? [];
+    this.hooks = Array.isArray(rawHooks) ? rawHooks : [rawHooks];
 
     // ── User Preferences ─────────────────────────────────────────────────
     this.preferenceManager = config.preferenceManager;
@@ -300,6 +301,14 @@ export abstract class Agent {
       this.rebuildSystemPrompt();
     }
     return deactivated;
+  }
+
+  /**
+   * Register an additional lifecycle hook.
+   * Multiple hooks can be registered to observe agent execution.
+   */
+  addHook(hook: AgentHooks): void {
+    this.hooks.push(hook);
   }
 
   /**
