@@ -4,7 +4,6 @@ import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
 import { ToolErrorTracker } from "../tools/error-tracker";
 import { SkillManager } from "../skills/skill-manager";
-import { Skill } from "../skills/types";
 import { SessionManager } from "../session/session-manager";
 import { SessionState, SessionStatus, AgentType } from "../session/session-types";
 import { PreferenceManager } from "../preferences/preference-manager";
@@ -46,12 +45,7 @@ export interface AgentConfig {
   toolErrorTracker?: ToolErrorTracker;
 
   /**
-   * Skills for progressive-disclosure capabilities.
-   */
-  skills?: Skill[];
-
-  /**
-   * A pre-configured SkillManager. If provided, `skills` is ignored.
+   * A pre-configured SkillManager. If provided, `skillsDir` is ignored.
    */
   skillManager?: SkillManager;
 
@@ -188,17 +182,11 @@ export abstract class Agent {
       }
     }
 
-    // Skill manager — auto-bind the tool registry so skill tools register
+    // Skill manager — file-based progressive disclosure
     if (config.skillManager) {
       this.skillManager = config.skillManager;
     } else {
       this.skillManager = new SkillManager();
-    }
-    this.skillManager.bindToolRegistry(this.toolRegistry);
-
-    // Register any skills passed directly
-    if (config.skills && config.skills.length > 0) {
-      this.skillManager.register(...config.skills);
     }
 
     // Register file-based skills if a directory is configured
@@ -264,13 +252,6 @@ export abstract class Agent {
   }
 
   // ─── Skill Management ────────────────────────────────────────────────
-
-  /**
-   * Add skills to the agent's SkillManager.
-   */
-  addSkill(...skills: Skill[]): void {
-    this.skillManager.register(...skills);
-  }
 
   /**
    * Get the SkillManager (for advanced management).

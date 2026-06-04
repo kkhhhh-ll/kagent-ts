@@ -320,7 +320,7 @@ export class TraceLogger implements AgentHooks {
       <span class="item"><strong>Model:</strong> ${this.escapeHtml(this.modelName)}</span>
       <span class="item"><strong>Duration:</strong> ${duration}s</span>
       <span class="item"><strong>Events:</strong> ${this.events.length}</span>
-      <span class="item"><strong>Generated:</strong> ${new Date().toISOString()}</span>
+      <span class="item"><strong>Generated:</strong> ${new Date().toLocaleString("zh-CN", { hour12: false })}</span>
     </div>
   </div>
 

@@ -1,8 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { execFile, execFileSync } from "child_process";
 import { Skill } from "./types";
-import { Tool } from "../tools/types";
 
 // ─── Frontmatter Parsing ───────────────────────────────────────────────────
 
@@ -37,7 +35,12 @@ export function parseFrontmatter(raw: string): {
     const colonIdx = trimmed.indexOf(":");
     if (colonIdx <= 0) continue;
     const key = trimmed.slice(0, colonIdx).trim();
-    const value = trimmed.slice(colonIdx + 1).trim();
+    let value = trimmed.slice(colonIdx + 1).trim();
+    // Strip surrounding quotes if both ends match
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1).trim();
+    }
     if (key) frontmatter[key] = value;
   }
 
@@ -59,79 +62,22 @@ export function parseKeywords(raw?: string): string[] | undefined {
 
 // ─── Script Execution ──────────────────────────────────────────────────────
 
-const SUPPORTED_SCRIPT_EXTENSIONS = new Set([
-  ".sh",
-  ".bat",
-  ".cmd",
-  ".ps1",
-  ".js",
-  ".py",
-]);
-
 const REFERENCE_EXTENSIONS = new Set([".md", ".txt"]);
 
 /**
- * Determine the interpreter and arguments needed to run a script file.
- * Returns `null` if the file extension is not supported.
+ * Validate a skill name to prevent path traversal.
+ * Only allows alphanumeric characters, hyphens, underscores, and dots.
  */
-function getInterpreter(filePath: string): string[] | null {
-  const ext = path.extname(filePath).toLowerCase();
-  switch (ext) {
-    case ".sh":
-      return ["bash", filePath];
-    case ".bat":
-    case ".cmd":
-      return ["cmd.exe", "/c", filePath];
-    case ".ps1":
-      return ["powershell.exe", "-File", filePath];
-    case ".js":
-      return ["node", filePath];
-    case ".py":
-      // Try python3 first, fall back to python
-      try {
-        execFileSync("python3", ["--version"], { timeout: 5000, stdio: "ignore" });
-        return ["python3", filePath];
-      } catch {
-        return ["python", filePath];
-      }
-    default:
-      return null;
+function validateSkillName(name: string): void {
+  if (!name) {
+    throw new Error(`Skill name must not be empty.`);
   }
-}
-
-/**
- * Extract a description for a script tool from the first comment/line
- * of the file, or fall back to a generic description.
- */
-function getScriptDescription(filePath: string): string {
-  try {
-    const content = fs.readFileSync(filePath, "utf-8");
-    const firstLine = content.split("\n")[0]?.trim();
-    if (firstLine) {
-      // Strip common comment markers and shebang
-      const clean = firstLine
-        .replace(/^#!\s*/, "")
-        .replace(/^#\s*/, "")
-        .replace(/^\/\/\s*/, "")
-        .replace(/^--\s*/, "")
-        .trim();
-      if (clean && !clean.startsWith("/")) return clean;
-    }
-  } catch {
-    // Ignore read errors
+  // Prevent path traversal: reject names with slashes, backslashes, "..", or null bytes
+  if (/[/\\]|\.\.|\0/.test(name)) {
+    throw new Error(
+      `Invalid skill name "${name}": contains path traversal characters.`,
+    );
   }
-  return `Execute the ${path.basename(filePath)} script`;
-}
-
-/**
- * Sanitize a string for use as a tool name (alphanumeric + underscores only).
- */
-function sanitizeToolName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "");
 }
 
 // ─── FileSkillLoader ───────────────────────────────────────────────────────
@@ -144,15 +90,14 @@ function sanitizeToolName(name: string): string {
  * skills/
  * ├── <skill-name>/
  * │   ├── SKILL.md          # Frontmatter (metadata) + body (system prompt)
- * │   ├── reference/        # Optional reference docs (*.md, *.txt)
- * │   └── scripts/          # Optional executable scripts
+ * │   └── reference/        # Optional reference docs (*.md, *.txt)
  * ├── <another-skill>/
  * │   └── ...
  * ```
  *
  * Loading is two-phase:
  * 1. `scan()` — reads only frontmatter, returns metadata-only `Skill[]`
- * 2. `loadSystemPrompt()` / `loadScriptsAsTools()` — full content, called
+ * 2. `loadSystemPrompt()` — full content (body + reference docs), called
  *    lazily on activation.
  */
 export class FileSkillLoader {
@@ -174,8 +119,10 @@ export class FileSkillLoader {
 
   /**
    * Get the absolute path to a named skill's subdirectory.
+   * Throws if the skill name contains path traversal characters.
    */
   getSkillDir(name: string): string {
+    validateSkillName(name);
     return path.join(this.directory, name);
   }
 
@@ -183,8 +130,8 @@ export class FileSkillLoader {
    * Scan the skills directory and return metadata-only Skill objects.
    *
    * Reads only the frontmatter from each SKILL.md — the body (systemPrompt)
-   * and scripts are NOT loaded at this stage. They are loaded lazily when
-   * the skill is activated.
+   * is NOT loaded at this stage. It is loaded lazily when the skill is
+   * activated.
    *
    * Subdirectories without a valid SKILL.md (or without a `name` in
    * frontmatter) are skipped with a warning.
@@ -228,12 +175,19 @@ export class FileSkillLoader {
         continue;
       }
 
+      try {
+        validateSkillName(name);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[Skills] Skipping "${entry.name}": ${message}`);
+        continue;
+      }
+
       skills.push({
         name,
         description: frontmatter.description?.trim() ?? "",
         systemPrompt: "", // Loaded lazily on activation
         keywords: parseKeywords(frontmatter.keywords),
-        tools: [], // Loaded lazily on activation
       });
     }
 
@@ -285,91 +239,4 @@ export class FileSkillLoader {
     return parts.join("").trim();
   }
 
-  /**
-   * Create Tool objects from scripts in the scripts/ subdirectory.
-   *
-   * Each recognized script file becomes a Tool named `{skillName}_{scriptName}`.
-   *
-   * Returns an empty array if the scripts/ directory is missing or empty.
-   */
-  loadScriptsAsTools(name: string): Tool[] {
-    const scriptsDir = path.join(this.getSkillDir(name), "scripts");
-    const tools: Tool[] = [];
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(scriptsDir, { withFileTypes: true });
-    } catch {
-      // No scripts/ directory — return empty
-      return [];
-    }
-
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-
-      const ext = path.extname(entry.name).toLowerCase();
-      if (!SUPPORTED_SCRIPT_EXTENSIONS.has(ext)) continue;
-
-      const scriptPath = path.join(scriptsDir, entry.name);
-      const scriptName = path.basename(entry.name, ext);
-      const toolName = sanitizeToolName(`${name}_${scriptName}`);
-      const toolDescription = getScriptDescription(scriptPath);
-
-      const tool: Tool = {
-        name: toolName,
-        description: toolDescription,
-        parameters: {
-          type: "object",
-          properties: {
-            args: {
-              type: "string",
-              description:
-                `Arguments to pass to the ${entry.name} script. ` +
-                `Use shell-style syntax (space-separated).`,
-            },
-          },
-          required: ["args"],
-        },
-        async execute(params: Record<string, unknown>): Promise<string> {
-          const argsStr = String(params.args ?? "");
-          const interpreter = getInterpreter(scriptPath);
-
-          if (!interpreter) {
-            return `Error: Unsupported script type "${ext}" for ${entry.name}`;
-          }
-
-          const [cmd, ...cmdArgs] = interpreter;
-
-          // Append the script argument after the interpreter args
-          const allArgs = argsStr
-            ? [...cmdArgs, ...argsStr.split(/\s+/).filter(Boolean)]
-            : cmdArgs;
-
-          return new Promise((resolve) => {
-            const child = execFile(
-              cmd,
-              allArgs,
-              { timeout: 30000, maxBuffer: 1024 * 1024 },
-              (err, stdout, stderr) => {
-                if (err) {
-                  const details = stderr
-                    ? `\nstderr:\n${stderr.trim()}`
-                    : "";
-                  resolve(
-                    `Error executing ${entry.name}: ${err.message}${details}`,
-                  );
-                  return;
-                }
-                resolve(stdout.trim() || "(no output)");
-              },
-            );
-          });
-        },
-      };
-
-      tools.push(tool);
-    }
-
-    return tools;
-  }
 }

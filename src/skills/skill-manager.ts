@@ -1,6 +1,5 @@
 import { Skill, SkillStatus } from "./types";
 import { FileSkillLoader } from "./file-skill-loader";
-import { ToolRegistry } from "../tools/tool-registry";
 
 /**
  * Manages skill registration, activation, and progressive disclosure.
@@ -10,10 +9,11 @@ import { ToolRegistry } from "../tools/tool-registry";
  * core system prompt small while allowing deep expertise to be
  * injected when needed.
  *
- * Activation strategies:
- * 1. Keyword auto-detection — skills define keywords; user input
- *    that matches triggers activation.
- * 2. Manual activation — call `activate(name)` explicitly.
+ * Workflow:
+ * 1. Skills are registered from a directory (metadata only: name, description, keywords)
+ * 2. `buildAvailableSkillsHint()` lists all available skills in the system prompt
+ * 3. LLM decides which skill to use → `activate(name)` loads the full content
+ * 4. `buildSkillsPrompt()` includes the active skill's full system prompt
  */
 export class SkillManager {
   /** All registered skills (active or not), keyed by name. */
@@ -31,37 +31,7 @@ export class SkillManager {
   /** File-based skills whose full content has been loaded from disk. */
   private loadedFileSkills: Set<string> = new Set();
 
-  /** Reference to the ToolRegistry for registering/unregistering skill tools. */
-  private toolRegistry?: ToolRegistry;
-
-  /**
-   * @param toolRegistry Optional ToolRegistry — skills with tools
-   *                     will auto-register/unregister there.
-   */
-  constructor(toolRegistry?: ToolRegistry) {
-    this.toolRegistry = toolRegistry;
-  }
-
-  /**
-   * Bind a ToolRegistry so skill tools are managed automatically.
-   */
-  bindToolRegistry(registry: ToolRegistry): void {
-    this.toolRegistry = registry;
-  }
-
   // ─── Registration ────────────────────────────────────────────────────
-
-  /**
-   * Register one or more skills.
-   */
-  register(...skills: Skill[]): void {
-    for (const skill of skills) {
-      if (this.registry.has(skill.name)) {
-        throw new Error(`Skill "${skill.name}" is already registered.`);
-      }
-      this.registry.set(skill.name, skill);
-    }
-  }
 
   /**
    * Unregister a skill by name. Deactivates it first if active.
@@ -70,6 +40,7 @@ export class SkillManager {
     if (this.activeSkills.has(name)) {
       this.deactivate(name);
     }
+    this.fileLoaders.delete(name);
     return this.registry.delete(name);
   }
 
@@ -137,8 +108,7 @@ export class SkillManager {
 
   /**
    * Activate a skill by name.
-   * - Appends its system prompt to the accumulated skill context.
-   * - Registers its tools (if a ToolRegistry is bound).
+   * - Lazy-loads the full system prompt from disk (if file-based).
    * - Returns true if the skill was newly activated.
    */
   activate(name: string): boolean {
@@ -152,12 +122,11 @@ export class SkillManager {
       return false; // Already active
     }
 
-    // Lazy-load file-based skills: populate systemPrompt and tools from disk
+    // Lazy-load file-based skills: populate systemPrompt from disk
     const loader = this.fileLoaders.get(name);
     if (loader && !this.loadedFileSkills.has(name)) {
       try {
         skill.systemPrompt = loader.loadSystemPrompt(name);
-        skill.tools = loader.loadScriptsAsTools(name);
         this.loadedFileSkills.add(name);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -169,17 +138,6 @@ export class SkillManager {
 
     this.activeSkills.set(name, skill);
     this.activatedAt.set(name, new Date());
-
-    // Register skill tools if we have a registry
-    if (this.toolRegistry && skill.tools) {
-      for (const tool of skill.tools) {
-        try {
-          this.toolRegistry.register(tool);
-        } catch {
-          // Tool already registered — skip
-        }
-      }
-    }
 
     return true;
   }
@@ -203,18 +161,10 @@ export class SkillManager {
 
   /**
    * Deactivate a skill.
-   * - Unregisters its tools (if a ToolRegistry is bound).
    */
   deactivate(name: string): boolean {
     const skill = this.activeSkills.get(name);
     if (!skill) return false;
-
-    // Unregister skill tools
-    if (this.toolRegistry && skill.tools) {
-      for (const tool of skill.tools) {
-        this.toolRegistry.remove(tool.name);
-      }
-    }
 
     this.activeSkills.delete(name);
     this.activatedAt.delete(name);
@@ -281,7 +231,7 @@ export class SkillManager {
 
     const sections: string[] = [];
     for (const skill of active) {
-      sections.push(`[Skill: ${skill.name}]\n${skill.systemPrompt}`);
+      sections.push(`[Skill: ${skill.name}]\n${skill.systemPrompt ?? ""}`);
     }
     return "\n\n" + sections.join("\n\n");
   }
