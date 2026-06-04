@@ -9,6 +9,8 @@ import { SessionState, SessionStatus, AgentType } from "../session/session-types
 import { PreferenceManager } from "../preferences/preference-manager";
 import { Preferences } from "../preferences/types";
 import { AgentHooks } from "./hooks";
+import { McpClientManager } from "../mcp/mcp-client-manager";
+import type { McpServerConfig } from "../mcp/mcp-types";
 
 /**
  * Base configuration for any Agent.
@@ -114,6 +116,33 @@ export interface AgentConfig {
    * Default: false (existing consumers see no behavior change).
    */
   enableCheckpointing?: boolean;
+
+  // ─── MCP Server Configuration ─────────────────────────────────────────
+
+  /**
+   * MCP (Model Context Protocol) server configurations for dynamic tool
+   * discovery. Each key is the server name used as a prefix for discovered
+   * tools (e.g., a server named "filesystem" exposing tool "read" becomes
+   * available as "filesystem_read").
+   *
+   * Servers are connected asynchronously when `run()` is called (the
+   * constructor is synchronous). If a connection fails, a warning is
+   * logged and the other servers still connect.
+   *
+   * @example
+   * ```ts
+   * mcpServers: {
+   *   filesystem: {
+   *     command: "npx",
+   *     args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+   *   },
+   *   weather: {
+   *     url: "http://localhost:3001/sse",
+   *   },
+   * }
+   * ```
+   */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 /**
@@ -164,6 +193,17 @@ export abstract class Agent {
   /** Whether the current run has been cancelled by the user. */
   protected _cancelled = false;
 
+  // ─── MCP (Model Context Protocol) ─────────────────────────────────────
+
+  /** MCP server configurations (from AgentConfig). */
+  protected mcpServerConfigs?: Record<string, McpServerConfig>;
+
+  /** MCP client manager for dynamic tool discovery (lazily initialized). */
+  protected mcpClientManager?: McpClientManager;
+
+  /** Guards async init() from running more than once per instance. */
+  private _mcpInitialized = false;
+
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
@@ -208,6 +248,7 @@ export abstract class Agent {
       });
     }
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
+    this.mcpServerConfigs = config.mcpServers;
 
     // ── Hooks ──────────────────────────────────────────────────────────────
     const rawHooks = config.hooks ?? [];
@@ -512,6 +553,48 @@ export abstract class Agent {
    */
   protected getAgentType(): AgentType {
     return "react";
+  }
+
+  // ─── MCP / Async Initialization ─────────────────────────────────────────
+
+  /**
+   * Initialize async resources (MCP connections, tool discovery).
+   *
+   * Idempotent — safe to call multiple times; the actual work happens
+   * only on the first invocation. Subclasses SHOULD call `await this.init()`
+   * at the start of `run()`.
+   *
+   * If MCP servers are configured:
+   * 1. Creates an McpClientManager bound to the tool registry.
+   * 2. Connects to each server and registers discovered tools.
+   * 3. Logs warnings for any servers that fail to connect.
+   */
+  protected async init(): Promise<void> {
+    if (this._mcpInitialized) return;
+    this._mcpInitialized = true;
+
+    if (!this.mcpServerConfigs || Object.keys(this.mcpServerConfigs).length === 0) {
+      return;
+    }
+
+    this.mcpClientManager = new McpClientManager(this.toolRegistry);
+    const errors = await this.mcpClientManager.connectAll(this.mcpServerConfigs);
+
+    if (errors.length > 0) {
+      console.warn(
+        `[MCP] ${errors.length} of ${Object.keys(this.mcpServerConfigs).length} server(s) failed to connect.`,
+      );
+    }
+  }
+
+  /**
+   * Gracefully shut down MCP connections.
+   *
+   * Disconnects all servers and unregisters their tools. Safe to call
+   * even if init() was never called or no servers were configured.
+   */
+  async shutdown(): Promise<void> {
+    await this.mcpClientManager?.disconnectAll();
   }
 
   // ─── Error Trace & Analysis ──────────────────────────────────────────

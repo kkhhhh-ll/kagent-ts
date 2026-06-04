@@ -90,3 +90,12 @@ export { countTokens, countMessageTokens } from "./utils/token-counter";
 export { TraceLogger } from "./trace/trace-logger";
 export type { TraceLoggerConfig } from "./trace/trace-logger";
 export type { AgentTraceEvent, AgentTraceEventType } from "./trace/types";
+
+// MCP (Model Context Protocol) — dynamic tool discovery
+export { McpClientManager } from "./mcp/mcp-client-manager";
+export { McpConnectionError } from "./mcp/mcp-types";
+export type {
+  McpServerConfig,
+  McpConnectionStatus,
+  McpConnectionErrorReport,
+} from "./mcp/mcp-types";

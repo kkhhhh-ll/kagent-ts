@@ -133,6 +133,9 @@ export class PlanSolveAgent extends Agent {
   }
 
   async run(input: string): Promise<string> {
+    // ── Async initialization (MCP connections, etc.) ─────────────────
+    await this.init();
+
     // ── Phase 0: Progressive disclosure ──────────────────────────────
     if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
       const activated = this.skillManager.detectAndActivate(input);

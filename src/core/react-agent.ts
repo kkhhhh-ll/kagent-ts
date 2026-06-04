@@ -90,6 +90,9 @@ export class ReActAgent extends Agent {
   }
 
   async run(input: string): Promise<string> {
+    // ── Async initialization (MCP connections, etc.) ────────────────────
+    await this.init();
+
     // ── Progressive disclosure ─────────────────────────────────────────
     if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
       const activated = this.skillManager.detectAndActivate(input);
