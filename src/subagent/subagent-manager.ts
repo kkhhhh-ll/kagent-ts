@@ -246,13 +246,20 @@ export class SubAgentManager {
   }
 
   /**
-   * Build a description of all registered sub-agents for the spawn tool.
+   * Build a formatted list of all registered sub-agents with their
+   * capabilities (returned by the `list_subagents` tool).
    */
-  buildToolDescription(): string {
+  buildSubAgentList(): string {
     if (this.definitions.size === 0) return "No sub-agents registered.";
     const lines: string[] = [];
     for (const def of this.definitions.values()) {
-      lines.push(`- ${def.name}: ${def.description}`);
+      lines.push(`- **${def.name}**: ${def.description}`);
+      if (def.tools.length > 0) {
+        lines.push(`  Tools: ${def.tools.join(", ")}`);
+      }
+      if (def.skills.length > 0) {
+        lines.push(`  Skills: ${def.skills.join(", ")}`);
+      }
     }
     return lines.join("\n");
   }
