@@ -3,6 +3,7 @@ import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
 import { ToolErrorTracker } from "../tools/error-tracker";
+import { ToolOutputTruncator } from "../tools/tool-output-truncator";
 import { SkillManager } from "../skills/skill-manager";
 import { SessionManager } from "../session/session-manager";
 import { SessionState, SessionStatus, AgentType } from "../session/session-types";
@@ -30,6 +31,18 @@ export interface AgentConfig {
    * Takes precedence over the plain `tools` array.
    */
   toolRegistry?: ToolRegistry;
+
+  /**
+   * Max bytes a tool output can be before it is automatically truncated.
+   * When a tool returns a result larger than this, the first 2 KB are kept
+   * in context and the full output is saved to disk for on-demand reading.
+   *
+   * Set to 0 (default) to disable truncation.
+   *
+   * Only used when `toolRegistry` is NOT provided (the framework creates
+   * its own registry).
+   */
+  toolOutputMaxBytes?: number;
 
   /**
    * Number of retry attempts allowed per tool before its circuit
@@ -213,9 +226,13 @@ export abstract class Agent {
     if (config.toolRegistry) {
       this.toolRegistry = config.toolRegistry;
     } else {
+      const truncator = (config.toolOutputMaxBytes && config.toolOutputMaxBytes > 0)
+        ? new ToolOutputTruncator(config.toolOutputMaxBytes)
+        : undefined;
       this.toolRegistry = new ToolRegistry(
         config.toolRetryCount,
         config.toolErrorTracker,
+        truncator,
       );
       if (config.tools && config.tools.length > 0) {
         this.toolRegistry.registerMany(config.tools);

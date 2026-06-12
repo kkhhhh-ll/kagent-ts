@@ -29,6 +29,9 @@ export type { CircuitBreakerConfig } from "./tools/circuit-breaker";
 export { BreakerState } from "./tools/types";
 export type { BreakerStatus } from "./tools/types";
 
+// Tool output truncator — large output to disk
+export { ToolOutputTruncator } from "./tools/tool-output-truncator";
+
 // Tool error tracker — observability for tool failure chains
 export { ToolErrorTracker, categorizeError } from "./tools/error-tracker";
 export type { ErrorTrackerConfig } from "./tools/error-tracker";

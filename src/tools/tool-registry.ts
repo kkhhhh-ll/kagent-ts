@@ -1,6 +1,7 @@
 import { Tool, BreakerStatus } from "./types";
 import { CircuitBreaker } from "./circuit-breaker";
 import { ToolErrorTracker } from "./error-tracker";
+import { ToolOutputTruncator } from "./tool-output-truncator";
 
 /**
  * Registry that manages tool definitions together with circuit breakers.
@@ -15,15 +16,23 @@ export class ToolRegistry {
   private breakers: Map<string, CircuitBreaker> = new Map();
   private retryCount: number;
   private errorTracker?: ToolErrorTracker;
+  private truncator: ToolOutputTruncator;
 
   /**
    * @param retryCount Number of retries allowed after the first failure
    *                    (default: 2 → 3 total attempts before circuit opens).
    * @param errorTracker Optional ToolErrorTracker for recording failure chains.
+   * @param truncator   Optional ToolOutputTruncator for truncating large
+   *                    tool outputs (default: disabled).
    */
-  constructor(retryCount?: number, errorTracker?: ToolErrorTracker) {
+  constructor(
+    retryCount?: number,
+    errorTracker?: ToolErrorTracker,
+    truncator?: ToolOutputTruncator,
+  ) {
     this.retryCount = retryCount ?? 2;
     this.errorTracker = errorTracker;
+    this.truncator = truncator ?? new ToolOutputTruncator();
   }
 
   /**
@@ -132,7 +141,8 @@ export class ToolRegistry {
 
     // Execute with failure tracking and retry guidance
     try {
-      const result = await tool.execute(args);
+      const rawResult = await tool.execute(args);
+      const result = this.truncator.truncate(name, rawResult);
       // Success after previous failures — record recovery + reset breaker
       if (breaker.currentFailureCount > 0) {
         // Record recovery in the error tracker
