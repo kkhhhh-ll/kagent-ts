@@ -5,7 +5,6 @@ import { LLMProvider } from "../llm/interface";
 import { ToolRegistry } from "../tools/tool-registry";
 import { Tool } from "../tools/types";
 import { SkillManager } from "../skills/skill-manager";
-import { Skill } from "../skills/types";
 
 /**
  * Manages sub-agent definitions, spawning, and result collection.
@@ -34,8 +33,14 @@ export class SubAgentManager {
   /** Reference to the main agent's ToolRegistry for tool lookup. */
   private toolRegistry?: ToolRegistry;
 
-  /** Reference to the main agent's SkillManager for skill activation. */
+  /** Reference to the main agent's SkillManager (fallback). */
   private skillManager?: SkillManager;
+
+  /** Skills directory path for sub-agent skill loading. */
+  private skillsDir?: string;
+
+  /** Max wall-clock duration for a single sub-agent run (ms). Default: 5 min. */
+  private timeoutMs: number = 5 * 60 * 1000;
 
   /** Counter for generating unique sub-agent run IDs. */
   private runIdCounter = 0;
@@ -80,10 +85,18 @@ export class SubAgentManager {
    * Set shared resources from the main agent.
    * Called once during agent init.
    */
-  bind(llmProvider: LLMProvider, toolRegistry: ToolRegistry, skillManager: SkillManager): void {
+  bind(
+    llmProvider: LLMProvider,
+    toolRegistry: ToolRegistry,
+    skillManager: SkillManager,
+    skillsDir?: string,
+    timeoutMs?: number,
+  ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
     this.skillManager = skillManager;
+    this.skillsDir = skillsDir;
+    if (timeoutMs !== undefined) this.timeoutMs = timeoutMs;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -118,13 +131,42 @@ export class SubAgentManager {
       );
     }
 
+    // Reject duplicate spawns for the same definition name
+    const alreadyRunning = this.pending.find((r) => r.name === name && !r.resolved);
+    if (alreadyRunning) {
+      throw new Error(
+        `Sub-agent "${name}" is already running (${alreadyRunning.subAgentId}). ` +
+        `Wait for it to complete before spawning again.`,
+      );
+    }
+
     const runId = `${name}_${++this.runIdCounter}_${Date.now()}`;
 
-    // Fire-and-forget: start the sub-agent run, store the promise
-    const startedAt = Date.now();
-    const promise = this.executeRun(name, runId, definition, input, startedAt);
+    const pending: PendingRun = {
+      subAgentId: runId,
+      name,
+      startedAt: Date.now(),
+      resolved: null,
+      promise: Promise.resolve(undefined as unknown as SubAgentResult), // placeholder
+    };
 
-    this.pending.push({ subAgentId: runId, name, startedAt, promise });
+    // Fire-and-forget: start the sub-agent run, store the result
+    pending.promise = this.executeRun(name, runId, definition, input, pending.startedAt)
+      .then((r) => { pending.resolved = r; return r; })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const fallback: SubAgentResult = {
+          subAgentId: runId,
+          name,
+          success: false,
+          output: this.wrapXml(name, runId, false, message, Date.now() - pending.startedAt),
+          durationMs: Date.now() - pending.startedAt,
+        };
+        pending.resolved = fallback;
+        return fallback;
+      });
+
+    this.pending.push(pending);
 
     console.log(`[SubAgent] Spawned "${name}" (run: ${runId}).`);
     return runId;
@@ -144,21 +186,17 @@ export class SubAgentManager {
   async pollCompleted(): Promise<SubAgentResult[]> {
     if (this.pending.length === 0) return [];
 
-    // Use Promise.race + a null sentinel to check each pending run
+    // Yield the event loop so in-flight promises can make progress
+    await new Promise((r) => setImmediate(r));
+
     const results: SubAgentResult[] = [];
     const stillPending: PendingRun[] = [];
 
     for (const run of this.pending) {
-      // Check if resolved by racing against an immediately-resolving null
-      const resolved = await Promise.race([
-        run.promise.then((r) => r),
-        Promise.resolve(null as unknown as SubAgentResult),
-      ]);
-
-      if (resolved !== null) {
-        results.push(resolved);
+      if (run.resolved !== null) {
+        results.push(run.resolved);
         console.log(
-          `[SubAgent] "${run.name}" (run: ${run.subAgentId}) completed in ${resolved.durationMs}ms.`,
+          `[SubAgent] "${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
         );
       } else {
         stillPending.push(run);
@@ -177,6 +215,20 @@ export class SubAgentManager {
     const results = await Promise.all(this.pending.map((r) => r.promise));
     this.pending = [];
     return results;
+  }
+
+  // ─── Cancel ───────────────────────────────────────────────────────────────
+
+  /**
+   * Cancel all pending sub-agents without waiting for them to finish.
+   * Running sub-agents continue in the background but their results
+   * are discarded.
+   */
+  cancelAll(): void {
+    if (this.pending.length > 0) {
+      console.log(`[SubAgent] Cancelling ${this.pending.length} pending sub-agent(s).`);
+      this.pending = [];
+    }
   }
 
   // ─── Queries ──────────────────────────────────────────────────────────────
@@ -217,22 +269,21 @@ export class SubAgentManager {
     input: string,
     startedAt: number,
   ): Promise<SubAgentResult> {
-    try {
-      const agent = this.buildSubAgent(definition);
-      const output = await agent.run(input);
-      const durationMs = Date.now() - startedAt;
+    const runPromise = this.doExecute(name, runId, definition, input, startedAt);
 
-      return {
-        subAgentId: runId,
-        name,
-        success: true,
-        output: this.wrapXml(name, runId, true, output, durationMs),
-        durationMs,
-      };
+    // Wrap with timeout
+    const timeoutPromise = new Promise<SubAgentResult>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`Sub-agent "${name}" timed out after ${this.timeoutMs / 1000}s.`)),
+        this.timeoutMs,
+      );
+    });
+
+    try {
+      return await Promise.race([runPromise, timeoutPromise]);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const durationMs = Date.now() - startedAt;
-
       return {
         subAgentId: runId,
         name,
@@ -241,6 +292,25 @@ export class SubAgentManager {
         durationMs,
       };
     }
+  }
+
+  private async doExecute(
+    name: string,
+    runId: string,
+    definition: SubAgentDefinition,
+    input: string,
+    startedAt: number,
+  ): Promise<SubAgentResult> {
+    const agent = this.buildSubAgent(definition);
+    const output = await agent.run(input);
+    const durationMs = Date.now() - startedAt;
+    return {
+      subAgentId: runId,
+      name,
+      success: true,
+      output: this.wrapXml(name, runId, true, output, durationMs),
+      durationMs,
+    };
   }
 
   /**
@@ -270,14 +340,15 @@ export class SubAgentManager {
       toolRegistry.registerMany(tools);
     }
 
-    // Build a dedicated SkillManager with copies of declared skills
+    // Build a dedicated SkillManager with declared skills pre-activated.
+    // Use registerFromDirectory when skillsDir is available so lazy-loading
+    // works correctly (populates systemPrompt from disk).
     const skillManager = new SkillManager();
+    if (this.skillsDir) {
+      skillManager.registerFromDirectory(this.skillsDir);
+    }
     for (const skillName of definition.skills) {
-      const mainSkill = this.skillManager!.get(skillName);
-      if (mainSkill) {
-        // Copy the skill (shallow clone) so sub-agent state is independent
-        const skillCopy: Skill = { ...mainSkill };
-        skillManager.register(skillCopy);
+      if (skillManager.has(skillName)) {
         skillManager.activate(skillName);
       } else {
         console.warn(

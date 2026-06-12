@@ -179,7 +179,7 @@ export class PlanSolveAgent extends Agent {
         return cancelMsg;
       }
 
-      this.checkAndCompress();
+      await this.checkAndCompress();
 
       // Rebuild the system prompt to inject current plan progress
       // and any replan hint if consecutive failures are detected

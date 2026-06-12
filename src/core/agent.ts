@@ -251,6 +251,9 @@ export abstract class Agent {
   /** Sub-agent definitions directory (from AgentConfig). */
   protected subAgentsDir?: string;
 
+  /** Skills directory path (from AgentConfig). */
+  protected skillsDir?: string;
+
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
@@ -301,6 +304,7 @@ export abstract class Agent {
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
     this.mcpServerConfigs = config.mcpServers;
     this.subAgentsDir = config.subAgentsDir;
+    this.skillsDir = config.skillsDir;
 
     // ── Hooks ──────────────────────────────────────────────────────────────
     const rawHooks = config.hooks ?? [];
@@ -399,16 +403,11 @@ export abstract class Agent {
 
   /**
    * Pre-iteration maintenance:
-   * 1. Compress context window if needed.
+   * 1. Compress context window if needed (4-step progressive).
    * 2. Auto-reload preferences from disk if the file was manually edited.
    */
-  protected checkAndCompress(): void {
-    if (this.contextManager.shouldCompress()) {
-      const { removedCount } = this.contextManager.compress();
-      console.log(
-        `[Context] Compression triggered: removed ${removedCount} messages.`
-      );
-    }
+  protected async checkAndCompress(): Promise<void> {
+    await this.contextManager.checkAndCompress(this.llm);
 
     // Auto-reload preferences if the file was manually edited
     if (this.preferenceManager?.hasFileChanged()) {
@@ -428,6 +427,7 @@ export abstract class Agent {
    */
   cancel(): void {
     this._cancelled = true;
+    this.subAgentManager?.cancelAll();
   }
 
   /**
@@ -594,6 +594,7 @@ export abstract class Agent {
     this.coreSystemPrompt = "";
     this.preferences = {};
     this.pendingErrorTraceId = null;
+    this.subAgentManager?.cancelAll();
     if (this.sessionManager) {
       this.sessionManager.deleteSession(this.sessionManager.getSessionId());
     }
@@ -640,7 +641,7 @@ export abstract class Agent {
     // ── Sub-agent registry ───────────────────────────────────────────
     if (this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
-      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager);
+      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir);
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
     }
   }

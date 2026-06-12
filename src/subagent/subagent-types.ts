@@ -53,4 +53,6 @@ export interface PendingRun {
   name: string;
   startedAt: number;
   promise: Promise<SubAgentResult>;
+  /** Set to the result once the promise resolves. */
+  resolved: SubAgentResult | null;
 }

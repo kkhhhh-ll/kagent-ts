@@ -11,11 +11,30 @@ export interface ContextConfig {
   maxTokens: number;
 
   /**
-   * Token count threshold at which compression triggers (as a fraction of maxTokens).
-   * When `currentTokens >= maxTokens * compressionThresholdRatio`, compression fires.
-   * Default: 0.75 (compression fires at ~75% of context).
+   * When the remaining free tokens drop below this value, compression triggers.
+   * Default: 20000 (trigger at ~16% remaining).
+   *
+   * Trigger condition: `currentTokens >= maxTokens - compressionThreshold`
    */
-  compressionThresholdRatio: number;
+  compressionThreshold: number;
+
+  /**
+   * Number of conversation turns to preserve in Step 2 of compression.
+   * Default: 40.
+   */
+  keepTurns: number;
+
+  /**
+   * Number of turns to keep unsummarized in Step 4 (LLM summarization).
+   * Default: 10.
+   */
+  summaryKeepTurns: number;
+
+  /**
+   * Tool results older than this (ms) are candidates for removal in Step 3.
+   * Default: 3600000 (60 minutes).
+   */
+  toolResultMaxAgeMs: number;
 
   /**
    * Compression strategy configuration.

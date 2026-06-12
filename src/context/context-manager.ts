@@ -1,33 +1,35 @@
 import { MessageData, Role } from "../messages/types";
 import { ContextConfig, ContextState } from "./types";
-import { CompressionStrategy } from "../compression/interface";
-import { SlidingWindowCompression } from "../compression/sliding-window";
 import { countTokens } from "../utils/token-counter";
+import { ProgressiveCompressor } from "../compression/progressive-compressor";
+import { LLMProvider } from "../llm/interface";
 
 /**
  * ContextManager maintains the message window that will be sent to the LLM.
  *
  * Responsibilities:
- * - Accept new messages and update the running token count.
+ * - Accept new messages with automatic timestamps.
  * - Detect when the token threshold is crossed and trigger compression.
+ * - Run progressive 4-step compression with optional LLM summarization.
  * - Provide the current message list to the caller (e.g., Agent).
  */
 export class ContextManager {
   private config: ContextConfig;
   private messages: MessageData[] = [];
   private systemMessage: MessageData | null = null;
-  private compressionStrategy: CompressionStrategy;
   private _isCompressed = false;
+  private compressor: ProgressiveCompressor;
 
   constructor(config?: Partial<ContextConfig>) {
     this.config = {
       maxTokens: config?.maxTokens ?? 128000,
-      compressionThresholdRatio: config?.compressionThresholdRatio ?? 0.75,
+      compressionThreshold: config?.compressionThreshold ?? 20000,
+      keepTurns: config?.keepTurns ?? 40,
+      summaryKeepTurns: config?.summaryKeepTurns ?? 10,
+      toolResultMaxAgeMs: config?.toolResultMaxAgeMs ?? 60 * 60 * 1000,
       compression: config?.compression,
     };
-    this.compressionStrategy = new SlidingWindowCompression(
-      this.config.compression
-    );
+    this.compressor = new ProgressiveCompressor(this.config);
   }
 
   /**
@@ -38,57 +40,86 @@ export class ContextManager {
   }
 
   /**
-   * Add a message to the context window.
+   * Add a message to the context window. Timestamps are auto-set if not
+   * already present.
    */
   addMessage(message: MessageData): void {
+    if (!message.timestamp) {
+      message.timestamp = Date.now();
+    }
     this.messages.push(message);
   }
 
   /**
-   * Check whether the context window has exceeded the compression threshold.
+   * Check whether compression should trigger.
+   * @param model Optional model name for accurate tiktoken encoding.
+   * @returns true when remaining free tokens < compressionThreshold.
    */
-  shouldCompress(): boolean {
-    return this.getCurrentTokens() >= this.getCompressionThreshold();
+  shouldCompress(model?: string): boolean {
+    return this.getCurrentTokens(model) >= this.config.maxTokens - this.config.compressionThreshold;
   }
 
   /**
-   * The token count at which compression triggers.
+   * Token count of all messages in the window.
+   * @param model Optional model name for accurate tiktoken encoding.
    */
-  private getCompressionThreshold(): number {
-    return Math.floor(
-      this.config.maxTokens * this.config.compressionThresholdRatio
-    );
-  }
-
-  /**
-   * Approximate token count of all messages in the window.
-   */
-  getCurrentTokens(): number {
+  getCurrentTokens(model?: string): number {
     let total = 0;
-    // System message overhead
     if (this.systemMessage) {
-      total += 3 + countTokens(this.systemMessage.content);
+      total += 3 + countTokens(this.systemMessage.content, model);
     }
-    // Per-message overhead + content
     for (const msg of this.messages) {
-      total += 3; // role overhead
-      total += countTokens(msg.content);
+      total += 3 + countTokens(msg.content, model);
     }
     return total;
   }
 
   /**
-   * Run the compression strategy to reduce the window size.
-   * Resets the message list to the compressed output.
+   * Run progressive 4-step compression.
+   *
+   * @param llm Optional LLM provider for Step 4 (summarization).
+   *            If omitted, only steps 1-3 are applied.
    */
-  compress(): { removedCount: number } {
-    const result = this.compressionStrategy.compress(
+  async compress(llm?: LLMProvider): Promise<{ removedCount: number }> {
+    const model = llm?.model;
+    const result = await this.compressor.compress(
       this.messages,
-      this.systemMessage ?? undefined
+      this.systemMessage,
+      llm,
+      model,
     );
     this.messages = result.messages;
-    this._isCompressed = result.applied;
+    if (result.applied) {
+      this._isCompressed = true;
+    }
     return { removedCount: result.removedCount };
+  }
+
+  /**
+   * Convenience: check + compress if needed.
+   *
+   * @param llm LLM provider for Step 4 summarization and accurate token counting.
+   * @returns true if compression was applied.
+   */
+  async checkAndCompress(llm?: LLMProvider): Promise<boolean> {
+    const model = llm?.model;
+    if (!this.shouldCompress(model)) return false;
+
+    const beforeTokens = this.getCurrentTokens(model);
+    console.log(
+      `[Context] Compression triggered: ${beforeTokens} tokens, ` +
+      `threshold at ${this.config.maxTokens - this.config.compressionThreshold}.`,
+    );
+
+    const { removedCount } = await this.compress(llm);
+
+    const afterTokens = this.getCurrentTokens(model);
+    console.log(
+      `[Context] Compression done: ${beforeTokens} → ${afterTokens} tokens ` +
+      `(${removedCount > 0 ? `removed ~${removedCount} messages` : "no messages removed"}).`,
+    );
+
+    return removedCount > 0;
   }
 
   /**

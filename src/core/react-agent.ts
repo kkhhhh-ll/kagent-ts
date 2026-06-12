@@ -95,8 +95,12 @@ export class ReActAgent extends Agent {
    * can dispatch work to sub-agents. Only registered when a
    * SubAgentManager has been initialized (via subAgentsDir config).
    */
+  private _spawnToolRegistered = false;
+
   private registerSpawnTool(): void {
+    if (this._spawnToolRegistered) return;
     if (!this.subAgentManager) return;
+    this._spawnToolRegistered = true;
 
     const manager = this.subAgentManager;
     const desc = manager.buildToolDescription();
@@ -186,7 +190,7 @@ export class ReActAgent extends Agent {
       }
 
       // Check and compress if needed
-      this.checkAndCompress();
+      await this.checkAndCompress();
 
       // ── Poll sub-agent results ──────────────────────────────────────
       const subResults = await this.pollSubAgentResults();

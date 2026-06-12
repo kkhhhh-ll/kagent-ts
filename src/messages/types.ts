@@ -29,4 +29,6 @@ export interface MessageData {
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  /** Unix timestamp in milliseconds when the message was recorded. */
+  timestamp?: number;
 }

@@ -67,9 +67,9 @@ export type { OpenAIConfig, OpenAIRetryConfig, NetworkErrorCause } from "./llm/o
 export { ContextManager } from "./context/context-manager";
 export type { ContextConfig, ContextState } from "./context/types";
 
-// Compression
+// Compression — progressive 4-step
+export { ProgressiveCompressor } from "./compression/progressive-compressor";
 export type { CompressionStrategy, CompressionResult } from "./compression/interface";
-export { SlidingWindowCompression } from "./compression/sliding-window";
 export type { CompressionConfig } from "./compression/types";
 
 // User preferences
