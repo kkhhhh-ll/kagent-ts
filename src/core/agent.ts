@@ -14,6 +14,8 @@ import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
 import { SubAgentManager } from "../subagent/subagent-manager";
 import type { SubAgentResult } from "../subagent/subagent-types";
+import { createListSubagentsTool } from "../tools/builtin/list-subagents";
+import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 
 /**
  * Base configuration for any Agent.
@@ -643,6 +645,10 @@ export abstract class Agent {
       this.subAgentManager = new SubAgentManager();
       this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir);
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
+
+      // Register sub-agent tools into the tool registry
+      try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
+      try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
     }
   }
 

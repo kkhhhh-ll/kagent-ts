@@ -7,8 +7,6 @@ import {
 import { LLMNetworkError } from "../llm/openai-provider";
 import { LLMResponse } from "../llm/interface";
 import { STRUCTURED_OUTPUT_REMINDER } from "./response-schema";
-import { createListSubagentsTool } from "../tools/builtin/list-subagents";
-import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -108,28 +106,9 @@ export class ReActAgent extends Agent {
     }
   }
 
-  /**
-   * Register the built-in `spawn_subagent` tool so the main agent's LLM
-   * can dispatch work to sub-agents. Only registered when a
-   * SubAgentManager has been initialized (via subAgentsDir config).
-   */
-  private _spawnToolRegistered = false;
-
-  private registerSpawnTool(): void {
-    if (this._spawnToolRegistered) return;
-    if (!this.subAgentManager) return;
-    this._spawnToolRegistered = true;
-
-    try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
-    try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
-  }
-
   async run(input: string): Promise<string> {
     // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
-
-    // Register spawn tool after init (when subAgentManager is available)
-    this.registerSpawnTool();
 
     // ── Progressive disclosure ─────────────────────────────────────────
     if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
