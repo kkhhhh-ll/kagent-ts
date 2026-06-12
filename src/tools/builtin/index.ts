@@ -23,6 +23,8 @@ export { WriteFileTool } from "./write-file";
 export { EditFileTool } from "./edit-file";
 export { GrepSearchTool } from "./grep-search";
 export { GlobSearchTool } from "./glob-search";
+export { createListSubagentsTool } from "./list-subagents";
+export { createSpawnSubagentTool } from "./spawn-subagent";
 
 /**
  * Register all built-in tools into the given registry.

@@ -1,5 +1,4 @@
 import { Agent, AgentConfig } from "./agent";
-import { Tool } from "./types";
 import { Message } from "../messages/message";
 import {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
@@ -8,6 +7,8 @@ import {
 import { LLMNetworkError } from "../llm/openai-provider";
 import { LLMResponse } from "../llm/interface";
 import { STRUCTURED_OUTPUT_REMINDER } from "./response-schema";
+import { createListSubagentsTool } from "../tools/builtin/list-subagents";
+import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -38,7 +39,24 @@ When a tool returns an error:
 3. RETRY with corrected parameters if you can fix the issue.
 4. If the same tool fails repeatedly, try a COMPLETELY DIFFERENT approach.
 5. If a tool is disabled after too many failures, DO NOT try to use it again.
-   Find another way to accomplish the task.${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
+   Find another way to accomplish the task.${STRUCTURED_OUTPUT_INSTRUCTIONS}
+
+=== Sub-Agent Delegation ===
+You have the ability to spawn sub-agents for parallel or specialized work. When facing a non-trivial task, evaluate it against these criteria:
+
+SPAWN A SUB-AGENT when:
+1. The task can be completed independently (doesn't depend on conversation history)
+2. The task will produce a lot of intermediate output (e.g. running tests, searching entire codebase)
+3. The task belongs to a specific domain (code review, security scan, i18n check, etc.)
+4. Multiple independent tasks can run at the same time
+
+PREFER THE MAIN AGENT when the task depends on conversation context or is quick to complete.
+
+How to delegate:
+- Call \`list_subagents\` to see available sub-agents and their capabilities (tools, skills)
+- Choose the best match, then call \`spawn_subagent\` with the name and a clear task description
+- Sub-agents run asynchronously; their results arrive as user messages wrapped in <subagent-result> tags
+- You can continue working while sub-agents run in the background`;
 
 /**
  * Configuration specific to the ReAct Agent.
@@ -102,77 +120,8 @@ export class ReActAgent extends Agent {
     if (!this.subAgentManager) return;
     this._spawnToolRegistered = true;
 
-    const manager = this.subAgentManager;
-
-    // ── Tool 1: list available sub-agents ─────────────────────────────
-    const listTool: Tool = {
-      name: "list_subagents",
-      description:
-        "List all available sub-agents and their capabilities. " +
-        "Call this when you are considering delegating a task to a sub-agent " +
-        "and need to see what's available.",
-      parameters: { type: "object", properties: {} },
-      async execute(): Promise<string> {
-        const list = manager.buildSubAgentList();
-        if (list === "No sub-agents registered.") return list;
-
-        return (
-          "Available sub-agents:\n\n" + list +
-          "\n\nWhen to use a sub-agent:\n" +
-          "- The task can be completed independently (doesn't depend on conversation history)\n" +
-          "- The task will produce a lot of intermediate output (running tests, searching codebase)\n" +
-          "- The task belongs to a specific domain (code review, security scan, i18n, etc.)\n" +
-          "- Multiple independent tasks can run in parallel\n\n" +
-          "Prefer the main agent for tasks that depend on conversation context or are quick to complete."
-        );
-      },
-    };
-    try { this.toolRegistry.register(listTool); } catch { /* skip */ }
-
-    // ── Tool 2: spawn a sub-agent ────────────────────────────────────
-    const delegateDesc =
-      "Spawn an asynchronous sub-agent to handle a task. " +
-      "The sub-agent runs in the background; its result will appear " +
-      "as a new user message enclosed in <subagent-result> tags once it completes.\n\n" +
-      "WHEN TO USE THIS TOOL:\n" +
-      "1. The task can be completed independently (doesn't depend on conversation history)\n" +
-      "2. The task will produce a lot of intermediate output (e.g. running tests, searching entire codebase)\n" +
-      "3. The task belongs to a specific domain (code review, security scan, i18n check, etc.)\n" +
-      "4. Multiple independent tasks can run at the same time\n\n" +
-      "PREFER THE MAIN AGENT when the task depends on conversation context or is quick to complete.\n\n" +
-      "Call `list_subagents` first to see available sub-agents and their capabilities.";
-
-    const spawnTool: Tool = {
-      name: "spawn_subagent",
-      description: delegateDesc,
-      parameters: {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            description: "Name of the sub-agent to spawn. Call list_subagents first to see available names.",
-          },
-          input: {
-            type: "string",
-            description: "Task description / instructions for the sub-agent.",
-          },
-        },
-        required: ["name", "input"],
-      },
-      async execute(params: Record<string, unknown>): Promise<string> {
-        const name = String(params.name ?? "");
-        const input = String(params.input ?? "");
-        try {
-          const runId = manager.spawn(name, input);
-          return `Sub-agent "${name}" spawned successfully. Run ID: ${runId}. ` +
-            `It will report back when finished.`;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          return `Error spawning sub-agent "${name}": ${message}`;
-        }
-      },
-    };
-    try { this.toolRegistry.register(spawnTool); } catch { /* skip */ }
+    try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
+    try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
   }
 
   async run(input: string): Promise<string> {
