@@ -12,6 +12,8 @@ import { Preferences } from "../preferences/types";
 import { AgentHooks } from "./hooks";
 import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
+import { SubAgentManager } from "../subagent/subagent-manager";
+import type { SubAgentResult } from "../subagent/subagent-types";
 
 /**
  * Base configuration for any Agent.
@@ -156,6 +158,30 @@ export interface AgentConfig {
    * ```
    */
   mcpServers?: Record<string, McpServerConfig>;
+
+  // ─── Sub-Agent Configuration ───────────────────────────────────────────
+
+  /**
+   * Path to a directory of sub-agent definitions (AGENT.md files).
+   *
+   * Each subdirectory should contain an `AGENT.md` file with YAML-like
+   * frontmatter (name, description, tools, skills) and a body that serves
+   * as the system prompt.
+   *
+   * Sub-agents can be spawned by the main agent via the `spawn_subagent`
+   * tool. They run asynchronously; results are injected back as user
+   * messages.
+   *
+   * @example
+   * ```
+   * subagents/
+   * ├── code-reviewer/
+   * │   └── AGENT.md
+   * └── researcher/
+   *     └── AGENT.md
+   * ```
+   */
+  subAgentsDir?: string;
 }
 
 /**
@@ -217,6 +243,14 @@ export abstract class Agent {
   /** Guards async init() from running more than once per instance. */
   private _mcpInitialized = false;
 
+  // ─── Sub-Agent ────────────────────────────────────────────────────────
+
+  /** Sub-agent manager (lazily initialized in init()). */
+  protected subAgentManager?: SubAgentManager;
+
+  /** Sub-agent definitions directory (from AgentConfig). */
+  protected subAgentsDir?: string;
+
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
@@ -266,6 +300,7 @@ export abstract class Agent {
     }
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
     this.mcpServerConfigs = config.mcpServers;
+    this.subAgentsDir = config.subAgentsDir;
 
     // ── Hooks ──────────────────────────────────────────────────────────────
     const rawHooks = config.hooks ?? [];
@@ -590,17 +625,23 @@ export abstract class Agent {
     if (this._mcpInitialized) return;
     this._mcpInitialized = true;
 
-    if (!this.mcpServerConfigs || Object.keys(this.mcpServerConfigs).length === 0) {
-      return;
+    // ── MCP connections ──────────────────────────────────────────────
+    if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {
+      this.mcpClientManager = new McpClientManager(this.toolRegistry);
+      const errors = await this.mcpClientManager.connectAll(this.mcpServerConfigs);
+
+      if (errors.length > 0) {
+        console.warn(
+          `[MCP] ${errors.length} of ${Object.keys(this.mcpServerConfigs).length} server(s) failed to connect.`,
+        );
+      }
     }
 
-    this.mcpClientManager = new McpClientManager(this.toolRegistry);
-    const errors = await this.mcpClientManager.connectAll(this.mcpServerConfigs);
-
-    if (errors.length > 0) {
-      console.warn(
-        `[MCP] ${errors.length} of ${Object.keys(this.mcpServerConfigs).length} server(s) failed to connect.`,
-      );
+    // ── Sub-agent registry ───────────────────────────────────────────
+    if (this.subAgentsDir) {
+      this.subAgentManager = new SubAgentManager();
+      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager);
+      this.subAgentManager.registerFromDirectory(this.subAgentsDir);
     }
   }
 
@@ -612,6 +653,40 @@ export abstract class Agent {
    */
   async shutdown(): Promise<void> {
     await this.mcpClientManager?.disconnectAll();
+    if (this.subAgentManager) {
+      await this.subAgentManager.awaitAll();
+    }
+  }
+
+  // ─── Sub-Agent ────────────────────────────────────────────────────────
+
+  /**
+   * Spawn a sub-agent by definition name.
+   *
+   * The sub-agent runs asynchronously — this method returns immediately.
+   * Call `pollSubAgentResults()` at the start of each iteration to
+   * collect completed results.
+   *
+   * @param name  The registered sub-agent definition name.
+   * @param input The task description for the sub-agent.
+   * @returns The unique run ID.
+   */
+  protected spawnSubAgent(name: string, input: string): string {
+    if (!this.subAgentManager) {
+      throw new Error("No SubAgentManager configured. Set `subAgentsDir` in AgentConfig.");
+    }
+    return this.subAgentManager.spawn(name, input);
+  }
+
+  /**
+   * Poll for completed sub-agent results.
+   *
+   * Should be called at the start of each ReAct iteration to inject
+   * sub-agent outputs into the main agent's context.
+   */
+  protected async pollSubAgentResults(): Promise<SubAgentResult[]> {
+    if (!this.subAgentManager) return [];
+    return this.subAgentManager.pollCompleted();
   }
 
   // ─── Error Trace & Analysis ──────────────────────────────────────────

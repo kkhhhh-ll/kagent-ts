@@ -34,6 +34,17 @@ export class SkillManager {
   // ─── Registration ────────────────────────────────────────────────────
 
   /**
+   * Register a skill object directly (programmatic registration).
+   * Used when skills are defined in code rather than loaded from disk.
+   */
+  register(skill: Skill): void {
+    if (this.registry.has(skill.name)) {
+      throw new Error(`Skill "${skill.name}" is already registered.`);
+    }
+    this.registry.set(skill.name, skill);
+  }
+
+  /**
    * Unregister a skill by name. Deactivates it first if active.
    */
   unregister(name: string): boolean {

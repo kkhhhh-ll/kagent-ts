@@ -1,4 +1,5 @@
 import { Agent, AgentConfig } from "./agent";
+import { Tool } from "./types";
 import { Message } from "../messages/message";
 import {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
@@ -89,9 +90,66 @@ export class ReActAgent extends Agent {
     }
   }
 
+  /**
+   * Register the built-in `spawn_subagent` tool so the main agent's LLM
+   * can dispatch work to sub-agents. Only registered when a
+   * SubAgentManager has been initialized (via subAgentsDir config).
+   */
+  private registerSpawnTool(): void {
+    if (!this.subAgentManager) return;
+
+    const manager = this.subAgentManager;
+    const desc = manager.buildToolDescription();
+
+    const spawnTool: Tool = {
+      name: "spawn_subagent",
+      description:
+        "Spawn an asynchronous sub-agent to handle a task. " +
+        "The sub-agent runs in the background; its result will appear " +
+        "as a new user message once it completes. " +
+        "Available sub-agents:\n" + desc,
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Name of the sub-agent to spawn. Available: " +
+              manager.getDefinitions().map((d) => d.name).join(", "),
+          },
+          input: {
+            type: "string",
+            description: "Task description / instructions for the sub-agent.",
+          },
+        },
+        required: ["name", "input"],
+      },
+      async execute(params: Record<string, unknown>): Promise<string> {
+        const name = String(params.name ?? "");
+        const input = String(params.input ?? "");
+        try {
+          const runId = manager.spawn(name, input);
+          return `Sub-agent "${name}" spawned successfully. Run ID: ${runId}. ` +
+            `It will report back when finished.`;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          return `Error spawning sub-agent "${name}": ${message}`;
+        }
+      },
+    };
+
+    try {
+      this.toolRegistry.register(spawnTool);
+    } catch {
+      // Already registered — skip
+    }
+  }
+
   async run(input: string): Promise<string> {
-    // ── Async initialization (MCP connections, etc.) ────────────────────
+    // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
+
+    // Register spawn tool after init (when subAgentManager is available)
+    this.registerSpawnTool();
 
     // ── Progressive disclosure ─────────────────────────────────────────
     if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
@@ -129,6 +187,15 @@ export class ReActAgent extends Agent {
 
       // Check and compress if needed
       this.checkAndCompress();
+
+      // ── Poll sub-agent results ──────────────────────────────────────
+      const subResults = await this.pollSubAgentResults();
+      for (const r of subResults) {
+        const msg = Message.user(
+          `[Sub-agent "${r.name}" (${r.subAgentId}) completed]\n\n${r.output}`,
+        );
+        this.contextManager.addMessage(msg.toDict());
+      }
 
       // Prepare messages for the LLM
       const contextMessages = this.contextManager.getContextMessages();

@@ -94,6 +94,10 @@ export { TraceLogger } from "./trace/trace-logger";
 export type { TraceLoggerConfig } from "./trace/trace-logger";
 export type { AgentTraceEvent, AgentTraceEventType } from "./trace/types";
 
+// Sub-agents — async multi-agent dispatch
+export { SubAgentManager, SubAgentLoader } from "./subagent/index";
+export type { SubAgentDefinition, SubAgentResult } from "./subagent/index";
+
 // MCP (Model Context Protocol) — dynamic tool discovery
 export { McpClientManager } from "./mcp/mcp-client-manager";
 export { McpConnectionError } from "./mcp/mcp-types";
