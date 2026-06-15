@@ -35,7 +35,7 @@ export { ToolOutputTruncator } from "./tools/tool-output-truncator";
 // Tool error tracker — observability for tool failure chains
 export { ToolErrorTracker, categorizeError } from "./tools/error-tracker";
 export type { ErrorTrackerConfig } from "./tools/error-tracker";
-export type { ToolErrorTrace, TraceEvent, ErrorTraceSummary } from "./tools/types";
+export type { ToolErrorTrace, TraceEvent, ErrorTraceSummary, ErrorRule } from "./tools/types";
 
 // Built-in file tools
 export {
@@ -46,6 +46,9 @@ export {
   EditFileTool,
   GrepSearchTool,
   GlobSearchTool,
+  createListSubagentsTool,
+  createSpawnSubagentTool,
+  createListErrorsTool,
 } from "./tools/builtin/index";
 
 // Skills — progressive disclosure

@@ -13,6 +13,7 @@ import {
   ToolErrorTrace,
   TraceEvent,
   ErrorTraceSummary,
+  ErrorRule,
 } from "./types";
 
 /**
@@ -139,6 +140,7 @@ export function categorizeError(error: string): string {
 export class ToolErrorTracker {
   private traces: Map<string, ToolErrorTrace> = new Map();
   private activeTraceByTool: Map<string, string> = new Map();
+  private rules: ErrorRule[] = [];
   private storageDir: string;
   private persistImmediately: boolean;
 
@@ -240,6 +242,9 @@ export class ToolErrorTracker {
     this.activeTraceByTool.delete(toolName);
 
     this.persistTrace(traceId);
+
+    // Auto-extract a rule from any LLM analysis in the resolved trace
+    this.extractRuleFromTrace(traceId);
   }
 
   /**
@@ -426,6 +431,108 @@ export class ToolErrorTracker {
     }
 
     return report;
+  }
+
+  // ─── Error Rules ──────────────────────────────────────────────────────────
+
+  /**
+   * Extract a rule from a resolved trace's LLM analysis and upsert it.
+   * Called automatically after recordRecovery when analysis exists.
+   */
+  extractRuleFromTrace(traceId: string, llmSummary?: string): ErrorRule | null {
+    const trace = this.traces.get(traceId);
+    if (!trace || !trace.resolved) return null;
+
+    // Gather LLM analysis across all events
+    const analyses: string[] = [];
+    for (const e of trace.events) {
+      if (e.analysis) analyses.push(e.analysis);
+    }
+    const combined = llmSummary ?? analyses.join("; ");
+    if (!combined.trim()) return null;
+
+    // Simple heuristic extraction: split into pattern / cause / fix
+    const lines = combined.split(/\n|\.\s+/).map((l) => l.trim()).filter(Boolean);
+    const pattern = lines.slice(0, Math.ceil(lines.length / 3)).join(". ");
+    const cause = lines.slice(Math.ceil(lines.length / 3), Math.ceil(2 * lines.length / 3)).join(". ");
+    const fix = lines.slice(Math.ceil(2 * lines.length / 3)).join(". ");
+
+    const rule: ErrorRule = {
+      toolName: trace.toolName,
+      pattern,
+      cause,
+      fix,
+      createdAt: new Date().toISOString(),
+      version: 1,
+    };
+
+    return this.upsertRule(rule);
+  }
+
+  /**
+   * Upsert a rule: merge with existing if same pattern, else add new.
+   */
+  upsertRule(rule: ErrorRule): ErrorRule {
+    const existing = this.rules.find(
+      (r) => r.toolName === rule.toolName && r.pattern === rule.pattern,
+    );
+    if (existing) {
+      existing.cause = rule.cause;
+      existing.fix = rule.fix;
+      existing.version++;
+      this.persistRules();
+      return existing;
+    }
+    this.rules.push(rule);
+    this.persistRules();
+    return rule;
+  }
+
+  /**
+   * Get all rules, optionally filtered by tool name.
+   */
+  getRules(toolName?: string): ErrorRule[] {
+    if (toolName) return this.rules.filter((r) => r.toolName === toolName);
+    return [...this.rules];
+  }
+
+  /**
+   * Build a prompt section from all rules for injection into the system message.
+   */
+  buildRulesPrompt(): string {
+    if (this.rules.length === 0) return "";
+    const lines = [
+      "\n\n=== Error Prevention Rules ===",
+      "These rules were learned from previous tool errors. Follow them to avoid repeating mistakes.",
+      "",
+    ];
+    for (const r of this.rules) {
+      lines.push(`**${r.toolName}** (v${r.version}):`);
+      lines.push(`- Pattern: ${r.pattern}`);
+      lines.push(`- Fix: ${r.fix}`);
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+
+  /**
+   * Load rules from disk.
+   */
+  loadRules(): void {
+    const filePath = path.join(this.storageDir, "rules.json");
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      this.rules = JSON.parse(raw);
+    } catch {
+      this.rules = [];
+    }
+  }
+
+  private persistRules(): void {
+    if (!this.persistImmediately) return;
+    this.ensureStorageDir();
+    const filePath = path.join(this.storageDir, "rules.json");
+    fs.writeFileSync(filePath, JSON.stringify(this.rules, null, 2), "utf-8");
   }
 
   /**

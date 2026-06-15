@@ -16,6 +16,7 @@ import { SubAgentManager } from "../subagent/subagent-manager";
 import type { SubAgentResult } from "../subagent/subagent-types";
 import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
+import { createListErrorsTool } from "../tools/builtin/list-errors";
 
 /**
  * Base configuration for any Agent.
@@ -399,7 +400,8 @@ export abstract class Agent {
     const prefsPrompt = PreferenceManager.toPrompt(this.preferences);
     const skillsHint = this.skillManager.buildAvailableSkillsHint();
     const skillsContent = this.skillManager.buildSkillsPrompt();
-    const fullPrompt = this.coreSystemPrompt + prefsPrompt + skillsHint + skillsContent;
+    const rulesPrompt = this.toolRegistry.getErrorTracker()?.buildRulesPrompt() ?? "";
+    const fullPrompt = this.coreSystemPrompt + prefsPrompt + rulesPrompt + skillsHint + skillsContent;
     this.contextManager.setSystemMessage(fullPrompt);
   }
 
@@ -627,6 +629,10 @@ export abstract class Agent {
   protected async init(): Promise<void> {
     if (this._mcpInitialized) return;
     this._mcpInitialized = true;
+
+    // ── Error rules (load before MCP / sub-agents) ──────────────────
+    this.toolRegistry.getErrorTracker()?.loadRules();
+    try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { /* skip */ }
 
     // ── MCP connections ──────────────────────────────────────────────
     if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {

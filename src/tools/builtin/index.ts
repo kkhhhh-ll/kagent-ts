@@ -25,6 +25,7 @@ export { GrepSearchTool } from "./grep-search";
 export { GlobSearchTool } from "./glob-search";
 export { createListSubagentsTool } from "./list-subagents";
 export { createSpawnSubagentTool } from "./spawn-subagent";
+export { createListErrorsTool } from "./list-errors";
 
 /**
  * Register all built-in tools into the given registry.

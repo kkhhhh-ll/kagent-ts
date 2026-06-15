@@ -87,6 +87,27 @@ export interface ToolErrorTrace {
   resolution?: string;
 }
 
+// ─── Error Rules ──────────────────────────────────────────────────────────
+
+/**
+ * A learned rule distilled from a resolved tool-error trace.
+ * Injected into the system prompt to prevent the same mistake.
+ */
+export interface ErrorRule {
+  /** Tool name this rule applies to. */
+  toolName: string;
+  /** Human-readable pattern: "when does this error happen?" */
+  pattern: string;
+  /** Root cause: "why does it happen?" */
+  cause: string;
+  /** Fix: "how was it resolved?" */
+  fix: string;
+  /** When the rule was created. */
+  createdAt: string;
+  /** Incremented when the pattern is confirmed again. */
+  version: number;
+}
+
 /**
  * Lightweight summary of a trace for listing/indexing.
  */
