@@ -66,12 +66,14 @@ export class McpClientManager {
    * Connect to a single MCP server, discover its tools, and register them
    * in the ToolRegistry with a `{serverName}_` prefix.
    *
+   * Idempotent — if the server is already connected, this is a no-op.
+   *
    * @throws McpConnectionError if the config is invalid or the
-   *         connection/tool-discovery fails.
+   *         connection/tool-discovery fails (only for new connections).
    */
   async connectToServer(serverName: string, config: McpServerConfig): Promise<void> {
     if (this.connections.has(serverName)) {
-      throw new McpConnectionError(`MCP server "${serverName}" is already connected.`);
+      return; // Already connected — idempotent
     }
 
     const transportConfig = resolveTransportConfig(config);
@@ -202,6 +204,13 @@ export class McpClientManager {
   }
 
   // ─── Queries ──────────────────────────────────────────────────────────────
+
+  /**
+   * Check if a specific server is currently connected.
+   */
+  hasServer(serverName: string): boolean {
+    return this.connections.has(serverName);
+  }
 
   /**
    * Get connection status for all servers.

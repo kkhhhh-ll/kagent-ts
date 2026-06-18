@@ -7,11 +7,12 @@ export type AgentType = "react" | "plan-solve";
 
 /**
  * Lifecycle status of a persisted session.
- * - "active":   Session is in progress, checkpoint was saved mid-run.
+ * - "active":      Session is in progress, checkpoint was saved mid-run.
  * - "interrupted": Session was interrupted by a network error, ready for resume.
- * - "completed":  Session finished normally.
+ * - "completed":   Session finished normally.
+ * - "cancelled":   User cancelled (Ctrl+C); session preserved for later resume.
  */
-export type SessionStatus = "active" | "interrupted" | "completed";
+export type SessionStatus = "active" | "interrupted" | "completed" | "cancelled";
 
 /**
  * Serializable plan state for PlanSolveAgent sessions.

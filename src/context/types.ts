@@ -11,10 +11,15 @@ export interface ContextConfig {
   maxTokens: number;
 
   /**
-   * When the remaining free tokens drop below this value, compression triggers.
-   * Default: 20000 (trigger at ~16% remaining).
+   * Free tokens to reserve when compression fires.
    *
-   * Trigger condition: `currentTokens >= maxTokens - compressionThreshold`
+   * Two modes (auto-detected by value):
+   * - **Absolute** (`>= 1`):  reserve this many tokens. Default 20000.
+   * - **Ratio**   (`< 1`):   reserve this fraction of maxTokens.
+   *   Must be ≤ 0.25 so the trigger point is ≥ 75 % of the window.
+   *
+   * Trigger condition: `currentTokens >= maxTokens - reserve` where
+   * `reserve = threshold (< 1 ? maxTokens * threshold : threshold)`.
    */
   compressionThreshold: number;
 
@@ -23,12 +28,6 @@ export interface ContextConfig {
    * Default: 40.
    */
   keepTurns: number;
-
-  /**
-   * Number of turns to keep unsummarized in Step 4 (LLM summarization).
-   * Default: 10.
-   */
-  summaryKeepTurns: number;
 
   /**
    * Tool results older than this (ms) are candidates for removal in Step 3.

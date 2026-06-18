@@ -95,6 +95,29 @@ export class SkillManager {
   }
 
   /**
+   * Re-scan the skills directory for new SKILL.md files.
+   *
+   * Safe to call at the start of each run — only registers skills that
+   * haven't been registered yet. Already-registered skills are left as-is.
+   *
+   * @param dir Path to the skills directory.
+   * @returns Names of newly registered skills (empty if nothing changed).
+   */
+  reloadFromDirectory(dir: string): string[] {
+    const before = new Set(this.registry.keys());
+    this.registerFromDirectory(dir);
+    const after = new Set(this.registry.keys());
+    const added: string[] = [];
+    for (const name of after) {
+      if (!before.has(name)) added.push(name);
+    }
+    if (added.length > 0) {
+      console.log(`[Skills] Picked up ${added.length} new skill(s): ${added.join(", ")}`);
+    }
+    return added;
+  }
+
+  /**
    * Check if a skill is registered.
    */
   has(name: string): boolean {
@@ -194,40 +217,6 @@ export class SkillManager {
     }
   }
 
-  // ─── Auto-Detection ──────────────────────────────────────────────────
-
-  /**
-   * Scan user input against unregistered (not yet active) skills.
-   * Activates any skill whose keywords match the input.
-   *
-   * @param input The user's input text.
-   * @returns Names of newly activated skills.
-   */
-  detectAndActivate(input: string): string[] {
-    const lowerInput = input.toLowerCase();
-    const activated: string[] = [];
-
-    for (const skill of this.registry.values()) {
-      // Skip already-active skills
-      if (this.activeSkills.has(skill.name)) continue;
-
-      // Skip skills without keywords
-      if (!skill.keywords || skill.keywords.length === 0) continue;
-
-      // Check each keyword
-      for (const keyword of skill.keywords) {
-        if (lowerInput.includes(keyword.toLowerCase())) {
-          if (this.activate(skill.name)) {
-            activated.push(skill.name);
-          }
-          break; // One match is enough per skill
-        }
-      }
-    }
-
-    return activated;
-  }
-
   // ─── System Prompt Assembly ──────────────────────────────────────────
 
   /**
@@ -263,7 +252,7 @@ export class SkillManager {
     }
     if (available.length === 0) return "";
     return (
-      "\n\nAvailable skills (they activate automatically when needed, or you can explicitly request one):\n" +
+      "\n\nAvailable skills (use the `skill` tool to activate them when needed):\n" +
       available.map((line) => `  - ${line}`).join("\n")
     );
   }

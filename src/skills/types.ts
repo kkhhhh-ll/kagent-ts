@@ -2,9 +2,9 @@
  * A Skill is a reusable capability that can be loaded into the agent's
  * system prompt on demand (progressive disclosure).
  *
- * Each skill carries:
- * - A system prompt fragment with instructions for the LLM
- * - Optional keywords that trigger automatic activation
+ * Each skill carries a system prompt fragment with instructions for the LLM.
+ * Activation is LLM-driven — the agent calls the `skill` tool to load a skill
+ * when it determines one is needed.
  */
 export interface Skill {
   /** Unique identifier for this skill. */
@@ -18,12 +18,6 @@ export interface Skill {
    * when this skill is activated.
    */
   systemPrompt?: string;
-
-  /**
-   * Optional keywords for auto-detection.
-   * When user input contains any of these, the skill is activated automatically.
-   */
-  keywords?: string[];
 }
 
 /**

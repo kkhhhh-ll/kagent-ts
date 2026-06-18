@@ -1,3 +1,5 @@
+import type { ToolFilter } from "../tools/tool-filter";
+
 /**
  * SubAgent type definitions.
  *
@@ -17,8 +19,19 @@ export interface SubAgentDefinition {
   description: string;
   /** System prompt content (body of the AGENT.md file). */
   systemPrompt: string;
-  /** Tool names from the main agent's ToolRegistry that this sub-agent can use. */
+  /**
+   * Tool names from the main agent's ToolRegistry that this sub-agent can use.
+   * When `toolFilter` is also provided, the filter is applied on top of this
+   * allowlist (both must pass).
+   */
   tools: string[];
+  /**
+   * Optional ToolFilter for finer-grained control over which tools the
+   * sub-agent can access. Applied AFTER the `tools` allowlist.
+   * Use built-in factories like `allowlist()`, `denylist()`, `pattern()`,
+   * or combine with `all()` / `any()`.
+   */
+  toolFilter?: ToolFilter;
   /** Skill names to activate when the sub-agent starts. */
   skills: string[];
 }
@@ -55,4 +68,6 @@ export interface PendingRun {
   promise: Promise<SubAgentResult>;
   /** Set to the result once the promise resolves. */
   resolved: SubAgentResult | null;
+  /** Whether this run was interrupted by user cancellation. */
+  cancelled?: boolean;
 }

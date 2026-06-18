@@ -2,11 +2,13 @@ import { Agent, AgentConfig } from "./agent";
 import { Message } from "../messages/message";
 import {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
+  STRUCTURED_OUTPUT_REMINDER,
   parseReActResponse,
 } from "./response-schema";
-import { LLMNetworkError } from "../llm/openai-provider";
-import { LLMResponse } from "../llm/interface";
-import { STRUCTURED_OUTPUT_REMINDER } from "./response-schema";
+import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { LLMNetworkError } from "../llm/errors";
+import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
+import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -26,35 +28,8 @@ Follow this process:
 
 If no tools are needed, respond with the final answer directly.
 Always think step by step before acting.
-
-=== Tool Error Recovery ===
-When a tool returns an error:
-1. READ the error message carefully — understand WHY it failed.
-2. ANALYZE whether the parameters were correct. Common issues:
-   - Wrong file path (check spelling, use absolute paths)
-   - Missing or incorrect arguments
-   - The tool may need different input formats
-3. RETRY with corrected parameters if you can fix the issue.
-4. If the same tool fails repeatedly, try a COMPLETELY DIFFERENT approach.
-5. If a tool is disabled after too many failures, DO NOT try to use it again.
-   Find another way to accomplish the task.${STRUCTURED_OUTPUT_INSTRUCTIONS}
-
-=== Sub-Agent Delegation ===
-You have the ability to spawn sub-agents for parallel or specialized work. When facing a non-trivial task, evaluate it against these criteria:
-
-SPAWN A SUB-AGENT when:
-1. The task can be completed independently (doesn't depend on conversation history)
-2. The task will produce a lot of intermediate output (e.g. running tests, searching entire codebase)
-3. The task belongs to a specific domain (code review, security scan, i18n check, etc.)
-4. Multiple independent tasks can run at the same time
-
-PREFER THE MAIN AGENT when the task depends on conversation context or is quick to complete.
-
-How to delegate:
-- Call \`list_subagents\` to see available sub-agents and their capabilities (tools, skills)
-- Choose the best match, then call \`spawn_subagent\` with the name and a clear task description
-- Sub-agents run asynchronously; their results arrive as user messages wrapped in <subagent-result> tags
-- You can continue working while sub-agents run in the background`;
+${TOOL_ERROR_RECOVERY}${STRUCTURED_OUTPUT_INSTRUCTIONS}
+${SUB_AGENT_DELEGATION}`;
 
 /**
  * Configuration specific to the ReAct Agent.
@@ -62,13 +37,6 @@ How to delegate:
 export interface ReActAgentConfig extends AgentConfig {
   /** Maximum iterations for the ReAct loop (default: 10). */
   maxIterations?: number;
-
-  /**
-   * Enable progressive skill disclosure.
-   * When true, skills are auto-detected from user input and loaded
-   * into the system prompt on demand (default: true).
-   */
-  enableSkillAutoDetect?: boolean;
 }
 
 /**
@@ -86,7 +54,6 @@ export interface ReActAgentConfig extends AgentConfig {
  */
 export class ReActAgent extends Agent {
   private maxIterations: number;
-  private enableSkillAutoDetect: boolean;
 
   constructor(config: ReActAgentConfig) {
     // Set default ReAct system prompt if none provided
@@ -97,27 +64,24 @@ export class ReActAgent extends Agent {
     super(mergedConfig);
 
     this.maxIterations = config.maxIterations ?? 10;
-    this.enableSkillAutoDetect = config.enableSkillAutoDetect ?? true;
 
-    // If skills are registered, rebuild the system prompt so the
-    // available-skills hint is included in the initial prompt.
-    if (this.skillManager.activeCount > 0) {
-      this.rebuildSystemPrompt();
-    }
+    // Build the full system prompt once all sections are ready
+    this.rebuildSystemPrompt();
   }
 
   async run(input: string): Promise<string> {
     // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
 
-    // ── Progressive disclosure ─────────────────────────────────────────
-    if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
-      const activated = this.skillManager.detectAndActivate(input);
-      if (activated.length > 0) {
-        this.rebuildSystemPrompt();
-        console.log(`[Skills] Auto-activated: ${activated.join(", ")}`);
-      }
-    }
+    // ── Reload dynamic resources (preferences, skills, MCP) ─────────
+    await this.reloadDynamicResources();
+
+    // ── Recover orphaned sub-agent results from a cancelled session ──
+    this.recoverOrphanedSubAgentResults();
+
+    // ── Pre-flight: reject oversized input before any LLM call ───────
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) return sizeError;
 
     // ── Create user message ──────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -132,20 +96,22 @@ export class ReActAgent extends Agent {
     let consecutiveEmptyIterations = 0;
     const EMPTY_ITERATION_LIMIT = 5;
 
+    // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
+    let consecutiveTruncations = 0;
+    const MAX_TRUNCATION_CONTINUES = 3;
+
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       // Check if user cancelled (SIGINT)
       if (this.isCancelled) {
-        this.sessionManager?.deleteSession(
-          this.sessionManager.getSessionId(),
-        );
-        const cancelMsg = "Execution cancelled by user. Session discarded.";
+        this.saveCheckpoint("cancelled");
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        const cancelMsg =
+          `Execution cancelled by user. Session "${sid}" preserved — ` +
+          `resume with agent.resume("${sid}", "<your prompt>").`;
         for (const h of this.hooks) h.onFinish?.(cancelMsg);
         return cancelMsg;
       }
-
-      // Check and compress if needed
-      await this.checkAndCompress();
 
       // ── Poll sub-agent results ──────────────────────────────────────
       const subResults = await this.pollSubAgentResults();
@@ -155,6 +121,9 @@ export class ReActAgent extends Agent {
         );
         this.contextManager.addMessage(msg.toDict());
       }
+
+      // Check and compress after sub-agent results are in
+      await this.checkAndCompress();
 
       // Prepare messages for the LLM
       const contextMessages = this.contextManager.getContextMessages();
@@ -170,7 +139,7 @@ export class ReActAgent extends Agent {
       } catch (err: unknown) {
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
-          return this.handleNetworkError(err, iteration + 1);
+          return this.handleNetworkError(err, iteration + 1, "continue with my previous request");
         }
         throw err; // Unknown error — propagate
       }
@@ -189,15 +158,47 @@ export class ReActAgent extends Agent {
       // Store in context
       this.contextManager.addMessage(assistantMessage.toDict());
 
+      // ── Handle max_tokens truncation ───────────────────────────────
+      const isTruncated = response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS;
+      if (isTruncated) {
+        consecutiveTruncations++;
+        if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          // Bail out — too many consecutive truncations, return what we have
+          const fallback = ("answer" in parsed && parsed.answer)
+            ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+            : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+              "Please try breaking your request into smaller steps.";
+          for (const h of this.hooks) h.onFinish?.(fallback);
+          return fallback;
+        }
+
+        // Inject continuation instruction so the LLM picks up where it left off
+        const continueMsg = Message.assistant(
+          "[System] Your previous response was cut off (max output tokens reached). " +
+          "Continue exactly where you left off — do NOT repeat any content already written. " +
+          "If you were calling tools, re-invoke them with complete arguments."
+        );
+        this.contextManager.addMessage(continueMsg.toDict());
+      } else {
+        consecutiveTruncations = 0;
+      }
+
       // Check if LLM wants to call tools
       if (response.tool_calls && response.tool_calls.length > 0) {
         consecutiveEmptyIterations = 0;
 
-        // Log the reasoning thought and capture as error analysis
+        // Log the reasoning thought
         if (parsed.thought) {
           console.log(`[Thought] ${parsed.thought}`);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
-          this.captureAnalysisFromThought(parsed.thought);
+        }
+
+        // If the LLM response shows non-truncation quality issues, warn
+        // before executing tool calls. (max_tokens truncation is handled above.)
+        if (response.responseError && response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS) {
+          const prefix = `[System] LLM response quality issue: ${response.responseError.message}`;
+          const warnMsg = Message.assistant(prefix);
+          this.contextManager.addMessage(warnMsg.toDict());
         }
 
         for (const toolCall of response.tool_calls) {
@@ -205,36 +206,44 @@ export class ReActAgent extends Agent {
           try {
             args = JSON.parse(toolCall.function.arguments);
           } catch {
-            args = {};
+            // Arguments are malformed or truncated — don't execute.
+            const result: ToolResult = toolError(
+              ToolErrorCode.ARGUMENTS_PARSE_ERROR,
+              `[RETRYABLE:ARGUMENTS_PARSE_ERROR] Failed to parse arguments for tool "${toolCall.function.name}". ` +
+              `The raw arguments were: ${toolCall.function.arguments || "(empty)"}\n\n` +
+              `${response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS ? "The LLM response was truncated (max_tokens). Please reduce context or split the work across smaller steps. " : ""}` +
+              `Please re-invoke the tool with correctly formatted JSON arguments.`,
+              "retryable",
+            );
+
+            // Tool never executed — args were unparseable
+            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
+
+            const toolMessage = Message.tool(
+              result.content,
+              toolCall.id,
+              toolCall.function.name,
+            );
+            this.contextManager.addMessage(toolMessage.toDict());
+            continue;
           }
 
           for (const h of this.hooks) h.onToolStart?.(toolCall.function.name, args);
 
-          // Execute via ToolRegistry — includes circuit breaker protection
-          let result: string;
-          try {
-            result = await this.toolRegistry.execute(
-              toolCall.function.name,
-              args,
-            );
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            result = `Error executing tool "${toolCall.function.name}": ${message}`;
-          }
+          // Execute via ToolRegistry — never throws.
+          const result: ToolResult = await this.toolRegistry.execute(
+            toolCall.function.name,
+            args,
+          );
 
-          // Determine success vs error and fire appropriate hook
-          if (result.startsWith("Error")) {
-            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result);
+          if (result.success) {
+            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result.content);
           } else {
-            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result);
+            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
           }
 
-          // Track this result for error analysis if it indicates a failure
-          this.trackToolErrorForAnalysis(toolCall.function.name, result);
-
-          // Create tool result message
           const toolMessage = Message.tool(
-            result,
+            result.content,
             toolCall.id,
             toolCall.function.name,
           );
@@ -253,6 +262,17 @@ export class ReActAgent extends Agent {
 
       // No tool calls — extract the final answer from the JSON
       if ("answer" in parsed && parsed.answer) {
+        // If truncated, don't return — the continuation instruction is
+        // already in context; next iteration will pick up where it left off.
+        if (isTruncated) {
+          consecutiveEmptyIterations = 0;
+          if (parsed.thought) {
+            console.log(`[Thought] ${parsed.thought}`);
+            for (const h of this.hooks) h.onThought?.(parsed.thought);
+          }
+          console.log("[ReAct] Answer truncated (max_tokens) — continuing in next iteration.");
+          continue;
+        }
         for (const h of this.hooks) h.onFinish?.(parsed.answer);
         // Save final checkpoint as completed
         if (this.checkpointingEnabled) {
@@ -268,7 +288,6 @@ export class ReActAgent extends Agent {
 
         console.log(`[Thought] ${parsed.thought}`);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-        this.captureAnalysisFromThought(parsed.thought);
 
         // If stuck in unproductive thought-only loop, inject format reminder
         if (consecutiveEmptyIterations >= 3) {
@@ -341,36 +360,5 @@ export class ReActAgent extends Agent {
 
   // ─── Private Helpers ─────────────────────────────────────────────────
 
-  /**
-   * Handle an LLMNetworkError: save an interrupted checkpoint if
-   * checkpointing is enabled, and return a user-facing message with
-   * resume instructions.
-   */
-  private handleNetworkError(err: LLMNetworkError, iteration: number): string {
-    if (this.checkpointingEnabled) {
-      this.saveCheckpoint("interrupted");
-    }
-
-    const sid = this.sessionManager?.getSessionId() ?? "unknown";
-
-    console.error(
-      `\n[Network Error] ${err.cause}: ${err.message}`,
-    );
-
-    if (this.checkpointingEnabled && this.sessionManager) {
-      return (
-        `[Network Error] ${err.message}\n\n` +
-        `Your session "${sid}" has been saved (iteration ${iteration}).\n` +
-        `After your network is restored, resume with:\n` +
-        `  agent.resume("${sid}", "continue with my previous request")\n\n` +
-        `Or start a new session by calling agent.run() again with a fresh input.`
-      );
-    }
-
-    // Checkpointing not enabled — just report the error
-    return (
-      `[Network Error] ${err.message}\n\n` +
-      `Please check your network connection and try again.`
-    );
-  }
+  // handleNetworkError is inherited from the base Agent class.
 }

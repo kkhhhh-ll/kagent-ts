@@ -26,16 +26,33 @@ export type {
 export { ToolRegistry } from "./tools/tool-registry";
 export { CircuitBreaker } from "./tools/circuit-breaker";
 export type { CircuitBreakerConfig } from "./tools/circuit-breaker";
-export { BreakerState } from "./tools/types";
-export type { BreakerStatus } from "./tools/types";
+export { BreakerState, ToolErrorCode } from "./tools/types";
+export type { BreakerStatus, ToolResult } from "./tools/types";
+export { toolSuccess, toolError } from "./tools/types";
 
 // Tool output truncator — large output to disk
 export { ToolOutputTruncator } from "./tools/tool-output-truncator";
 
+// Tool filter — restrict which tools sub-agents can use
+export type { ToolFilter } from "./tools/tool-filter";
+export {
+  allowlist,
+  denylist,
+  pattern,
+  all,
+  any,
+  filterTools,
+} from "./tools/tool-filter";
+
 // Tool error tracker — observability for tool failure chains
 export { ToolErrorTracker, categorizeError } from "./tools/error-tracker";
 export type { ErrorTrackerConfig } from "./tools/error-tracker";
-export type { ToolErrorTrace, TraceEvent, ErrorTraceSummary, ErrorRule } from "./tools/types";
+export type {
+  ToolErrorTrace,
+  TraceEvent,
+  ErrorTraceSummary,
+  ErrorRule,
+} from "./tools/types";
 
 // Built-in file tools
 export {
@@ -49,10 +66,17 @@ export {
   createListSubagentsTool,
   createSpawnSubagentTool,
   createListErrorsTool,
+  createSkillTool,
+  createRememberTool,
+  createRecallTool,
 } from "./tools/builtin/index";
 
 // Skills — progressive disclosure
-export { SkillManager, FileSkillLoader, parseFrontmatter, parseKeywords } from "./skills/index";
+export {
+  SkillManager,
+  FileSkillLoader,
+  parseFrontmatter,
+} from "./skills/index";
 export type { Skill, SkillStatus } from "./skills/types";
 
 // Messages
@@ -60,11 +84,23 @@ export { Message } from "./messages/message";
 export { Role } from "./messages/types";
 export type { MessageData, ToolCall } from "./messages/types";
 
-// LLM
+// LLM — shared types
 export type { LLMProvider, LLMResponse } from "./llm/interface";
-export { OpenAIProvider, LLMNetworkError, isNetworkError } from "./llm/openai-provider";
-export type { OpenAIConfig, OpenAIRetryConfig, NetworkErrorCause } from "./llm/openai-provider";
+export { LLMResponseErrorCode } from "./llm/interface";
+export { LLMNetworkError } from "./llm/errors";
+export type { NetworkErrorCause, RetryConfig } from "./llm/errors";
 
+// LLM — OpenAI provider
+export { OpenAIProvider, isNetworkError } from "./llm/openai-provider";
+export type { OpenAIConfig, OpenAIRetryConfig } from "./llm/openai-provider";
+
+// LLM — Anthropic provider
+export { AnthropicProvider } from "./llm/anthropic-provider";
+export type { AnthropicConfig } from "./llm/anthropic-provider";
+
+// LLM — Factory
+export { createLLMProvider } from "./llm/factory";
+export type { LLMProviderConfig, ProviderType } from "./llm/factory";
 
 // Context
 export { ContextManager } from "./context/context-manager";
@@ -72,7 +108,10 @@ export type { ContextConfig, ContextState } from "./context/types";
 
 // Compression — progressive 4-step
 export { ProgressiveCompressor } from "./compression/progressive-compressor";
-export type { CompressionStrategy, CompressionResult } from "./compression/interface";
+export type {
+  CompressionStrategy,
+  CompressionResult,
+} from "./compression/interface";
 export type { CompressionConfig } from "./compression/types";
 
 // User preferences
@@ -109,3 +148,26 @@ export type {
   McpConnectionStatus,
   McpConnectionErrorReport,
 } from "./mcp/mcp-types";
+
+// Project rules — user-authored, injected into system prompt
+export { ProjectRules } from "./rules/project-rules";
+
+// Memory — long-term facts, rules, and project context
+export { MemoryManager } from "./memory/index";
+export type { Memory, MemoryType } from "./memory/index";
+
+// Reflection — post-execution self-reflection with error notebook (错题本)
+export { ErrorNotebook } from "./reflection/error-notebook";
+export type {
+  ErrorNotebookEntry,
+  ErrorNotebookConfig,
+  ReflectionErrorCategory,
+} from "./reflection/error-notebook";
+export { ReflectionAgent } from "./reflection/reflection-agent";
+export type {
+  ReflectionAgentConfig,
+  ReflectionInput,
+  ReflectionFinding,
+} from "./reflection/reflection-agent";
+export { createReflectionHook } from "./reflection/reflection-hook";
+export type { ReflectionHookConfig } from "./reflection/reflection-hook";

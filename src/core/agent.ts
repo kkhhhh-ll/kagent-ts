@@ -1,12 +1,17 @@
 import { LLMProvider } from "../llm/interface";
+import { LLMNetworkError } from "../llm/errors";
+import { Message } from "../messages/message";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
 import { ToolErrorTracker } from "../tools/error-tracker";
 import { ToolOutputTruncator } from "../tools/tool-output-truncator";
 import { SkillManager } from "../skills/skill-manager";
+import { MemoryManager } from "../memory/memory-manager";
+import { ProjectRules } from "../rules/project-rules";
 import { SessionManager } from "../session/session-manager";
 import { SessionState, SessionStatus, AgentType } from "../session/session-types";
+import { countTokens } from "../utils/token-counter";
 import { PreferenceManager } from "../preferences/preference-manager";
 import { Preferences } from "../preferences/types";
 import { AgentHooks } from "./hooks";
@@ -17,6 +22,9 @@ import type { SubAgentResult } from "../subagent/subagent-types";
 import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 import { createListErrorsTool } from "../tools/builtin/list-errors";
+import { createSkillTool } from "../tools/builtin/skill";
+import { createRememberTool } from "../tools/builtin/remember";
+import { createRecallTool } from "../tools/builtin/recall";
 
 /**
  * Base configuration for any Agent.
@@ -81,6 +89,21 @@ export interface AgentConfig {
    * full content loads on activation.
    */
   skillsDir?: string;
+
+  /**
+   * Path to the long-term memory storage directory.
+   * Default: ".memory". The MemoryManager persists facts, rules, and
+   * decisions across sessions using an index (MEMORY.md) + individual
+   * markdown files.
+   */
+  memoryDir?: string;
+
+  /**
+   * Path to a project rules file (e.g. "RULES.md") or directory (e.g.
+   * ".rules/"). Rules are user-authored, always injected into the system
+   * prompt, and reloaded at the start of each run.
+   */
+  rulesPath?: string;
 
   systemPrompt?: string;
 
@@ -207,6 +230,12 @@ export abstract class Agent {
   protected toolRegistry: ToolRegistry;
   protected skillManager: SkillManager;
 
+  /** Long-term memory (rules + project facts) persisted across sessions. */
+  protected memoryManager!: MemoryManager;
+
+  /** User-defined project rules loaded from disk. */
+  protected projectRules!: ProjectRules;
+
   /** The original core system prompt (before skill sections are appended). */
   protected coreSystemPrompt: string;
 
@@ -218,11 +247,6 @@ export abstract class Agent {
 
   /** Lifecycle hooks for observing agent execution. */
   protected hooks: AgentHooks[] = [];
-
-  /**
-   * Trace ID of the most recent tool error waiting for LLM analysis.
-   * Set after a tool fails, cleared when the LLM's analysis is recorded. */
-  protected pendingErrorTraceId: string | null = null;
 
   // ─── Session & Cancellation ─────────────────────────────────────────
 
@@ -290,6 +314,12 @@ export abstract class Agent {
     if (config.skillsDir) {
       this.skillManager.registerFromDirectory(config.skillsDir);
     }
+
+    // Memory — long-term facts, rules, and project context
+    this.memoryManager = new MemoryManager(config.memoryDir);
+
+    // Project rules — user-authored, always injected
+    this.projectRules = new ProjectRules(config.rulesPath);
 
     // Store core system prompt and set it
     this.coreSystemPrompt = config.systemPrompt ?? "";
@@ -393,32 +423,170 @@ export abstract class Agent {
   }
 
   /**
-   * Rebuild the system message from the core prompt + user preferences + active skills.
-   * Called automatically when skills are activated/deactivated or preferences change.
+   * Rebuild the system message.
+   *
+   * Sections are assembled in priority order:
+   *   1. Core prompt           (agent identity + instructions)
+   *   2. Project rules         (user-authored, always injected)
+   *   3. Preferences           (user-set language / verbosity / style)
+   *   4. Error recovery rules  (tool failure recovery guidance)
+   *   5. Long-term memories    (index of persisted facts + rules)
+   *   6. Available skills      (inactive skills the LLM can activate)
+   *   7. Active skill content  (full instructions for activated skills)
+   *
+   * Empty sections are silently skipped.
    */
+  /**
+   * Build the full system prompt from all sections.
+   *
+   * Subclasses that need to append extra content (e.g. plan progress)
+   * should call this and concatenate, instead of duplicating the assembly.
+   */
+  protected buildSystemPrompt(): string {
+    const sections = [
+      this.coreSystemPrompt,
+      this.projectRules.buildPrompt(),
+      PreferenceManager.toPrompt(this.preferences),
+      this.toolRegistry.getErrorTracker()?.buildRulesPrompt(),
+      this.memoryManager.buildPromptHint(),
+      this.skillManager.buildAvailableSkillsHint(),
+      this.skillManager.buildSkillsPrompt(),
+    ].filter(Boolean);
+
+    return sections.join("");
+  }
+
   protected rebuildSystemPrompt(): void {
-    const prefsPrompt = PreferenceManager.toPrompt(this.preferences);
-    const skillsHint = this.skillManager.buildAvailableSkillsHint();
-    const skillsContent = this.skillManager.buildSkillsPrompt();
-    const rulesPrompt = this.toolRegistry.getErrorTracker()?.buildRulesPrompt() ?? "";
-    const fullPrompt = this.coreSystemPrompt + prefsPrompt + rulesPrompt + skillsHint + skillsContent;
-    this.contextManager.setSystemMessage(fullPrompt);
+    this.contextManager.setSystemMessage(this.buildSystemPrompt());
   }
 
   /**
-   * Pre-iteration maintenance:
-   * 1. Compress context window if needed (4-step progressive).
-   * 2. Auto-reload preferences from disk if the file was manually edited.
+   * Pre-iteration maintenance: compress context window if needed.
    */
   protected async checkAndCompress(): Promise<void> {
     await this.contextManager.checkAndCompress(this.llm);
+  }
 
-    // Auto-reload preferences if the file was manually edited
+  /**
+   * Reload preferences from disk if the file was manually edited.
+   * Called once at the start of each run so edits between runs take
+   * effect without restarting the agent process — but they won't
+   * change mid-run behavior.
+   */
+  protected reloadPreferencesIfChanged(): boolean {
     if (this.preferenceManager?.hasFileChanged()) {
       this.preferences = this.preferenceManager.reload();
       this.rebuildSystemPrompt();
-      console.log("[Preferences] Reloaded from disk (file changed).");
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * Re-scan the skills directory for new SKILL.md files added between runs.
+   * New skills are registered and become available to the LLM immediately.
+   */
+  protected reloadSkillsFromDirectory(): boolean {
+    if (!this.skillsDir) return false;
+    const added = this.skillManager.reloadFromDirectory(this.skillsDir);
+    if (added.length > 0) {
+      this.rebuildSystemPrompt();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Incrementally connect to MCP servers that were added to the config
+   * since the last run. Already-connected servers are left untouched.
+   */
+  protected async reconnectMCPIfNeeded(): Promise<void> {
+    if (!this.mcpClientManager || !this.mcpServerConfigs) return;
+
+    const newServers: Record<string, McpServerConfig> = {};
+    for (const [name, config] of Object.entries(this.mcpServerConfigs)) {
+      if (!this.mcpClientManager.hasServer(name)) {
+        newServers[name] = config;
+      }
+    }
+
+    if (Object.keys(newServers).length === 0) return;
+
+    const errors = await this.mcpClientManager.connectAll(newServers);
+    if (errors.length > 0) {
+      console.warn(
+        `[MCP] ${errors.length} new server(s) failed to connect: ` +
+        errors.map((e) => e.serverName).join(", "),
+      );
+    }
+  }
+
+  /**
+   * Reload all dynamic resources at the start of a run.
+   * Picks up changes made between conversation turns.
+   */
+  protected async reloadDynamicResources(): Promise<void> {
+    this.reloadPreferencesIfChanged();  // rebuilds internally if changed
+    const rulesChanged = this.projectRules.reloadIfChanged();
+    this.reloadSkillsFromDirectory();   // rebuilds internally if changed
+
+    if (rulesChanged) {
+      this.rebuildSystemPrompt();
+    }
+
+    await this.reconnectMCPIfNeeded();
+  }
+
+  /**
+   * After a resume, recover results from sub-agents that were cancelled
+   * mid-run. Completed results are injected into context so the LLM can
+   * see them; still-running sub-agents get a notice.
+   */
+  protected recoverOrphanedSubAgentResults(): void {
+    if (!this.subAgentManager) return;
+
+    const orphaned = this.subAgentManager.collectOrphanedResults();
+    for (const r of orphaned) {
+      const msg = Message.user(
+        `[Sub-agent "${r.name}" (${r.subAgentId}) — recovered after interruption]\n\n${r.output}`,
+      );
+      this.contextManager.addMessage(msg.toDict());
+    }
+
+    // If some cancelled sub-agents are still running, let the LLM know
+    const stillRunning = this.subAgentManager.getActiveCount();
+    if (stillRunning > 0) {
+      const msg = Message.user(
+        `[System] ${stillRunning} sub-agent(s) from the previous session are still running. ` +
+        `Their results will appear when ready. Do not re-spawn them.`,
+      );
+      this.contextManager.addMessage(msg.toDict());
+    }
+  }
+
+  /**
+   * Validate that user input won't overwhelm the context window.
+   *
+   * Returns a user-facing error string if the input is too large,
+   * or `null` if it passes the check.
+   */
+  protected validateInputSize(input: string): string | null {
+    const { maxTokens } = this.contextManager.getState();
+    const inputTokens = countTokens(input);
+
+    // Reserve ~20% for system prompt + tools + response overhead
+    const maxSafeInput = Math.floor(maxTokens * 0.8);
+
+    if (inputTokens > maxSafeInput) {
+      return (
+        `Your input is too large (~${inputTokens} tokens). ` +
+        `The maximum safe input size is ~${maxSafeInput} tokens ` +
+        `(context window: ${maxTokens} tokens, with 20% reserved for system overhead). ` +
+        `Please split your request into smaller parts.`
+      );
+    }
+
+    return null;
   }
 
   // ─── Cancellation ────────────────────────────────────────────────────
@@ -426,8 +594,9 @@ export abstract class Agent {
   /**
    * Cancel the current run.
    *
-   * Prevents any further checkpoint saves. Call this when the user presses
-   * SIGINT to discard the session rather than persisting it.
+   * Sets the cancellation flag; the loop will save a "cancelled" checkpoint
+   * at its next iteration and exit. Call this when the user presses SIGINT.
+   * The session is preserved on disk and can be resumed later.
    */
   cancel(): void {
     this._cancelled = true;
@@ -516,15 +685,55 @@ export abstract class Agent {
   }
 
   /**
-   * Save a session checkpoint to disk (if session manager is configured
-   * and the run has NOT been cancelled).
+   * Save a session checkpoint to disk (if session manager is configured).
    */
   protected saveCheckpoint(status: SessionStatus = "active"): void {
     if (!this.sessionManager) return;
-    if (this.isCancelled) return; // Don't save on abort
 
     const state = this.buildBaseSessionState(status);
     this.sessionManager.saveCheckpoint(state);
+  }
+
+  /**
+   * Handle an LLMNetworkError: save an interrupted checkpoint if
+   * checkpointing is enabled, and return a user-facing message with
+   * resume instructions.
+   *
+   * @param err               The network error that occurred.
+   * @param iteration         The current iteration number (for the log).
+   * @param resumeInstruction What the user should type to resume
+   *                          (e.g. "continue with my previous request").
+   */
+  protected handleNetworkError(
+    err: LLMNetworkError,
+    iteration: number,
+    resumeInstruction: string = "continue",
+  ): string {
+    if (this.checkpointingEnabled) {
+      this.saveCheckpoint("interrupted");
+    }
+
+    const sid = this.sessionManager?.getSessionId() ?? "unknown";
+
+    console.error(
+      `\n[Network Error] ${err.cause}: ${err.message}`,
+    );
+
+    if (this.checkpointingEnabled && this.sessionManager) {
+      return (
+        `[Network Error] ${err.message}\n\n` +
+        `Your session "${sid}" has been saved (iteration ${iteration}).\n` +
+        `After your network is restored, resume with:\n` +
+        `  agent.resume("${sid}", "${resumeInstruction}")\n\n` +
+        `Or start a new session by calling agent.run() again with a fresh input.`
+      );
+    }
+
+    // Checkpointing not enabled — just report the error
+    return (
+      `[Network Error] ${err.message}\n\n` +
+      `Please check your network connection and try again.`
+    );
   }
 
   /**
@@ -597,7 +806,6 @@ export abstract class Agent {
     this.contextManager.clear();
     this.coreSystemPrompt = "";
     this.preferences = {};
-    this.pendingErrorTraceId = null;
     this.subAgentManager?.cancelAll();
     if (this.sessionManager) {
       this.sessionManager.deleteSession(this.sessionManager.getSessionId());
@@ -656,6 +864,13 @@ export abstract class Agent {
       try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
       try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
     }
+
+    // ── Skill tool (LLM-driven activation) ────────────────────────────
+    try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { /* skip */ }
+
+    // ── Remember / Recall tools (long-term memory) ────────────────────
+    try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { /* skip */ }
+    try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { /* skip */ }
   }
 
   /**
@@ -712,45 +927,13 @@ export abstract class Agent {
   }
 
   /**
-   * Call after a tool returns an error string — checks if the error
-   * indicates a tool failure (with retry guidance) and saves the trace ID
-   * so the next LLM analysis thought can be captured.
+   * Call after a tool returns a result — checks if the result indicates
+   * a tool failure (retryable or fatal) and saves the trace ID so the
+   * next LLM analysis thought can be captured.
    *
-   * @param toolName The name of the tool that failed.
-   * @param result   The string returned by ToolRegistry.execute().
+   * @param toolName The name of the tool that was executed.
+   * @param result   The structured ToolResult returned by ToolRegistry.execute().
    */
-  protected trackToolErrorForAnalysis(
-    toolName: string,
-    result: string
-  ): void {
-    const tracker = this.errorTracker;
-    if (!tracker) return;
-
-    // Check if the result contains retry guidance (indicating a failure)
-    if (result.includes("[Retry Guidance]") || result.includes("has been automatically disabled")) {
-      const activeTraceId = tracker.getActiveTraceId(toolName);
-      if (activeTraceId) {
-        this.pendingErrorTraceId = activeTraceId;
-      }
-    }
-  }
-
-  /**
-   * Records the LLM's analysis thought against the pending tool error trace.
-   * Should be called each iteration after parsing the LLM's response.
-   *
-   * @param thought The LLM's thought/analysis content.
-   */
-  protected captureAnalysisFromThought(thought: string): void {
-    if (this.pendingErrorTraceId && thought) {
-      const tracker = this.errorTracker;
-      if (tracker) {
-        tracker.recordAnalysis(this.pendingErrorTraceId, thought);
-      }
-      this.pendingErrorTraceId = null;
-    }
-  }
-
   /**
    * Generate a markdown report of all recorded tool error traces.
    */

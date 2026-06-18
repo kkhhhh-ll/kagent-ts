@@ -25,11 +25,31 @@ export class ContextManager {
       maxTokens: config?.maxTokens ?? 128000,
       compressionThreshold: config?.compressionThreshold ?? 20000,
       keepTurns: config?.keepTurns ?? 40,
-      summaryKeepTurns: config?.summaryKeepTurns ?? 10,
       toolResultMaxAgeMs: config?.toolResultMaxAgeMs ?? 60 * 60 * 1000,
       compression: config?.compression,
     };
+
+    // Validate ratio mode
+    if (this.config.compressionThreshold < 1 && this.config.compressionThreshold > 0.25) {
+      throw new Error(
+        `compressionThreshold ratio must be ≤ 0.25 (trigger at ≥ 75% of context). ` +
+        `Got ${this.config.compressionThreshold} (trigger at ${Math.round((1 - this.config.compressionThreshold) * 100)}%).`
+      );
+    }
+
     this.compressor = new ProgressiveCompressor(this.config);
+  }
+
+  /**
+   * Compute the trigger token count based on the compressionThreshold mode.
+   * Absolute: maxTokens - threshold
+   * Ratio:    maxTokens * (1 - threshold)
+   */
+  private triggerTokens(): number {
+    const t = this.config.compressionThreshold;
+    return t < 1
+      ? Math.round(this.config.maxTokens * (1 - t))
+      : this.config.maxTokens - t;
   }
 
   /**
@@ -56,7 +76,7 @@ export class ContextManager {
    * @returns true when remaining free tokens < compressionThreshold.
    */
   shouldCompress(model?: string): boolean {
-    return this.getCurrentTokens(model) >= this.config.maxTokens - this.config.compressionThreshold;
+    return this.getCurrentTokens(model) >= this.triggerTokens();
   }
 
   /**
@@ -108,7 +128,7 @@ export class ContextManager {
     const beforeTokens = this.getCurrentTokens(model);
     console.log(
       `[Context] Compression triggered: ${beforeTokens} tokens, ` +
-      `threshold at ${this.config.maxTokens - this.config.compressionThreshold}.`,
+      `threshold at ${this.triggerTokens()}.`,
     );
 
     const { removedCount } = await this.compress(llm);

@@ -47,19 +47,6 @@ export function parseFrontmatter(raw: string): {
   return { frontmatter, body: match[2].trim() };
 }
 
-/**
- * Parse a comma-separated keywords string into an array.
- * Returns `undefined` when the input is empty or absent.
- */
-export function parseKeywords(raw?: string): string[] | undefined {
-  if (!raw) return undefined;
-  const keywords = raw
-    .split(",")
-    .map((k) => k.trim())
-    .filter(Boolean);
-  return keywords.length > 0 ? keywords : undefined;
-}
-
 // ─── Script Execution ──────────────────────────────────────────────────────
 
 const REFERENCE_EXTENSIONS = new Set([".md", ".txt"]);
@@ -187,7 +174,6 @@ export class FileSkillLoader {
         name,
         description: frontmatter.description?.trim() ?? "",
         systemPrompt: "", // Loaded lazily on activation
-        keywords: parseKeywords(frontmatter.keywords),
       });
     }
 

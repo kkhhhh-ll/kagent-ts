@@ -1,45 +1,29 @@
 import OpenAI from "openai";
 import { Stream } from "openai/streaming";
-import { LLMProvider, LLMResponse, LLMStreamEvent } from "./interface";
+import { LLMProvider, LLMResponse, LLMStreamEvent, LLMResponseErrorCode } from "./interface";
 import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
 import { countTokens } from "../utils/token-counter";
 
-// ─── Error Types ───────────────────────────────────────────────────────────
+// ─── Shared error types (re-exported for backward compatibility) ─────────────
+
+export { LLMNetworkError, type NetworkErrorCause, type RetryConfig } from "./errors";
+
+// ─── OpenAIRetryConfig (deprecated alias) ────────────────────────────────────
 
 /**
- * Categories of network-related LLM failures.
+ * @deprecated Use `RetryConfig` from `"./errors"` instead.
  */
-export type NetworkErrorCause =
-  | "timeout"
-  | "connection_refused"
-  | "connection_reset"
-  | "dns_error"
-  | "rate_limit"
-  | "server_error"
-  | "aborted"
-  | "unknown_network";
+export type { RetryConfig as OpenAIRetryConfig } from "./errors";
 
-/**
- * Thrown by the LLM provider when all retry attempts for a network-related
- * failure have been exhausted. The agent catches this to save a checkpoint
- * and guide the user to resume their session.
- */
-export class LLMNetworkError extends Error {
-  public readonly cause: NetworkErrorCause;
-
-  constructor(message: string, cause: NetworkErrorCause) {
-    super(message);
-    this.name = "LLMNetworkError";
-    this.cause = cause;
-  }
-}
+// ─── OpenAI-specific network error helpers ───────────────────────────────────
 
 /**
  * Check whether an error is network-related and thus retryable.
+ * OpenAI-provider specific: checks `OpenAI.APIError` status codes.
  */
 export function isNetworkError(error: unknown): boolean {
-  if (error instanceof LLMNetworkError) return true;
+  if (error instanceof Error && error.name === "LLMNetworkError") return true;
 
   if (error instanceof OpenAI.APIError) {
     // 429 (rate-limit) and 5xx (server) are retryable
@@ -68,8 +52,9 @@ export function isNetworkError(error: unknown): boolean {
 
 /**
  * Map a raw error to its NetworkErrorCause category.
+ * OpenAI-provider specific: checks `OpenAI.APIError` status codes.
  */
-function classifyError(error: unknown): NetworkErrorCause {
+function classifyError(error: unknown): import("./errors").NetworkErrorCause {
   if (error instanceof OpenAI.APIError) {
     if (error.status === 429) return "rate_limit";
     if (error.status !== undefined && error.status >= 500) return "server_error";
@@ -85,18 +70,12 @@ function classifyError(error: unknown): NetworkErrorCause {
   return "unknown_network";
 }
 
-// ─── OpenAIRetryConfig ─────────────────────────────────────────────────────
+// ─── Imports for shared retry ────────────────────────────────────────────────
 
-export interface OpenAIRetryConfig {
-  /** Max retry attempts for network errors (default: 3). */
-  maxRetries?: number;
-  /** Initial backoff delay in ms (default: 1000). */
-  baseDelayMs?: number;
-  /** Maximum backoff delay in ms (default: 30000). */
-  maxDelayMs?: number;
-}
+import { type RetryConfig } from "./errors";
+import { withRetry } from "./retry";
 
-// ─── OpenAIConfig ──────────────────────────────────────────────────────────
+// ─── OpenAIConfig ────────────────────────────────────────────────────────────
 
 /**
  * Configuration options for the OpenAI LLM provider.
@@ -108,12 +87,12 @@ export interface OpenAIConfig {
   maxTokens?: number;
   baseURL?: string;
   /** Retry configuration for network resilience. */
-  retry?: OpenAIRetryConfig;
+  retry?: RetryConfig;
   /** Request timeout in ms (default: none — SDK default ~10 min). */
   timeout?: number;
 }
 
-// ─── OpenAIProvider ────────────────────────────────────────────────────────
+// ─── OpenAIProvider ──────────────────────────────────────────────────────────
 
 /**
  * OpenAI implementation of the LLMProvider interface.
@@ -130,7 +109,7 @@ export class OpenAIProvider implements LLMProvider {
   private client: OpenAI;
   private temperature: number;
   private maxTokens: number;
-  private retryConfig: Required<OpenAIRetryConfig>;
+  private retryConfig: Required<RetryConfig>;
   private timeout: number | undefined;
 
   constructor(config: OpenAIConfig) {
@@ -167,23 +146,26 @@ export class OpenAIProvider implements LLMProvider {
       },
     }));
 
-    const response = await this.withRetry<OpenAI.Chat.ChatCompletion>(() =>
-      this.client.chat.completions.create(
-        {
-          model: this.model,
-          messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
-          temperature: this.temperature,
-          max_tokens: this.maxTokens,
-          tools: openaiTools,
-        },
-        { timeout: this.timeout }
-      )
+    const response = await withRetry<OpenAI.Chat.ChatCompletion>(
+      () =>
+        this.client.chat.completions.create(
+          {
+            model: this.model,
+            messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+            temperature: this.temperature,
+            max_tokens: this.maxTokens,
+            tools: openaiTools,
+          },
+          { timeout: this.timeout }
+        ),
+      this.retryConfig,
+      { isRetryable: isNetworkError, classifyError },
     );
 
     const choice = response.choices[0];
     const message = choice.message;
 
-    return {
+    const result: LLMResponse = {
       content: message.content ?? "",
       tool_calls: message.tool_calls?.map((tc) => ({
         id: tc.id,
@@ -200,7 +182,18 @@ export class OpenAIProvider implements LLMProvider {
             total_tokens: response.usage.total_tokens,
           }
         : undefined,
+      stop_reason: choice.finish_reason ?? undefined,
     };
+
+    // Flag response-level quality issues
+    if (choice.finish_reason === "length") {
+      result.responseError = {
+        code: LLMResponseErrorCode.MAX_TOKENS,
+        message: "Response truncated: max_tokens reached. Content or tool call arguments may be incomplete.",
+      };
+    }
+
+    return result;
   }
 
   /**
@@ -228,7 +221,7 @@ export class OpenAIProvider implements LLMProvider {
 
     // Retry only the initial stream creation — not mid-stream drops.
     // Use async wrapper so TypeScript treats APIPromise → Promise correctly.
-    const stream = await this.withRetry<Stream<OpenAI.Chat.ChatCompletionChunk>>(
+    const stream = await withRetry<Stream<OpenAI.Chat.ChatCompletionChunk>>(
       async () =>
         (await this.client.chat.completions.create(
           {
@@ -242,6 +235,9 @@ export class OpenAIProvider implements LLMProvider {
           },
           { timeout: this.timeout }
         )) as unknown as Stream<OpenAI.Chat.ChatCompletionChunk>
+      ,
+      this.retryConfig,
+      { isRetryable: isNetworkError, classifyError },
     );
 
     let emittedDone = false;
@@ -296,49 +292,5 @@ export class OpenAIProvider implements LLMProvider {
    */
   getTokenCount(text: string, model?: string): number {
     return countTokens(text, model ?? this.model);
-  }
-
-  // ─── Private Helpers ────────────────────────────────────────────────────
-
-  /**
-   * Wrap an async operation with network-error retry logic.
-   *
-   * Retry strategy:
-   * - Only network-related errors (timeout, connection reset, 429, 5xx) are retried.
-   * - Uses exponential backoff with full jitter: delay = base * 2^attempt * random(0.5, 1.0).
-   * - Non-retryable errors (401, 400, abort) propagate immediately.
-   * - After all retries are exhausted, throws `LLMNetworkError`.
-   */
-  private async withRetry<T>(fn: () => Promise<T> | PromiseLike<T>): Promise<T> {
-    const { maxRetries, baseDelayMs, maxDelayMs } = this.retryConfig;
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (error: unknown) {
-        lastError = error;
-
-        // Non-network errors propagate immediately (e.g. invalid API key)
-        if (!isNetworkError(error)) throw error;
-
-        if (attempt >= maxRetries) break; // all retries exhausted
-
-        // Exponential backoff with full jitter
-        const delay = Math.min(
-          baseDelayMs * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5),
-          maxDelayMs,
-        );
-
-        // eslint-disable-next-line @typescript-eslint/no-loop-func
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-
-    // All retries exhausted — wrap the final error
-    const cause = classifyError(lastError);
-    const message =
-      lastError instanceof Error ? lastError.message : String(lastError);
-    throw new LLMNetworkError(message, cause);
   }
 }

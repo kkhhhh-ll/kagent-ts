@@ -1,7 +1,8 @@
-import { Tool, BreakerStatus } from "./types";
+import { Tool, ToolResult, ToolErrorCode, toolSuccess, toolError, BreakerStatus } from "./types";
 import { CircuitBreaker } from "./circuit-breaker";
 import { ToolErrorTracker } from "./error-tracker";
 import { ToolOutputTruncator } from "./tool-output-truncator";
+import { ToolFilter } from "./tool-filter";
 
 /**
  * Registry that manages tool definitions together with circuit breakers.
@@ -23,7 +24,7 @@ export class ToolRegistry {
    *                    (default: 2 → 3 total attempts before circuit opens).
    * @param errorTracker Optional ToolErrorTracker for recording failure chains.
    * @param truncator   Optional ToolOutputTruncator for truncating large
-   *                    tool outputs (default: disabled).
+   *                    tool outputs (default: enabled with default limits).
    */
   constructor(
     retryCount?: number,
@@ -104,25 +105,54 @@ export class ToolRegistry {
     return Array.from(this.tools.keys());
   }
 
+  // ─── Tool Filter ───────────────────────────────────────────────────────
+
+  /**
+   * Create a new ToolRegistry containing only tools that pass the given
+   * filter. Circuit breaker state is NOT copied — each filtered registry
+   * starts fresh (appropriate for sub-agents).
+   *
+   * @param filter The filter to apply.
+   * @returns A new ToolRegistry with the filtered tool set.
+   */
+  filter(filter: ToolFilter): ToolRegistry {
+    const registry = new ToolRegistry(
+      this.retryCount,
+      this.errorTracker,
+      this.truncator,
+    );
+    for (const tool of this.tools.values()) {
+      if (filter.filter(tool)) {
+        registry.register(tool);
+      }
+    }
+    return registry;
+  }
+
   // ─── Circuit Breaker ───────────────────────────────────────────────────
 
   /**
    * Execute a tool with circuit-breaker protection and retry guidance.
    *
-   * - If the circuit is OPEN, returns an error message with a recommendation
-   *   to try a different approach.
-   * - If execution fails and retries remain, returns a message telling the LLM
-   *   to analyze the error and retry with corrected parameters.
-   * - If execution succeeds, records a success (resets failure count).
+   * Returns a structured {@link ToolResult} with a machine-readable
+   * {@link ToolErrorCode} so callers can react precisely.
    *
-   * @returns The tool's result string, or an error message with retry guidance.
+   * Possible error codes:
+   * - `SUCCESS`            — tool completed normally.
+   * - `UNKNOWN_TOOL`       — tool name not registered.
+   * - `CIRCUIT_OPEN`       — tool is disabled (too many failures).
+   * - `EXECUTION_FAILURE`  — tool threw an exception; retries may remain.
+   * - `TRUNCATED_OUTPUT`   — tool output was truncated.
    */
-  async execute(name: string, args: Record<string, unknown>): Promise<string> {
+  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
-      return (
-        `Error: Unknown tool "${name}". Available tools: ${this.toolNames.join(", ")}. ` +
-        `Please check the tool name and try again.`
+      return toolError(
+        ToolErrorCode.UNKNOWN_TOOL,
+        `[FATAL:UNKNOWN_TOOL] The tool "${name}" is not registered. ` +
+        `Available tools: ${this.toolNames.join(", ")}. ` +
+        `Please use one of the available tools instead.`,
+        "fatal",
       );
     }
 
@@ -131,21 +161,28 @@ export class ToolRegistry {
     // Circuit breaker check — circuit is OPEN
     if (!breaker.isAvailable) {
       const status = breaker.getStatus();
-      return (
-        `Error: Tool "${name}" has been automatically disabled after ${status.failureCount} consecutive failures. ` +
+      return toolError(
+        ToolErrorCode.CIRCUIT_OPEN,
+        `[FATAL:CIRCUIT_OPEN] Tool "${name}" has been disabled after ${status.failureCount} consecutive failures. ` +
         `It cannot be used again in this session. ` +
-        `Please try a completely different approach that does not rely on this tool. ` +
-        `Available alternatives: ${this.toolNames.filter((n) => n !== name).join(", ") || "none — try a different method."}`
+        `Please find a completely different approach. ` +
+        `Available alternatives: ${this.toolNames.filter((n) => n !== name).join(", ") || "none — try a different method."}`,
+        "fatal",
       );
     }
 
     // Execute with failure tracking and retry guidance
     try {
       const rawResult = await tool.execute(args);
-      const result = this.truncator.truncate(name, rawResult);
-      // Success after previous failures — record recovery + reset breaker
+      const truncated = this.truncator.truncate(name, rawResult);
+      const wasTruncated = truncated !== rawResult;
+
+      // Success after previous failures — record recovery + reset breaker.
+      // Only include the recovery message in the LLM context when an
+      // error tracker is active (meaning the LLM was previously informed
+      // of the failures via error-analysis injection).
       if (breaker.currentFailureCount > 0) {
-        // Record recovery in the error tracker
+        let hadActiveTrace = false;
         if (this.errorTracker) {
           const activeTrace = this.errorTracker.getActiveTraceId(name);
           if (activeTrace) {
@@ -154,16 +191,29 @@ export class ToolRegistry {
               activeTrace,
               `Tool "${name}" executed successfully after ${breaker.currentFailureCount} failure(s).`
             );
+            hadActiveTrace = true;
           }
         }
         breaker.recordSuccess();
-        return (
-          `${result}\n\n` +
-          `[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]`
-        );
+
+        if (hadActiveTrace) {
+          const content = wasTruncated
+            ? `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]\n[Note: Output was truncated due to size limits.]`
+            : `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]`;
+          return {
+            success: true,
+            severity: "success",
+            errorCode: wasTruncated ? ToolErrorCode.TRUNCATED_OUTPUT : ToolErrorCode.SUCCESS,
+            content,
+          };
+        }
+
+        // Breaker was reset but no active error trace — silent recovery.
+        return toolSuccess(truncated);
       }
+
       breaker.recordSuccess();
-      return result;
+      return toolSuccess(truncated);
     } catch (err: unknown) {
       const rawMessage = err instanceof Error ? err.message : String(err);
       const remaining = breaker.recordFailure();
@@ -175,22 +225,26 @@ export class ToolRegistry {
 
       // Circuit just opened — no retries left
       if (!breaker.isAvailable) {
-        return (
-          `Error executing tool "${name}": ${rawMessage}\n\n` +
-          `This was the final attempt. The tool "${name}" is now disabled after ${breaker.currentFailureCount} consecutive failures. ` +
-          `Please do NOT try to use "${name}" again. Instead, try a different approach or a different tool.`
+        return toolError(
+          ToolErrorCode.EXECUTION_FAILURE,
+          `[FATAL:EXECUTION_FAILURE] Tool "${name}" threw an exception: ${rawMessage}\n\n` +
+          `This was the final attempt. The tool is now disabled after ${breaker.currentFailureCount} consecutive failures. ` +
+          `Do NOT retry "${name}". Find a different approach or tool.`,
+          "fatal",
         );
       }
 
-      // Retries still available — guide the LLM to re-analyze
+      // Retries still available
       const attemptNum = breaker.currentFailureCount;
       const totalAllowed = breaker.effectiveThreshold;
-      return (
-        `Error executing tool "${name}": ${rawMessage}\n\n` +
-        `[Retry Guidance] This is attempt ${attemptNum} of ${totalAllowed}. ` +
+      return toolError(
+        ToolErrorCode.EXECUTION_FAILURE,
+        `[RETRYABLE:EXECUTION_FAILURE] Tool "${name}" threw an exception: ${rawMessage}\n\n` +
+        `This is attempt ${attemptNum} of ${totalAllowed}. ` +
         `You have ${remaining} retry attempt${remaining > 1 ? "s" : ""} remaining.\n` +
-        `Please analyze the error above carefully, correct the parameters, and retry. ` +
-        `If you believe the issue is with the input, try a different approach or different arguments.`
+        `Analyze the error, correct the parameters, and retry. ` +
+        `If the approach is fundamentally wrong, try a different method.`,
+        "retryable",
       );
     }
   }

@@ -1,5 +1,5 @@
 import { LLMResponse } from "../llm/interface";
-import { LLMNetworkError } from "../llm/openai-provider";
+import { LLMNetworkError } from "../llm/errors";
 import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
 

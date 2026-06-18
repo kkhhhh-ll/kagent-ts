@@ -1,3 +1,74 @@
+// ─── Tool Error Codes ────────────────────────────────────────────────────────
+
+/**
+ * Standardised tool error codes for programmatic handling.
+ *
+ * Every `ToolResult` carries an error code so that agent code and LLM
+ * guidance can react precisely — no string-matching heuristics needed.
+ */
+export enum ToolErrorCode {
+  /** Tool executed successfully. */
+  SUCCESS = "success",
+  /** The tool name is not registered. */
+  UNKNOWN_TOOL = "unknown_tool",
+  /** The circuit breaker is open — the tool is disabled for this session. */
+  CIRCUIT_OPEN = "circuit_open",
+  /** The tool threw an exception during execution. */
+  EXECUTION_FAILURE = "execution_failure",
+  /** The arguments JSON could not be parsed (malformed or truncated). */
+  ARGUMENTS_PARSE_ERROR = "arguments_parse_error",
+  /** The tool's output was truncated due to size limits. */
+  TRUNCATED_OUTPUT = "truncated_output",
+  /** An internal error occurred in the tool registry / infrastructure. */
+  INTERNAL_ERROR = "internal_error",
+}
+
+/**
+ * Structured result returned by a tool execution.
+ *
+ * Every tool call produces a `ToolResult` with a machine-readable
+ * `errorCode` and a human-readable `content` string destined for
+ * the LLM conversation context.
+ */
+export interface ToolResult {
+  /** Whether the tool executed successfully. */
+  success: boolean;
+  /** Human-readable content — injected into the LLM context as-is. */
+  content: string;
+  /**
+   * Severity level (convenience derived from `errorCode`).
+   * - `"success"`   → tool completed normally.
+   * - `"retryable"` → the LLM can retry with corrected parameters.
+   * - `"fatal"`     → the tool is gone; the LLM must pivot.
+   */
+  severity: "success" | "retryable" | "fatal";
+  /**
+   * Machine-readable error code.
+   * `ToolErrorCode.SUCCESS` when the tool completed without error.
+   */
+  errorCode: ToolErrorCode;
+}
+
+// ─── ToolResult helpers ──────────────────────────────────────────────────────
+
+/**
+ * Build a successful ToolResult in one call.
+ */
+export function toolSuccess(content: string): ToolResult {
+  return { success: true, content, severity: "success", errorCode: ToolErrorCode.SUCCESS };
+}
+
+/**
+ * Build a failing ToolResult in one call.
+ */
+export function toolError(
+  errorCode: ToolErrorCode,
+  content: string,
+  severity: "retryable" | "fatal" = "retryable",
+): ToolResult {
+  return { success: false, content, severity, errorCode };
+}
+
 /**
  * A tool that an agent can invoke.
  */
@@ -8,7 +79,7 @@ export interface Tool {
   description: string;
   /** JSON Schema describing the tool's parameters. */
   parameters: Record<string, unknown>;
-  /** Execute the tool with the given arguments and return a result string. */
+  /** Execute the tool with the given arguments and return a raw result string. */
   execute(args: Record<string, unknown>): Promise<string>;
 }
 

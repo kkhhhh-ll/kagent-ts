@@ -4,10 +4,11 @@ import {
   parsePlanSolveResponse,
   PLAN_SOLVE_INSTRUCTIONS,
 } from "./response-schema";
-import { LLMNetworkError } from "../llm/openai-provider";
-import { LLMResponse } from "../llm/interface";
+import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { LLMNetworkError } from "../llm/errors";
+import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
+import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { SessionState, SessionStatus } from "../session/session-types";
-import { PreferenceManager } from "../preferences/preference-manager";
 
 /**
  * Default system prompt for the Plan-and-Solve paradigm.
@@ -28,20 +29,10 @@ Process:
 4. When all steps are complete, provide the final answer.
 
 If no tools are needed, respond with the final answer directly.
-
-=== Tool Error Recovery ===
-When a tool returns an error:
-1. READ the error message carefully — understand WHY it failed.
-2. ANALYZE whether the parameters were correct. Common issues:
-   - Wrong file path (check spelling, use absolute paths)
-   - Missing or incorrect arguments
-   - The tool may need different input formats
-3. RETRY with corrected parameters if you can fix the issue.
-4. If the same tool fails repeatedly, try a COMPLETELY DIFFERENT approach.
-5. If a tool fails 2+ times in a row, consider whether your PLAN needs revision.
-   The approach may be fundamentally wrong — output a "revised_plan".
-6. If a tool is disabled after too many failures, DO NOT try to use it again.
-   Find another way to accomplish the task.${PLAN_SOLVE_INSTRUCTIONS}`;
+${TOOL_ERROR_RECOVERY}
+5. If multiple tools fail in a round, consider whether your PLAN needs revision.
+   The approach may be fundamentally wrong — output a "revised_plan".${PLAN_SOLVE_INSTRUCTIONS}
+${SUB_AGENT_DELEGATION}`;
 
 /**
  * Configuration specific to the Plan-and-Solve Agent.
@@ -53,15 +44,7 @@ export interface PlanSolveAgentConfig extends AgentConfig {
   /** Maximum number of steps in a plan (default: 12). */
   maxPlanSteps?: number;
 
-  /**
-   * Enable progressive skill disclosure.
-   * When true, skills are auto-detected from user input and loaded
-   * into the system prompt on demand (default: true).
-   */
-  enableSkillAutoDetect?: boolean;
-
-  /**
-   * Number of consecutive tool failures before a "replan hint" is injected
+  /** Number of consecutive tool failures before a "replan hint" is injected
    * into the system prompt, nudging the LLM to consider revising its plan.
    * Set to 0 to disable auto-replan triggering (default: 2).
    */
@@ -89,7 +72,6 @@ export interface PlanSolveAgentConfig extends AgentConfig {
 export class PlanSolveAgent extends Agent {
   private maxIterations: number;
   private maxPlanSteps: number;
-  private enableSkillAutoDetect: boolean;
 
   /** The current plan steps (empty until the plan is created). */
   private currentPlan: string[] = [];
@@ -122,28 +104,25 @@ export class PlanSolveAgent extends Agent {
 
     this.maxIterations = config.maxIterations ?? 15;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
-    this.enableSkillAutoDetect = config.enableSkillAutoDetect ?? true;
     this.replanThreshold = config.replanThreshold ?? 2;
 
-    // If skills are registered, rebuild the system prompt so the
-    // available-skills hint is included in the initial prompt.
-    if (this.skillManager.activeCount > 0) {
-      this.rebuildSystemPrompt();
-    }
+    // Build the full system prompt once all sections are ready
+    this.rebuildSystemPrompt();
   }
 
   async run(input: string): Promise<string> {
     // ── Async initialization (MCP connections, etc.) ─────────────────
     await this.init();
 
-    // ── Phase 0: Progressive disclosure ──────────────────────────────
-    if (this.enableSkillAutoDetect && this.skillManager.count > 0) {
-      const activated = this.skillManager.detectAndActivate(input);
-      if (activated.length > 0) {
-        this.rebuildSystemPrompt();
-        console.log(`[Skills] Auto-activated: ${activated.join(", ")}`);
-      }
-    }
+    // ── Reload dynamic resources (preferences, skills, MCP) ─────────
+    await this.reloadDynamicResources();
+
+    // ── Recover orphaned sub-agent results from a cancelled session ──
+    this.recoverOrphanedSubAgentResults();
+
+    // ── Pre-flight: reject oversized input before any LLM call ───────
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) return sizeError;
 
     // ── Create user message ─────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -167,14 +146,19 @@ export class PlanSolveAgent extends Agent {
     let consecutiveEmptyIterations = 0;
     const EMPTY_ITERATION_LIMIT = 5;
 
+    // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
+    let consecutiveTruncations = 0;
+    const MAX_TRUNCATION_CONTINUES = 3;
+
     // ── Main Plan-Solve loop ────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       // Check if user cancelled (SIGINT)
       if (this.isCancelled) {
-        this.sessionManager?.deleteSession(
-          this.sessionManager.getSessionId(),
-        );
-        const cancelMsg = "Execution cancelled by user. Session discarded.";
+        this.saveCheckpoint("cancelled");
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        const cancelMsg =
+          `Execution cancelled by user. Session "${sid}" preserved — ` +
+          `resume with agent.resume("${sid}", "<your prompt>").`;
         for (const h of this.hooks) h.onFinish?.(cancelMsg);
         return cancelMsg;
       }
@@ -199,7 +183,7 @@ export class PlanSolveAgent extends Agent {
       } catch (err: unknown) {
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
-          return this.handleNetworkError(err, iteration + 1);
+          return this.handleNetworkError(err, iteration + 1, "continue with what you were doing");
         }
         throw err;
       }
@@ -215,6 +199,29 @@ export class PlanSolveAgent extends Agent {
 
       this.contextManager.addMessage(assistantMessage.toDict());
 
+      // ── Handle max_tokens truncation ──────────────────────────────
+      const isTruncated = response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS;
+      if (isTruncated) {
+        consecutiveTruncations++;
+        if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          const fallback = parsed.answer
+            ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+            : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+              "Please try breaking your request into smaller steps.";
+          for (const h of this.hooks) h.onFinish?.(fallback);
+          return fallback;
+        }
+
+        const continueMsg = Message.assistant(
+          "[System] Your previous response was cut off (max output tokens reached). " +
+          "Continue exactly where you left off — do NOT repeat any content already written. " +
+          "If you were calling tools, re-invoke them with complete arguments."
+        );
+        this.contextManager.addMessage(continueMsg.toDict());
+      } else {
+        consecutiveTruncations = 0;
+      }
+
       // ── Handle tool calls (execution phase) ─────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
         consecutiveEmptyIterations = 0;
@@ -222,7 +229,14 @@ export class PlanSolveAgent extends Agent {
         if (parsed.thought) {
           console.log(`[Thought] ${parsed.thought}`);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
-          this.captureAnalysisFromThought(parsed.thought);
+        }
+
+        // If the LLM response shows non-truncation quality issues, warn
+        // before executing tool calls. (max_tokens truncation is handled above.)
+        if (response.responseError && response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS) {
+          const prefix = `[System] LLM response quality issue: ${response.responseError.message}`;
+          const warnMsg = Message.assistant(prefix);
+          this.contextManager.addMessage(warnMsg.toDict());
         }
 
         // Track whether ANY tool in this round failed
@@ -233,35 +247,46 @@ export class PlanSolveAgent extends Agent {
           try {
             args = JSON.parse(toolCall.function.arguments);
           } catch {
-            args = {};
+            // Arguments are malformed or truncated — don't execute.
+            const result: ToolResult = toolError(
+              ToolErrorCode.ARGUMENTS_PARSE_ERROR,
+              `[RETRYABLE:ARGUMENTS_PARSE_ERROR] Failed to parse arguments for tool "${toolCall.function.name}". ` +
+              `The raw arguments were: ${toolCall.function.arguments || "(empty)"}\n\n` +
+              `${response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS ? "The LLM response was truncated (max_tokens). Please reduce context or split the work across smaller steps. " : ""}` +
+              `Please re-invoke the tool with correctly formatted JSON arguments.`,
+              "retryable",
+            );
+
+            roundHadFailure = true;
+            // Tool never executed — args were unparseable
+            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
+
+            const toolMessage = Message.tool(
+              result.content,
+              toolCall.id,
+              toolCall.function.name,
+            );
+            this.contextManager.addMessage(toolMessage.toDict());
+            continue;
           }
 
           for (const h of this.hooks) h.onToolStart?.(toolCall.function.name, args);
 
-          let result: string;
-          try {
-            result = await this.toolRegistry.execute(
-              toolCall.function.name,
-              args,
-            );
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            result = `Error executing tool "${toolCall.function.name}": ${message}`;
-          }
+          // Execute via ToolRegistry — never throws.
+          const result: ToolResult = await this.toolRegistry.execute(
+            toolCall.function.name,
+            args,
+          );
 
-          // Track failure/success for replan detection and hooks
-          if (result.startsWith("Error")) {
+          if (!result.success) {
             roundHadFailure = true;
-            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result);
+            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
           } else {
-            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result);
+            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result.content);
           }
-
-          // Track this result for error analysis if it indicates a failure
-          this.trackToolErrorForAnalysis(toolCall.function.name, result);
 
           const toolMessage = Message.tool(
-            result,
+            result.content,
             toolCall.id,
             toolCall.function.name,
           );
@@ -314,6 +339,17 @@ export class PlanSolveAgent extends Agent {
 
       // ── Final answer ────────────────────────────────────────────
       if (parsed.answer) {
+        // If truncated, don't return — the continuation instruction is
+        // already in context; next iteration will continue from here.
+        if (isTruncated) {
+          consecutiveEmptyIterations = 0;
+          if (parsed.thought) {
+            console.log(`[Thought] ${parsed.thought}`);
+            for (const h of this.hooks) h.onThought?.(parsed.thought);
+          }
+          console.log("[Plan-Solve] Answer truncated (max_tokens) — continuing in next iteration.");
+          continue;
+        }
         if (parsed.thought) {
           console.log(`[Thought] ${parsed.thought}`);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
@@ -358,6 +394,7 @@ export class PlanSolveAgent extends Agent {
         consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0; // Remaining steps are now new
+        this.consecutiveFailures = 0; // New plan, fresh failure counter
         console.log(
           `[Plan] Revised — ${this.currentPlan.length} steps remaining:`,
         );
@@ -377,7 +414,6 @@ export class PlanSolveAgent extends Agent {
         consecutiveEmptyIterations++;
         console.log(`[Thought] ${parsed.thought}`);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-        this.captureAnalysisFromThought(parsed.thought);
 
         // If stuck in thought-only loop, bail out
         if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
@@ -475,39 +511,8 @@ export class PlanSolveAgent extends Agent {
     return this.run(input);
   }
 
-  // ─── Private Helpers ─────────────────────────────────────────────────
-
-  /**
-   * Handle an LLMNetworkError: save an interrupted checkpoint if
-   * checkpointing is enabled, and return a user-facing message with
-   * resume instructions.
-   */
-  private handleNetworkError(err: LLMNetworkError, iteration: number): string {
-    if (this.checkpointingEnabled) {
-      this.saveCheckpoint("interrupted");
-    }
-
-    const sid = this.sessionManager?.getSessionId() ?? "unknown";
-
-    console.error(
-      `\n[Network Error] ${err.cause}: ${err.message}`,
-    );
-
-    if (this.checkpointingEnabled && this.sessionManager) {
-      return (
-        `[Network Error] ${err.message}\n\n` +
-        `Your session "${sid}" has been saved (iteration ${iteration}).\n` +
-        `After your network is restored, resume with:\n` +
-        `  agent.resume("${sid}", "continue with what you were doing")\n\n` +
-        `Or start a new session by calling agent.run() again.`
-      );
-    }
-
-    return (
-      `[Network Error] ${err.message}\n\n` +
-      `Please check your network connection and try again.`
-    );
-  }
+  // ─── Network error handling inherited from Agent ───────────────────
+  // handleNetworkError is defined in the base Agent class.
 
   // ─── Plan Context Injection ─────────────────────────────────────────────
 
@@ -522,13 +527,7 @@ export class PlanSolveAgent extends Agent {
    *                   to consider revising its plan.
    */
   private rebuildContextWithPlan(replanHint?: string): void {
-    let prompt = this.coreSystemPrompt;
-
-    // User preferences — injected as a system-prompt section
-    prompt += PreferenceManager.toPrompt(this.preferences);
-
-    // Available skills hint (progressive disclosure — names only)
-    prompt += this.skillManager.buildAvailableSkillsHint();
+    let prompt = this.buildSystemPrompt();
 
     // Plan context — injected when a plan exists
     if (this.hasPlan && this.currentPlan.length > 0) {
@@ -552,9 +551,6 @@ export class PlanSolveAgent extends Agent {
     if (replanHint) {
       prompt += `\n\n${replanHint}`;
     }
-
-    // Active skill instructions
-    prompt += this.skillManager.buildSkillsPrompt();
 
     this.contextManager.setSystemMessage(prompt);
   }

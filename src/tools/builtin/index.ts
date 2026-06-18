@@ -26,6 +26,9 @@ export { GlobSearchTool } from "./glob-search";
 export { createListSubagentsTool } from "./list-subagents";
 export { createSpawnSubagentTool } from "./spawn-subagent";
 export { createListErrorsTool } from "./list-errors";
+export { createSkillTool } from "./skill";
+export { createRememberTool } from "./remember";
+export { createRecallTool } from "./recall";
 
 /**
  * Register all built-in tools into the given registry.

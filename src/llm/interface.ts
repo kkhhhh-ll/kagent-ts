@@ -1,6 +1,42 @@
 import { Tool } from "../tools/types";
 import { MessageData } from "../messages/types";
 
+// ─── LLM Response Error Codes ────────────────────────────────────────────────
+
+/**
+ * Standardised error / quality codes for LLM responses.
+ *
+ * Unlike `LLMNetworkError` (thrown when the API call itself fails),
+ * these codes describe issues with a successfully-received response
+ * that may affect agent behaviour — truncated content, missing output, etc.
+ */
+export enum LLMResponseErrorCode {
+  /** No issues detected. */
+  OK = "ok",
+  /**
+   * The response was truncated because `max_tokens` was reached.
+   * Tool call arguments or final answer may be incomplete.
+   */
+  MAX_TOKENS = "max_tokens",
+  /**
+   * The response content is empty (no text, no tool calls).
+   * Typically indicates a model-side issue or extreme truncation.
+   */
+  EMPTY = "empty",
+  /**
+   * The structured JSON in the response content could not be parsed.
+   * This is set by the agent after attempting to parse the LLM output.
+   */
+  INVALID_JSON = "invalid_json",
+  /**
+   * A non-specific quality issue — `stop_reason` is unusual or
+   * the response otherwise looks degraded.
+   */
+  UNKNOWN = "unknown",
+}
+
+// ─── LLMResponse ─────────────────────────────────────────────────────────────
+
 /**
  * Response returned by an LLM provider after a chat call.
  */
@@ -18,6 +54,22 @@ export interface LLMResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+  };
+  /**
+   * The reason the model stopped generating.
+   * Examples: "end_turn", "tool_use", "max_tokens", "stop", "length".
+   * Useful for detecting truncated output or tool-use signalling.
+   */
+  stop_reason?: string;
+  /**
+   * Response-level error / quality flag.
+   * Set by the LLM provider when the response shows signs of degradation
+   * (e.g., max_tokens truncation). Agents should check this before acting
+   * on tool calls or final answers.
+   */
+  responseError?: {
+    code: LLMResponseErrorCode;
+    message: string;
   };
 }
 

@@ -4,6 +4,7 @@ import { ReActAgent } from "../core/react-agent";
 import { LLMProvider } from "../llm/interface";
 import { ToolRegistry } from "../tools/tool-registry";
 import { Tool } from "../tools/types";
+import { ToolFilter } from "../tools/tool-filter";
 import { SkillManager } from "../skills/skill-manager";
 
 /**
@@ -41,6 +42,13 @@ export class SubAgentManager {
 
   /** Max wall-clock duration for a single sub-agent run (ms). Default: 5 min. */
   private timeoutMs: number = 5 * 60 * 1000;
+
+  /**
+   * Default ToolFilter applied to every sub-agent's tool set.
+   * Useful for globally disallowing certain tools (e.g., sub-agent spawning).
+   * Per-definition `toolFilter` is applied on top of this one.
+   */
+  private defaultFilter?: ToolFilter;
 
   /** Counter for generating unique sub-agent run IDs. */
   private runIdCounter = 0;
@@ -84,6 +92,10 @@ export class SubAgentManager {
   /**
    * Set shared resources from the main agent.
    * Called once during agent init.
+   *
+   * @param defaultFilter Optional ToolFilter applied to all sub-agents.
+   *                      Use this to globally deny dangerous tools
+   *                      (e.g. `denylist("spawn_subagent")`).
    */
   bind(
     llmProvider: LLMProvider,
@@ -91,12 +103,14 @@ export class SubAgentManager {
     skillManager: SkillManager,
     skillsDir?: string,
     timeoutMs?: number,
+    defaultFilter?: ToolFilter,
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
     this.skillManager = skillManager;
     this.skillsDir = skillsDir;
     if (timeoutMs !== undefined) this.timeoutMs = timeoutMs;
+    this.defaultFilter = defaultFilter;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -221,14 +235,53 @@ export class SubAgentManager {
 
   /**
    * Cancel all pending sub-agents without waiting for them to finish.
-   * Running sub-agents continue in the background but their results
-   * are discarded.
+   *
+   * Running sub-agents are marked as cancelled but their promises are
+   * kept alive. When the agent resumes, `collectOrphanedResults()` can
+   * recover completed results so the LLM sees sub-agent output instead
+   * of losing it forever.
    */
   cancelAll(): void {
-    if (this.pending.length > 0) {
-      console.log(`[SubAgent] Cancelling ${this.pending.length} pending sub-agent(s).`);
-      this.pending = [];
+    if (this.pending.length === 0) return;
+    let marked = 0;
+    for (const run of this.pending) {
+      if (!run.cancelled && run.resolved === null) {
+        run.cancelled = true;
+        marked++;
+      }
     }
+    if (marked > 0) {
+      console.log(`[SubAgent] Marked ${marked} pending sub-agent(s) as cancelled (results preserved).`);
+    }
+  }
+
+  /**
+   * Collect results from sub-agents that were cancelled mid-run.
+   *
+   * Call this after resuming a session to pick up any sub-agent results
+   * that completed while the agent was inactive. Results are removed from
+   * the pending queue and tagged so the LLM knows they were interrupted.
+   *
+   * @returns Completed results from cancelled sub-agents.
+   */
+  collectOrphanedResults(): SubAgentResult[] {
+    const results: SubAgentResult[] = [];
+    const stillPending: PendingRun[] = [];
+
+    for (const run of this.pending) {
+      if (run.cancelled && run.resolved !== null) {
+        const tagged = {
+          ...run.resolved,
+          output: `[Interrupted by user — result recovered on resume]\n\n${run.resolved.output}`,
+        };
+        results.push(tagged);
+      } else {
+        stillPending.push(run);
+      }
+    }
+
+    this.pending = stillPending;
+    return results;
   }
 
   // ─── Queries ──────────────────────────────────────────────────────────────
@@ -322,7 +375,7 @@ export class SubAgentManager {
 
   /**
    * Build a ReActAgent instance from a sub-agent definition, with:
-   * - Filtered tool set (only declared tools)
+   * - Filtered tool set (name allowlist → defaultFilter → definition.toolFilter)
    * - Pre-activated skills (copied from main agent's SkillManager)
    * - No spawn tool
    * - Auto-detect disabled (skills are pre-activated)
@@ -346,6 +399,44 @@ export class SubAgentManager {
     if (tools.length > 0) {
       toolRegistry.registerMany(tools);
     }
+
+    // Compose filters: name allowlist applied first, then defaultFilter,
+    // then definition-level toolFilter. Each layer narrows the set.
+    if (this.defaultFilter || definition.toolFilter) {
+      const filteredRegistry = new ToolRegistry();
+      const namesOnly = toolRegistry.toolNames;
+      const allTools = this.toolRegistry!.getTools();
+      for (const toolName of namesOnly) {
+        const tool = allTools.find((t) => t.name === toolName);
+        if (!tool) continue;
+
+        let pass = true;
+        if (this.defaultFilter && !this.defaultFilter.filter(tool)) {
+          pass = false;
+        }
+        if (pass && definition.toolFilter && !definition.toolFilter.filter(tool)) {
+          pass = false;
+        }
+        if (pass) {
+          filteredRegistry.register(tool);
+        }
+      }
+      // Replace with the doubly-filtered registry
+      // (reuse the variable for the rest of the method)
+      return this.finishBuildSubAgent(
+        definition,
+        filteredRegistry,
+      );
+    }
+
+    return this.finishBuildSubAgent(definition, toolRegistry);
+  }
+
+  /** Shared tail of buildSubAgent: wire up skills and return the agent. */
+  private finishBuildSubAgent(
+    definition: SubAgentDefinition,
+    toolRegistry: ToolRegistry,
+  ): ReActAgent {
 
     // Build a dedicated SkillManager with declared skills pre-activated.
     // Use registerFromDirectory when skillsDir is available so lazy-loading
@@ -372,7 +463,6 @@ export class SubAgentManager {
       systemPrompt,
       toolRegistry,
       skillManager,
-      enableSkillAutoDetect: false,
       maxIterations: 10,
     });
   }
