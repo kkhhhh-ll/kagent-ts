@@ -5,6 +5,7 @@ import { MessageData, Role } from "../messages/types";
 import { Tool } from "../tools/types";
 import { countTokens } from "../utils/token-counter";
 import { LLMNetworkError, NetworkErrorCause, RetryConfig } from "./errors";
+import { withRetry, RetryCallbacks } from "./retry";
 
 // ─── Anthropic-specific network error helpers ────────────────────────────────
 
@@ -89,6 +90,12 @@ export interface AnthropicConfig {
   timeout?: number;
 }
 
+/** Retry callbacks shared by all AnthropicProvider instances. */
+const anthropicRetryCallbacks: RetryCallbacks = {
+  isRetryable: isNetworkError,
+  classifyError,
+};
+
 // ─── AnthropicProvider ───────────────────────────────────────────────────────
 
 /**
@@ -149,7 +156,7 @@ export class AnthropicProvider implements LLMProvider {
     const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
     const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
 
-    const response = await AnthropicProvider.withRetryableRequest(
+    const response = await withRetry(
       () =>
         this.client.messages.create({
           model: this.model,
@@ -160,6 +167,7 @@ export class AnthropicProvider implements LLMProvider {
           temperature: this.temperature,
         }),
       this.retryConfig,
+      anthropicRetryCallbacks,
     );
 
     return AnthropicProvider.convertResponse(response);
@@ -177,7 +185,7 @@ export class AnthropicProvider implements LLMProvider {
     // first iteration. We retry the initial stream setup only (which may fail
     // for auth/config errors), but NOT mid-stream drops — those are handled
     // by the agent's outer loop, same as the OpenAI provider.
-    const stream: MessageStream = await AnthropicProvider.withRetryableRequest(
+    const stream: MessageStream = await withRetry(
       async () =>
         this.client.messages.stream({
           model: this.model,
@@ -188,6 +196,7 @@ export class AnthropicProvider implements LLMProvider {
           temperature: this.temperature,
         }),
       this.retryConfig,
+      anthropicRetryCallbacks,
     );
 
     let emittedDone = false;
@@ -268,41 +277,6 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   // ─── Private Helpers ────────────────────────────────────────────────────
-
-  /**
-   * Wrap an async request with Anthropic-specific retry logic.
-   */
-  private static async withRetryableRequest<T>(
-    fn: () => Promise<T>,
-    retryConfig: Required<RetryConfig>,
-  ): Promise<T> {
-    const { maxRetries, baseDelayMs, maxDelayMs } = retryConfig;
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (error: unknown) {
-        lastError = error;
-
-        if (!isNetworkError(error)) throw error;
-        if (attempt >= maxRetries) break;
-
-        const delay = Math.min(
-          baseDelayMs * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5),
-          maxDelayMs,
-        );
-
-        // eslint-disable-next-line @typescript-eslint/no-loop-func
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-
-    const cause = classifyError(lastError);
-    const message =
-      lastError instanceof Error ? lastError.message : String(lastError);
-    throw new LLMNetworkError(message, cause);
-  }
 
   // ─── Static Converters ──────────────────────────────────────────────────
 

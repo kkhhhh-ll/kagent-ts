@@ -17,6 +17,24 @@ export const BUILTIN_TOOLS: Tool[] = [
   GlobSearchTool,
 ];
 
+/**
+ * Names of every built-in tool (both static and dynamically-created).
+ * Used to distinguish framework tools from MCP / user-registered tools.
+ */
+export const BUILTIN_TOOL_NAMES = new Set([
+  "read_file",
+  "write_file",
+  "edit_file",
+  "glob_search",
+  "grep_search",
+  "skill",
+  "spawn_subagent",
+  "list_subagents",
+  "remember",
+  "recall",
+  "list_errors",
+]);
+
 // Re-export individual tools
 export { ReadFileTool } from "./read-file";
 export { WriteFileTool } from "./write-file";

@@ -6,6 +6,7 @@ import { LLMNetworkError } from "../llm/errors";
 import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
 import { AgentTraceEvent, AgentTraceEventType } from "./types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Configuration for the TraceLogger.
@@ -32,6 +33,9 @@ export interface TraceLoggerConfig {
    * Optional model name shown in the trace report header.
    */
   modelName?: string;
+
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -63,6 +67,7 @@ export class TraceLogger implements AgentHooks {
   private agentLabel: string;
   private modelName: string;
   private startTime: number;
+  private logger: Logger;
 
   constructor(config?: TraceLoggerConfig) {
     const ts = Date.now();
@@ -72,6 +77,7 @@ export class TraceLogger implements AgentHooks {
     this.outputDir = path.resolve(config?.outputDir ?? ".kagent-traces");
     this.agentLabel = config?.agentLabel ?? "Agent";
     this.modelName = config?.modelName ?? "unknown";
+    this.logger = config?.logger ?? new ConsoleLogger();
     this.startTime = ts;
   }
 
@@ -102,7 +108,7 @@ export class TraceLogger implements AgentHooks {
     fs.mkdirSync(this.outputDir, { recursive: true });
     const filePath = path.join(this.outputDir, `${this.sessionId}.html`);
     fs.writeFileSync(filePath, html, "utf-8");
-    console.log(`[Trace] Saved session trace → ${filePath}`);
+    this.logger.info("Trace", `Saved session trace → ${filePath}`);
     return filePath;
   }
 

@@ -6,6 +6,7 @@ import { ToolRegistry } from "../tools/tool-registry";
 import { Tool } from "../tools/types";
 import { ToolFilter } from "../tools/tool-filter";
 import { SkillManager } from "../skills/skill-manager";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Manages sub-agent definitions, spawning, and result collection.
@@ -22,6 +23,13 @@ import { SkillManager } from "../skills/skill-manager";
  * - NO spawn tool (prevents nested agent creation)
  */
 export class SubAgentManager {
+  private logger: Logger = new ConsoleLogger();
+
+  /** Set the logger instance (called by the owning agent). */
+  setLogger(logger: Logger): void {
+    this.logger = logger;
+  }
+
   /** Registered definitions keyed by name. */
   private definitions: Map<string, SubAgentDefinition> = new Map();
 
@@ -59,13 +67,13 @@ export class SubAgentManager {
    * Register sub-agent definitions from a directory of AGENT.md files.
    */
   registerFromDirectory(dir: string): number {
-    const loader = new SubAgentLoader(dir);
+    const loader = new SubAgentLoader(dir, undefined, this.logger);
     const definitions = loader.scan();
     let count = 0;
 
     for (const def of definitions) {
       if (this.definitions.has(def.name)) {
-        console.warn(`[SubAgent] Skipping "${def.name}": already registered.`);
+        this.logger.warn("SubAgent", `Skipping "${def.name}": already registered.`);
         continue;
       }
       this.definitions.set(def.name, def);
@@ -73,7 +81,7 @@ export class SubAgentManager {
     }
 
     if (count > 0) {
-      console.log(`[SubAgent] Registered ${count} sub-agent(s) from ${dir}.`);
+      this.logger.info("SubAgent", `Registered ${count} sub-agent(s) from ${dir}.`);
     }
 
     return count;
@@ -182,7 +190,7 @@ export class SubAgentManager {
 
     this.pending.push(pending);
 
-    console.log(`[SubAgent] Spawned "${name}" (run: ${runId}).`);
+    this.logger.info("SubAgent", `Spawned "${name}" (run: ${runId}).`);
     return runId;
   }
 
@@ -209,8 +217,9 @@ export class SubAgentManager {
     for (const run of this.pending) {
       if (run.resolved !== null) {
         results.push(run.resolved);
-        console.log(
-          `[SubAgent] "${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
+        this.logger.info(
+          "SubAgent",
+          `"${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
         );
       } else {
         stillPending.push(run);
@@ -251,7 +260,7 @@ export class SubAgentManager {
       }
     }
     if (marked > 0) {
-      console.log(`[SubAgent] Marked ${marked} pending sub-agent(s) as cancelled (results preserved).`);
+      this.logger.info("SubAgent", `Marked ${marked} pending sub-agent(s) as cancelled (results preserved).`);
     }
   }
 
@@ -388,8 +397,9 @@ export class SubAgentManager {
       if (tool) {
         tools.push(tool);
       } else {
-        console.warn(
-          `[SubAgent] Tool "${toolName}" requested by "${definition.name}" not found in registry.`,
+        this.logger.warn(
+          "SubAgent",
+          `Tool "${toolName}" requested by "${definition.name}" not found in registry.`,
         );
       }
     }
@@ -449,8 +459,9 @@ export class SubAgentManager {
       if (skillManager.has(skillName)) {
         skillManager.activate(skillName);
       } else {
-        console.warn(
-          `[SubAgent] Skill "${skillName}" requested by "${definition.name}" not found.`,
+        this.logger.warn(
+          "SubAgent",
+          `Skill "${skillName}" requested by "${definition.name}" not found.`,
         );
       }
     }

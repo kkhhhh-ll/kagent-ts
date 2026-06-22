@@ -6,6 +6,7 @@ import {
   McpConnectionErrorReport,
   McpConnectionError,
 } from "./mcp-types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -55,9 +56,11 @@ export class McpClientManager {
 
   /** The ToolRegistry where adapted tools are registered. */
   private toolRegistry: ToolRegistry;
+  private logger: Logger;
 
-  constructor(toolRegistry: ToolRegistry) {
+  constructor(toolRegistry: ToolRegistry, logger?: Logger) {
     this.toolRegistry = toolRegistry;
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   // ─── Connection Management ────────────────────────────────────────────────
@@ -125,8 +128,9 @@ export class McpClientManager {
     for (const mcpTool of mcpToolDescriptors) {
       const adapted = this.adaptTool(serverName, mcpTool, client);
       if (this.toolRegistry.has(adapted.name)) {
-        console.warn(
-          `[MCP] Tool "${adapted.name}" is already registered. ` +
+        this.logger.warn(
+          "MCP",
+          `Tool "${adapted.name}" is already registered. ` +
           `Skipping MCP tool "${serverName}/${mcpTool.name}".`,
         );
         continue;
@@ -135,10 +139,10 @@ export class McpClientManager {
     }
 
     if (adaptedTools.length === 0) {
-      console.warn(`[MCP] Server "${serverName}" exposed no usable tools.`);
+      this.logger.warn("MCP", `Server "${serverName}" exposed no usable tools.`);
     } else {
       this.toolRegistry.registerMany(adaptedTools);
-      console.log(`[MCP] Registered ${adaptedTools.length} tool(s) from server "${serverName}".`);
+      this.logger.info("MCP", `Registered ${adaptedTools.length} tool(s) from server "${serverName}".`);
     }
 
     this.connections.set(serverName, { serverName, client, tools: adaptedTools });
@@ -160,7 +164,7 @@ export class McpClientManager {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           errors.push({ serverName: name, error: message });
-          console.error(`[MCP] Failed to connect to server "${name}": ${message}`);
+          this.logger.error("MCP", `Failed to connect to server "${name}": ${message}`);
         }
       }),
     );
@@ -184,15 +188,16 @@ export class McpClientManager {
     try {
       await conn.client.close();
     } catch (err) {
-      console.warn(
-        `[MCP] Error while closing connection to "${serverName}": ${
+      this.logger.warn(
+        "MCP",
+        `Error while closing connection to "${serverName}": ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
     }
 
     this.connections.delete(serverName);
-    console.log(`[MCP] Disconnected from server "${serverName}".`);
+    this.logger.info("MCP", `Disconnected from server "${serverName}".`);
   }
 
   /**

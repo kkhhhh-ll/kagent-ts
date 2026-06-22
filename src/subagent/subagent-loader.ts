@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseFrontmatter } from "../skills/file-skill-loader";
 import { SubAgentDefinition } from "./subagent-types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Loads sub-agent definitions from a directory of AGENT.md files.
@@ -29,14 +30,17 @@ import { SubAgentDefinition } from "./subagent-types";
 export class SubAgentLoader {
   private directory: string;
   private agentFileName: string;
+  private logger: Logger;
 
   /**
    * @param directory      Path to the sub-agents root directory.
    * @param agentFileName  The markdown filename to look for (default: "AGENT.md").
+   * @param logger         Logger instance (defaults to ConsoleLogger).
    */
-  constructor(directory: string, agentFileName?: string) {
+  constructor(directory: string, agentFileName?: string, logger?: Logger) {
     this.directory = path.resolve(directory);
     this.agentFileName = agentFileName ?? "AGENT.md";
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -86,8 +90,9 @@ export class SubAgentLoader {
     try {
       raw = fs.readFileSync(agentPath, "utf-8");
     } catch {
-      console.warn(
-        `[SubAgent] Skipping "${dirName}": no ${this.agentFileName} found.`,
+      this.logger.warn(
+        "SubAgent",
+        `Skipping "${dirName}": no ${this.agentFileName} found.`,
       );
       return null;
     }
@@ -96,8 +101,9 @@ export class SubAgentLoader {
 
     const name = frontmatter.name?.trim();
     if (!name) {
-      console.warn(
-        `[SubAgent] Skipping "${dirName}": no "name" in frontmatter.`,
+      this.logger.warn(
+        "SubAgent",
+        `Skipping "${dirName}": no "name" in frontmatter.`,
       );
       return null;
     }

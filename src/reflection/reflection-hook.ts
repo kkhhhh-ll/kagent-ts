@@ -3,6 +3,7 @@ import { MessageData } from "../messages/types";
 import { LLMProvider } from "../llm/interface";
 import { ReflectionAgent } from "./reflection-agent";
 import { ErrorNotebook } from "./error-notebook";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Configuration for the reflection hook.
@@ -19,6 +20,8 @@ export interface ReflectionHookConfig {
    * Use this to log, alert, or post-process.
    */
   onReflectionComplete?: (entryCount: number, score?: number) => void;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -47,6 +50,7 @@ export function createReflectionHook(
   config: ReflectionHookConfig,
 ): AgentHooks & { readonly notebook: ErrorNotebook } {
   const { llm, notebook, maxIterations } = config;
+  const logger = config.logger ?? new ConsoleLogger();
 
   // Accumulate state across hook calls
   let userQuery: string | null = null;
@@ -82,15 +86,16 @@ export function createReflectionHook(
         });
 
         if (entries.length > 0) {
-          console.log(
-            `[Reflection] Recorded ${entries.length} finding(s) to the error notebook.`,
+          logger.info(
+            "Reflection",
+            `Recorded ${entries.length} finding(s) to the error notebook.`,
           );
         }
 
         config.onReflectionComplete?.(entries.length);
       } catch (err) {
         // Reflection is best-effort — never crash the main agent.
-        console.warn("[Reflection] Reflection agent failed:", err);
+        logger.warn("Reflection", `Reflection agent failed: ${err}`);
       }
     },
   };

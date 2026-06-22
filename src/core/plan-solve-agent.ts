@@ -9,6 +9,7 @@ import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { SessionState, SessionStatus } from "../session/session-types";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 
 /**
  * Default system prompt for the Plan-and-Solve paradigm.
@@ -172,6 +173,13 @@ export class PlanSolveAgent extends Agent {
 
       const contextMessages = this.contextManager.getContextMessages();
 
+      // Token budget check — stop if the session budget is exhausted
+      const budgetError = this.checkTokenBudget(this.contextManager.getCurrentTokens());
+      if (budgetError) {
+        for (const h of this.hooks) h.onFinish?.(budgetError);
+        return budgetError;
+      }
+
       // Call the LLM — with network error handling
       for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
       let response: LLMResponse;
@@ -189,6 +197,11 @@ export class PlanSolveAgent extends Agent {
       }
       for (const h of this.hooks) h.onLLMEnd?.(response);
 
+      // Record token usage against the session budget
+      if (response.usage) {
+        this.tokenBudget?.recordUsage(response.usage.prompt_tokens, response.usage.completion_tokens);
+      }
+
       const parsed = parsePlanSolveResponse(response.content);
 
       // Create assistant message from the response
@@ -197,13 +210,13 @@ export class PlanSolveAgent extends Agent {
         response.tool_calls,
       );
 
-      this.contextManager.addMessage(assistantMessage.toDict());
-
       // ── Handle max_tokens truncation ──────────────────────────────
       const isTruncated = response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS;
       if (isTruncated) {
         consecutiveTruncations++;
         if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          // Bail out — too many consecutive truncations, return what we have.
+          // Don't add the truncated message to context; it's incomplete junk.
           const fallback = parsed.answer
             ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
@@ -212,13 +225,19 @@ export class PlanSolveAgent extends Agent {
           return fallback;
         }
 
-        const continueMsg = Message.assistant(
-          "[System] Your previous response was cut off (max output tokens reached). " +
+        // Store the truncated message so the LLM has context for where it left off,
+        // then inject a continuation instruction.
+        this.contextManager.addMessage(assistantMessage.toDict());
+
+        const continueMsg = Message.user(
+          "Your previous response was cut off (max output tokens reached). " +
           "Continue exactly where you left off — do NOT repeat any content already written. " +
           "If you were calling tools, re-invoke them with complete arguments."
         );
         this.contextManager.addMessage(continueMsg.toDict());
       } else {
+        // Normal (non-truncated) response — store it and reset the counter.
+        this.contextManager.addMessage(assistantMessage.toDict());
         consecutiveTruncations = 0;
       }
 
@@ -227,20 +246,25 @@ export class PlanSolveAgent extends Agent {
         consecutiveEmptyIterations = 0;
 
         if (parsed.thought) {
-          console.log(`[Thought] ${parsed.thought}`);
+          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
 
         // If the LLM response shows non-truncation quality issues, warn
         // before executing tool calls. (max_tokens truncation is handled above.)
-        if (response.responseError && response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS) {
-          const prefix = `[System] LLM response quality issue: ${response.responseError.message}`;
-          const warnMsg = Message.assistant(prefix);
+        if (response.responseError &&
+            response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS &&
+            response.responseError.code !== LLMResponseErrorCode.OK) {
+          const warnMsg = Message.system(
+            `LLM response quality issue: ${response.responseError.message}`
+          );
           this.contextManager.addMessage(warnMsg.toDict());
         }
 
         // Track whether ANY tool in this round failed
         let roundHadFailure = false;
+
+        const mcpWarnedServers = new Set<string>();
 
         for (const toolCall of response.tool_calls) {
           let args: Record<string, unknown>;
@@ -292,13 +316,53 @@ export class PlanSolveAgent extends Agent {
           );
 
           this.contextManager.addMessage(toolMessage.toDict());
+
+          // ── Post-execution handling for special tool types ────
+          const toolName = toolCall.function.name;
+
+          // Sub-agent spawned — purely informational; results arrive
+          // asynchronously and will be injected via pollSubAgentResults().
+          if (result.success && toolName === "spawn_subagent") {
+            this.logger.info(
+              "SubAgent",
+              `Spawned "${args.name ?? "unknown"}" — ` +
+              `result will arrive in a later iteration.`
+            );
+          }
+
+          // MCP tool failure — warn about potential connection loss so
+          // the LLM can stop calling tools from the same server.
+          // Only warn once per server per batch to avoid duplicate messages.
+          if (!result.success && !BUILTIN_TOOL_NAMES.has(toolName)) {
+            const serverName = toolName.split("_")[0] ?? "unknown";
+            if (!mcpWarnedServers.has(serverName)) {
+              const isConnErr =
+                result.content.includes("connection") ||
+                result.content.includes("not connected") ||
+                result.content.includes("ECONNREFUSED") ||
+                result.content.includes("ENOTFOUND");
+              if (isConnErr) {
+                mcpWarnedServers.add(serverName);
+                this.logger.info(
+                  "MCP",
+                  `Connection lost to server "${serverName}" — ` +
+                  `further calls to this server may fail.`
+                );
+                const mcpWarn = Message.system(
+                  `MCP server "${serverName}" appears to be disconnected: ${result.content.slice(0, 200)}`
+                );
+                this.contextManager.addMessage(mcpWarn.toDict());
+              }
+            }
+          }
         }
 
         // Update consecutive failure count and step progress
         if (roundHadFailure) {
           this.consecutiveFailures++;
-          console.log(
-            `[Replan] Consecutive failures: ${this.consecutiveFailures}` +
+          this.logger.info(
+            "Replan",
+            `Consecutive failures: ${this.consecutiveFailures}` +
               (this.replanThreshold > 0 &&
               this.consecutiveFailures >= this.replanThreshold
                 ? ` — threshold reached (${this.replanThreshold}), will prompt replan`
@@ -322,8 +386,9 @@ export class PlanSolveAgent extends Agent {
           }
 
           if (this.hasPlan) {
-            console.log(
-              `[Progress] Step ${this.completedSteps}/${this.currentPlan.length} completed`,
+            this.logger.info(
+              "Progress",
+              `Step ${this.completedSteps}/${this.currentPlan.length} completed`,
             );
           }
         }
@@ -344,17 +409,25 @@ export class PlanSolveAgent extends Agent {
         if (isTruncated) {
           consecutiveEmptyIterations = 0;
           if (parsed.thought) {
-            console.log(`[Thought] ${parsed.thought}`);
+            this.logger.info("Thought", parsed.thought);
             for (const h of this.hooks) h.onThought?.(parsed.thought);
           }
-          console.log("[Plan-Solve] Answer truncated (max_tokens) — continuing in next iteration.");
+          // If this is the last iteration we can't continue — return
+          // what we have instead of the generic "max iterations" message.
+          if (iteration === this.maxIterations - 1) {
+            const fallback = parsed.answer +
+              "\n\n[Note: Response may be incomplete due to output length constraints.]";
+            for (const h of this.hooks) h.onFinish?.(fallback);
+            return fallback;
+          }
+          this.logger.info("Plan-Solve", "Answer truncated (max_tokens) — continuing in next iteration.");
           continue;
         }
         if (parsed.thought) {
-          console.log(`[Thought] ${parsed.thought}`);
+          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
-        console.log(`[Plan-Solve] Task complete — returning final answer.`);
+        this.logger.info("Plan-Solve", "Task complete — returning final answer.");
         // Save final checkpoint as completed
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
@@ -373,13 +446,13 @@ export class PlanSolveAgent extends Agent {
         consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
         this.hasPlan = true;
-        console.log(`[Plan] Created ${this.currentPlan.length}-step plan:`);
+        this.logger.info("Plan", `Created ${this.currentPlan.length}-step plan:`);
         for (let i = 0; i < this.currentPlan.length; i++) {
-          console.log(`  ${i + 1}. ${this.currentPlan[i]}`);
+          this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
         for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
         if (parsed.thought) {
-          console.log(`[Thought] ${parsed.thought}`);
+          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         continue;
@@ -395,15 +468,16 @@ export class PlanSolveAgent extends Agent {
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0; // Remaining steps are now new
         this.consecutiveFailures = 0; // New plan, fresh failure counter
-        console.log(
-          `[Plan] Revised — ${this.currentPlan.length} steps remaining:`,
+        this.logger.info(
+          "Plan",
+          `Revised — ${this.currentPlan.length} steps remaining:`,
         );
         for (let i = 0; i < this.currentPlan.length; i++) {
-          console.log(`  ${i + 1}. ${this.currentPlan[i]}`);
+          this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
         for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
         if (parsed.thought) {
-          console.log(`[Thought] ${parsed.thought}`);
+          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         continue;
@@ -412,7 +486,7 @@ export class PlanSolveAgent extends Agent {
       // ── Default: log thought and continue loop ──────────────────
       if (parsed.thought) {
         consecutiveEmptyIterations++;
-        console.log(`[Thought] ${parsed.thought}`);
+        this.logger.info("Thought", parsed.thought);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
 
         // If stuck in thought-only loop, bail out

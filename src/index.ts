@@ -57,6 +57,7 @@ export type {
 // Built-in file tools
 export {
   BUILTIN_TOOLS,
+  BUILTIN_TOOL_NAMES,
   registerAllBuiltinTools,
   ReadFileTool,
   WriteFileTool,
@@ -87,6 +88,8 @@ export type { MessageData, ToolCall } from "./messages/types";
 // LLM — shared types
 export type { LLMProvider, LLMResponse } from "./llm/interface";
 export { LLMResponseErrorCode } from "./llm/interface";
+export { TokenBudget } from "./llm/token-budget";
+export type { TokenBudgetConfig, TokenBudgetStatus } from "./llm/token-budget";
 export { LLMNetworkError } from "./llm/errors";
 export type { NetworkErrorCause, RetryConfig } from "./llm/errors";
 
@@ -151,6 +154,9 @@ export type {
 
 // Project rules — user-authored, injected into system prompt
 export { ProjectRules } from "./rules/project-rules";
+
+// Logging — structured logger interface
+export { Logger, ConsoleLogger, SilentLogger } from "./logging/index";
 
 // Memory — long-term facts, rules, and project context
 export { MemoryManager } from "./memory/index";

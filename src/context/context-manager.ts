@@ -3,6 +3,7 @@ import { ContextConfig, ContextState } from "./types";
 import { countTokens } from "../utils/token-counter";
 import { ProgressiveCompressor } from "../compression/progressive-compressor";
 import { LLMProvider } from "../llm/interface";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * ContextManager maintains the message window that will be sent to the LLM.
@@ -19,8 +20,9 @@ export class ContextManager {
   private systemMessage: MessageData | null = null;
   private _isCompressed = false;
   private compressor: ProgressiveCompressor;
+  private logger: Logger;
 
-  constructor(config?: Partial<ContextConfig>) {
+  constructor(config?: Partial<ContextConfig>, logger?: Logger) {
     this.config = {
       maxTokens: config?.maxTokens ?? 128000,
       compressionThreshold: config?.compressionThreshold ?? 20000,
@@ -37,7 +39,8 @@ export class ContextManager {
       );
     }
 
-    this.compressor = new ProgressiveCompressor(this.config);
+    this.logger = logger ?? new ConsoleLogger();
+    this.compressor = new ProgressiveCompressor(this.config, this.logger);
   }
 
   /**
@@ -126,16 +129,18 @@ export class ContextManager {
     if (!this.shouldCompress(model)) return false;
 
     const beforeTokens = this.getCurrentTokens(model);
-    console.log(
-      `[Context] Compression triggered: ${beforeTokens} tokens, ` +
+    this.logger.info(
+      "Context",
+      `Compression triggered: ${beforeTokens} tokens, ` +
       `threshold at ${this.triggerTokens()}.`,
     );
 
     const { removedCount } = await this.compress(llm);
 
     const afterTokens = this.getCurrentTokens(model);
-    console.log(
-      `[Context] Compression done: ${beforeTokens} → ${afterTokens} tokens ` +
+    this.logger.info(
+      "Context",
+      `Compression done: ${beforeTokens} → ${afterTokens} tokens ` +
       `(${removedCount > 0 ? `removed ~${removedCount} messages` : "no messages removed"}).`,
     );
 

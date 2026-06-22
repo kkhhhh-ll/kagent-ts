@@ -9,6 +9,7 @@ import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -128,6 +129,13 @@ export class ReActAgent extends Agent {
       // Prepare messages for the LLM
       const contextMessages = this.contextManager.getContextMessages();
 
+      // Token budget check — stop if the session budget is exhausted
+      const budgetError = this.checkTokenBudget(this.contextManager.getCurrentTokens());
+      if (budgetError) {
+        for (const h of this.hooks) h.onFinish?.(budgetError);
+        return budgetError;
+      }
+
       // Call the LLM with all registered tools — with network error handling
       for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
       let response: LLMResponse;
@@ -145,6 +153,11 @@ export class ReActAgent extends Agent {
       }
       for (const h of this.hooks) h.onLLMEnd?.(response);
 
+      // Record token usage against the session budget
+      if (response.usage) {
+        this.tokenBudget?.recordUsage(response.usage.prompt_tokens, response.usage.completion_tokens);
+      }
+
       // Parse the response content as structured JSON
       const parsed = parseReActResponse(response.content);
       const rawContent = response.content;
@@ -155,15 +168,13 @@ export class ReActAgent extends Agent {
         response.tool_calls,
       );
 
-      // Store in context
-      this.contextManager.addMessage(assistantMessage.toDict());
-
       // ── Handle max_tokens truncation ───────────────────────────────
       const isTruncated = response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS;
       if (isTruncated) {
         consecutiveTruncations++;
         if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
-          // Bail out — too many consecutive truncations, return what we have
+          // Bail out — too many consecutive truncations, return what we have.
+          // Don't add the truncated message to context; it's incomplete junk.
           const fallback = ("answer" in parsed && parsed.answer)
             ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
@@ -172,14 +183,19 @@ export class ReActAgent extends Agent {
           return fallback;
         }
 
-        // Inject continuation instruction so the LLM picks up where it left off
-        const continueMsg = Message.assistant(
-          "[System] Your previous response was cut off (max output tokens reached). " +
+        // Store the truncated message so the LLM has context for where it left off,
+        // then inject a continuation instruction.
+        this.contextManager.addMessage(assistantMessage.toDict());
+
+        const continueMsg = Message.user(
+          "Your previous response was cut off (max output tokens reached). " +
           "Continue exactly where you left off — do NOT repeat any content already written. " +
           "If you were calling tools, re-invoke them with complete arguments."
         );
         this.contextManager.addMessage(continueMsg.toDict());
       } else {
+        // Normal (non-truncated) response — store it and reset the counter.
+        this.contextManager.addMessage(assistantMessage.toDict());
         consecutiveTruncations = 0;
       }
 
@@ -189,17 +205,22 @@ export class ReActAgent extends Agent {
 
         // Log the reasoning thought
         if (parsed.thought) {
-          console.log(`[Thought] ${parsed.thought}`);
+          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
 
         // If the LLM response shows non-truncation quality issues, warn
         // before executing tool calls. (max_tokens truncation is handled above.)
-        if (response.responseError && response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS) {
-          const prefix = `[System] LLM response quality issue: ${response.responseError.message}`;
-          const warnMsg = Message.assistant(prefix);
+        if (response.responseError &&
+            response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS &&
+            response.responseError.code !== LLMResponseErrorCode.OK) {
+          const warnMsg = Message.system(
+            `LLM response quality issue: ${response.responseError.message}`
+          );
           this.contextManager.addMessage(warnMsg.toDict());
         }
+
+        const mcpWarnedServers = new Set<string>();
 
         for (const toolCall of response.tool_calls) {
           let args: Record<string, unknown>;
@@ -249,6 +270,45 @@ export class ReActAgent extends Agent {
           );
 
           this.contextManager.addMessage(toolMessage.toDict());
+
+          // ── Post-execution handling for special tool types ────
+          const toolName = toolCall.function.name;
+
+          // Sub-agent spawned — purely informational; results arrive
+          // asynchronously and will be injected via pollSubAgentResults().
+          if (result.success && toolName === "spawn_subagent") {
+            this.logger.info(
+              "SubAgent",
+              `Spawned "${args.name ?? "unknown"}" — ` +
+              `result will arrive in a later iteration.`
+            );
+          }
+
+          // MCP tool failure — warn about potential connection loss so
+          // the LLM can stop calling tools from the same server.
+          // Only warn once per server per batch to avoid duplicate messages.
+          if (!result.success && !BUILTIN_TOOL_NAMES.has(toolName)) {
+            const serverName = toolName.split("_")[0] ?? "unknown";
+            if (!mcpWarnedServers.has(serverName)) {
+              const isConnErr =
+                result.content.includes("connection") ||
+                result.content.includes("not connected") ||
+                result.content.includes("ECONNREFUSED") ||
+                result.content.includes("ENOTFOUND");
+              if (isConnErr) {
+                mcpWarnedServers.add(serverName);
+                this.logger.info(
+                  "MCP",
+                  `Connection lost to server "${serverName}" — ` +
+                  `further calls to this server may fail.`
+                );
+                const mcpWarn = Message.system(
+                  `MCP server "${serverName}" appears to be disconnected: ${result.content.slice(0, 200)}`
+                );
+                this.contextManager.addMessage(mcpWarn.toDict());
+              }
+            }
+          }
         }
 
         // Save checkpoint after complete tool execution round
@@ -267,10 +327,18 @@ export class ReActAgent extends Agent {
         if (isTruncated) {
           consecutiveEmptyIterations = 0;
           if (parsed.thought) {
-            console.log(`[Thought] ${parsed.thought}`);
+            this.logger.info("Thought", parsed.thought);
             for (const h of this.hooks) h.onThought?.(parsed.thought);
           }
-          console.log("[ReAct] Answer truncated (max_tokens) — continuing in next iteration.");
+          // If this is the last iteration we can't continue — return
+          // what we have instead of the generic "max iterations" message.
+          if (iteration === this.maxIterations - 1) {
+            const fallback = parsed.answer +
+              "\n\n[Note: Response may be incomplete due to output length constraints.]";
+            for (const h of this.hooks) h.onFinish?.(fallback);
+            return fallback;
+          }
+          this.logger.info("ReAct", "Answer truncated (max_tokens) — continuing in next iteration.");
           continue;
         }
         for (const h of this.hooks) h.onFinish?.(parsed.answer);
@@ -286,13 +354,14 @@ export class ReActAgent extends Agent {
       if (parsed.thought) {
         consecutiveEmptyIterations++;
 
-        console.log(`[Thought] ${parsed.thought}`);
+        this.logger.info("Thought", parsed.thought);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
 
         // If stuck in unproductive thought-only loop, inject format reminder
         if (consecutiveEmptyIterations >= 3) {
-          console.log(
-            `[ReAct] ${consecutiveEmptyIterations} consecutive thought-only iterations — ` +
+          this.logger.info(
+            "ReAct",
+            `${consecutiveEmptyIterations} consecutive thought-only iterations — ` +
             `injecting format reminder.`,
           );
           const reminderMsg = Message.assistant(STRUCTURED_OUTPUT_REMINDER);

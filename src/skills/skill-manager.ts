@@ -1,5 +1,6 @@
 import { Skill, SkillStatus } from "./types";
 import { FileSkillLoader } from "./file-skill-loader";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Manages skill registration, activation, and progressive disclosure.
@@ -16,6 +17,12 @@ import { FileSkillLoader } from "./file-skill-loader";
  * 4. `buildSkillsPrompt()` includes the active skill's full system prompt
  */
 export class SkillManager {
+  private logger: Logger;
+
+  constructor(logger?: Logger) {
+    this.logger = logger ?? new ConsoleLogger();
+  }
+
   /** All registered skills (active or not), keyed by name. */
   private registry: Map<string, Skill> = new Map();
 
@@ -66,14 +73,15 @@ export class SkillManager {
    * @returns Number of skills successfully registered.
    */
   registerFromDirectory(dir: string): number {
-    const loader = new FileSkillLoader(dir);
+    const loader = new FileSkillLoader(dir, this.logger);
     const scanned = loader.scan();
     let count = 0;
 
     for (const skill of scanned) {
       if (this.registry.has(skill.name)) {
-        console.warn(
-          `[Skills] Skipping "${skill.name}": already registered (duplicate name).`,
+        this.logger.warn(
+          "Skills",
+          `Skipping "${skill.name}": already registered (duplicate name).`,
         );
         continue;
       }
@@ -83,8 +91,9 @@ export class SkillManager {
     }
 
     if (count > 0) {
-      console.log(
-        `[Skills] Registered ${count} file-based skill(s) from ${dir}` +
+      this.logger.info(
+        "Skills",
+        `Registered ${count} file-based skill(s) from ${dir}` +
           (scanned.length !== count
             ? ` (${scanned.length - count} skipped)`
             : ""),
@@ -112,7 +121,7 @@ export class SkillManager {
       if (!before.has(name)) added.push(name);
     }
     if (added.length > 0) {
-      console.log(`[Skills] Picked up ${added.length} new skill(s): ${added.join(", ")}`);
+      this.logger.info("Skills", `Picked up ${added.length} new skill(s): ${added.join(", ")}`);
     }
     return added;
   }

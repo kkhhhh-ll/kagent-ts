@@ -3,6 +3,7 @@ import * as path from "path";
 import { MessageData, Role } from "../messages/types";
 import { countTokens } from "../utils/token-counter";
 import { LLMProvider } from "../llm/interface";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -34,9 +35,11 @@ interface CompressionConfig {
  */
 export class ProgressiveCompressor {
   private config: CompressionConfig;
+  private logger: Logger;
 
-  constructor(config: CompressionConfig) {
+  constructor(config: CompressionConfig, logger?: Logger) {
     this.config = config;
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -91,8 +94,9 @@ export class ProgressiveCompressor {
         const after4 = await this.step4LlmSummarize(result, systemMessage, llm, turnStartsForStep4);
         if (after4 !== result) { applied = true; result = after4; }
       } catch (err: unknown) {
-        console.warn(
-          `[Compression] Step 4 (LLM summarization) failed: ` +
+        this.logger.warn(
+          "Compression",
+          `Step 4 (LLM summarization) failed: ` +
           `${err instanceof Error ? err.message : String(err)}. ` +
           `Falling back to truncation.`,
         );
@@ -287,7 +291,7 @@ export class ProgressiveCompressor {
       return [summary, hint];
     } catch {
       // If summarization fails, fall back to simple truncation with a marker
-      console.warn("[Compression] Step 4 LLM call failed; falling back to simple truncation.");
+      this.logger.warn("Compression", "Step 4 LLM call failed; falling back to simple truncation.");
       const marker: MessageData = {
         role: Role.User,
         content:

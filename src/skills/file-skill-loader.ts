@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { Skill } from "./types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Frontmatter Parsing ───────────────────────────────────────────────────
 
@@ -89,12 +90,15 @@ function validateSkillName(name: string): void {
  */
 export class FileSkillLoader {
   private directory: string;
+  private logger: Logger;
 
   /**
    * @param directory Path to the skills root directory (default: `./skills`).
+   * @param logger    Logger instance (defaults to ConsoleLogger).
    */
-  constructor(directory?: string) {
+  constructor(directory?: string, logger?: Logger) {
     this.directory = path.resolve(directory || "./skills");
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -146,8 +150,9 @@ export class FileSkillLoader {
       try {
         raw = fs.readFileSync(skillMdPath, "utf-8");
       } catch {
-        console.warn(
-          `[Skills] Skipping "${entry.name}": no SKILL.md found in ${skillPath}`,
+        this.logger.warn(
+          "Skills",
+          `Skipping "${entry.name}": no SKILL.md found in ${skillPath}`,
         );
         continue;
       }
@@ -156,8 +161,9 @@ export class FileSkillLoader {
 
       const name = frontmatter.name?.trim();
       if (!name) {
-        console.warn(
-          `[Skills] Skipping "${entry.name}": SKILL.md has no "name" in frontmatter`,
+        this.logger.warn(
+          "Skills",
+          `Skipping "${entry.name}": SKILL.md has no "name" in frontmatter`,
         );
         continue;
       }
@@ -166,7 +172,7 @@ export class FileSkillLoader {
         validateSkillName(name);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[Skills] Skipping "${entry.name}": ${message}`);
+        this.logger.warn("Skills", `Skipping "${entry.name}": ${message}`);
         continue;
       }
 

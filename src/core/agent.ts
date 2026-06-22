@@ -25,6 +25,8 @@ import { createListErrorsTool } from "../tools/builtin/list-errors";
 import { createSkillTool } from "../tools/builtin/skill";
 import { createRememberTool } from "../tools/builtin/remember";
 import { createRecallTool } from "../tools/builtin/recall";
+import { Logger, ConsoleLogger } from "../logging/logger";
+import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 
 /**
  * Base configuration for any Agent.
@@ -112,6 +114,13 @@ export interface AgentConfig {
    * Accepts a single AgentHooks or an array of them.
    */
   hooks?: AgentHooks | AgentHooks[];
+
+  /**
+   * Logger instance for framework-internal messages.
+   * Defaults to {@link ConsoleLogger} (writes to `console` with `[Tag]` prefix).
+   * Pass a {@link SilentLogger} to suppress all framework output.
+   */
+  logger?: Logger;
 
   // ─── User Preferences ───────────────────────────────────────────────
 
@@ -208,6 +217,14 @@ export interface AgentConfig {
    * ```
    */
   subAgentsDir?: string;
+
+  /**
+   * Token budget configuration for session-level cost control.
+   * When set, the agent stops making LLM calls when cumulative token
+   * consumption exceeds `maxTotalTokens`. The budget resets on
+   * `clearConversation()` and `reset()`.
+   */
+  tokenBudgetConfig?: TokenBudgetConfig;
 }
 
 /**
@@ -248,6 +265,12 @@ export abstract class Agent {
   /** Lifecycle hooks for observing agent execution. */
   protected hooks: AgentHooks[] = [];
 
+  /** Logger for framework-internal messages. */
+  protected logger: Logger;
+
+  /** Token budget for session-level cost control (optional). */
+  protected tokenBudget?: TokenBudget;
+
   // ─── Session & Cancellation ─────────────────────────────────────────
 
   /** Session manager for checkpoint persistence (optional). */
@@ -284,7 +307,8 @@ export abstract class Agent {
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
-    this.contextManager = config.contextManager ?? new ContextManager();
+    this.logger = config.logger ?? new ConsoleLogger();
+    this.contextManager = config.contextManager ?? new ContextManager(undefined, this.logger);
 
     // Prefer toolRegistry; fall back to plain tools array
     if (config.toolRegistry) {
@@ -307,7 +331,7 @@ export abstract class Agent {
     if (config.skillManager) {
       this.skillManager = config.skillManager;
     } else {
-      this.skillManager = new SkillManager();
+      this.skillManager = new SkillManager(this.logger);
     }
 
     // Register file-based skills if a directory is configured
@@ -338,6 +362,11 @@ export abstract class Agent {
     this.mcpServerConfigs = config.mcpServers;
     this.subAgentsDir = config.subAgentsDir;
     this.skillsDir = config.skillsDir;
+
+    // Token budget — session-level cost control
+    if (config.tokenBudgetConfig) {
+      this.tokenBudget = new TokenBudget(config.tokenBudgetConfig);
+    }
 
     // ── Hooks ──────────────────────────────────────────────────────────────
     const rawHooks = config.hooks ?? [];
@@ -514,8 +543,9 @@ export abstract class Agent {
 
     const errors = await this.mcpClientManager.connectAll(newServers);
     if (errors.length > 0) {
-      console.warn(
-        `[MCP] ${errors.length} new server(s) failed to connect: ` +
+      this.logger.warn(
+        "MCP",
+        `${errors.length} new server(s) failed to connect: ` +
         errors.map((e) => e.serverName).join(", "),
       );
     }
@@ -583,6 +613,38 @@ export abstract class Agent {
         `The maximum safe input size is ~${maxSafeInput} tokens ` +
         `(context window: ${maxTokens} tokens, with 20% reserved for system overhead). ` +
         `Please split your request into smaller parts.`
+      );
+    }
+
+    return null;
+  }
+
+  /**
+   * Check whether the token budget allows another LLM call.
+   *
+   * @param estimatedInputTokens  Approximate tokens in the upcoming request
+   *                              (system prompt + context messages).
+   * @returns A user-facing error string if the budget is exhausted,
+   *          or `null` if the call can proceed.
+   */
+  protected checkTokenBudget(estimatedInputTokens: number): string | null {
+    if (!this.tokenBudget) return null;
+
+    const status = this.tokenBudget.checkBeforeCall(estimatedInputTokens);
+    if (status.isExhausted) {
+      return (
+        `Token budget exhausted: ${status.totalTokensUsed.toLocaleString()}/${status.maxTotalTokens.toLocaleString()} tokens used ` +
+        `across ${status.callCount} LLM calls. ` +
+        `Start a new conversation with agent.newTopic() or agent.clearConversation() to reset the budget.`
+      );
+    }
+
+    // One-shot warning at 80 %
+    if (this.tokenBudget.shouldWarn()) {
+      this.logger.warn(
+        "TokenBudget",
+        `Warning: ${Math.round(status.totalTokensUsed / status.maxTotalTokens * 100)}% of budget used ` +
+        `(${status.totalTokensUsed.toLocaleString()}/${status.maxTotalTokens.toLocaleString()} tokens).`,
       );
     }
 
@@ -715,8 +777,9 @@ export abstract class Agent {
 
     const sid = this.sessionManager?.getSessionId() ?? "unknown";
 
-    console.error(
-      `\n[Network Error] ${err.cause}: ${err.message}`,
+    this.logger.error(
+      "Network Error",
+      `${err.cause}: ${err.message}`,
     );
 
     if (this.checkpointingEnabled && this.sessionManager) {
@@ -794,6 +857,45 @@ export abstract class Agent {
    */
   clearConversation(): void {
     this.contextManager.clear();
+    this.tokenBudget?.reset();
+  }
+
+  /**
+   * Continue the current conversation with a follow-up input.
+   *
+   * Equivalent to `run()` but conveys the semantics of a multi-turn
+   * conversation continuation. Messages from previous calls are preserved
+   * in context, so the LLM sees the full conversation history.
+   *
+   * @param input The follow-up message from the user.
+   * @returns The agent's response.
+   */
+  async chat(input: string): Promise<string> {
+    return this.run(input);
+  }
+
+  /**
+   * Start a new topic with a fresh conversation.
+   *
+   * Clears the message history (preserving the system prompt and
+   * configuration) and runs the input as the first message of a
+   * new conversation. The token budget is also reset.
+   *
+   * @param input The first message of the new topic.
+   * @returns The agent's response.
+   */
+  async newTopic(input: string): Promise<string> {
+    this.clearConversation();
+    return this.run(input);
+  }
+
+  /**
+   * The number of messages in the current conversation (excluding the
+   * system message). Use this to check whether there is an active
+   * conversation or to monitor context growth.
+   */
+  get conversationLength(): number {
+    return this.contextManager.getMessages().length;
   }
 
   /**
@@ -806,6 +908,7 @@ export abstract class Agent {
     this.contextManager.clear();
     this.coreSystemPrompt = "";
     this.preferences = {};
+    this.tokenBudget?.reset();
     this.subAgentManager?.cancelAll();
     if (this.sessionManager) {
       this.sessionManager.deleteSession(this.sessionManager.getSessionId());
@@ -844,12 +947,13 @@ export abstract class Agent {
 
     // ── MCP connections ──────────────────────────────────────────────
     if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {
-      this.mcpClientManager = new McpClientManager(this.toolRegistry);
+      this.mcpClientManager = new McpClientManager(this.toolRegistry, this.logger);
       const errors = await this.mcpClientManager.connectAll(this.mcpServerConfigs);
 
       if (errors.length > 0) {
-        console.warn(
-          `[MCP] ${errors.length} of ${Object.keys(this.mcpServerConfigs).length} server(s) failed to connect.`,
+        this.logger.warn(
+          "MCP",
+          `${errors.length} of ${Object.keys(this.mcpServerConfigs).length} server(s) failed to connect.`,
         );
       }
     }
@@ -857,6 +961,7 @@ export abstract class Agent {
     // ── Sub-agent registry ───────────────────────────────────────────
     if (this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
+      this.subAgentManager.setLogger(this.logger);
       this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir);
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 
