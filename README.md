@@ -128,8 +128,6 @@ src/
 └── index.ts               # 公共 API 导出
 ```
 
-```
-
 ## Agent 循环范式
 
 ### ReActAgent
