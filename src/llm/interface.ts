@@ -1,5 +1,7 @@
 import { Tool } from "../tools/types";
-import { MessageData } from "../messages/types";
+import { MessageData, ToolCall } from "../messages/types";
+
+export type { ToolCall };
 
 // ─── LLM Response Error Codes ────────────────────────────────────────────────
 
@@ -42,14 +44,7 @@ export enum LLMResponseErrorCode {
  */
 export interface LLMResponse {
   content: string;
-  tool_calls?: Array<{
-    id: string;
-    type: "function";
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
+  tool_calls?: ToolCall[];
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;

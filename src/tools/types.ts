@@ -89,6 +89,18 @@ export interface Tool {
    * Defaults to `false` (tools execute immediately).
    */
   requireApproval?: boolean;
+  /**
+   * Whether this tool must be executed serially (not in parallel with
+   * other tools from the same LLM response). Set to `true` for tools
+   * with side effects that could conflict with concurrent operations
+   * (e.g., file writes that a subsequent tool reads).
+   *
+   * When any tool in a batch is marked `sequential`, the entire batch
+   * falls back to serial execution.
+   *
+   * Defaults to `false` (safe to execute in parallel).
+   */
+  sequential?: boolean;
 }
 
 /**

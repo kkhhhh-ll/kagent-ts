@@ -17,6 +17,10 @@ import type { ToolErrorCode } from "../tools/types";
 export interface ToolCallRecord {
   /** The tool being called. */
   toolName: string;
+  /** The unique ID assigned by the LLM to this tool call
+   *  (from `response.tool_calls[].id`). Enables exact matching
+   *  when the same tool is called multiple times in one batch. */
+  toolCallId?: string;
   /** Arguments passed to the tool. */
   args: Record<string, unknown>;
   /** ISO-8601 timestamp when execution started. */

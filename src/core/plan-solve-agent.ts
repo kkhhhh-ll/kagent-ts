@@ -7,9 +7,7 @@ import {
 import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
-import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { SessionState, SessionStatus } from "../session/session-types";
-import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 
 /**
  * Default system prompt for the Plan-and-Solve paradigm.
@@ -268,119 +266,11 @@ export class PlanSolveAgent extends Agent {
           this.contextManager.addMessage(warnMsg.toDict());
         }
 
-        // Track whether ANY tool in this round failed
-        let roundHadFailure = false;
-
         const mcpWarnedServers = new Set<string>();
-
-        for (const toolCall of response.tool_calls) {
-          let args: Record<string, unknown>;
-          try {
-            args = JSON.parse(toolCall.function.arguments);
-          } catch {
-            // Arguments are malformed or truncated — don't execute.
-            const result: ToolResult = toolError(
-              ToolErrorCode.ARGUMENTS_PARSE_ERROR,
-              `[RETRYABLE:ARGUMENTS_PARSE_ERROR] Failed to parse arguments for tool "${toolCall.function.name}". ` +
-              `The raw arguments were: ${toolCall.function.arguments || "(empty)"}\n\n` +
-              `${response.responseError?.code === LLMResponseErrorCode.MAX_TOKENS ? "The LLM response was truncated (max_tokens). Please reduce context or split the work across smaller steps. " : ""}` +
-              `Please re-invoke the tool with correctly formatted JSON arguments.`,
-              "retryable",
-            );
-
-            roundHadFailure = true;
-            // Tool never executed — args were unparseable
-            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
-
-            const toolMessage = Message.tool(
-              result.content,
-              toolCall.id,
-              toolCall.function.name,
-            );
-            this.contextManager.addMessage(toolMessage.toDict());
-            continue;
-          }
-
-          for (const h of this.hooks) h.onToolStart?.(toolCall.function.name, args);
-
-          // ── Human-in-the-loop approval check ─────────────────────────
-          const tool = this.toolRegistry.getTool(toolCall.function.name);
-          if (tool?.requireApproval) {
-            const approved = await this.checkToolApproval(toolCall.function.name, args);
-            if (!approved) {
-              const result: ToolResult = toolError(
-                ToolErrorCode.APPROVAL_DENIED,
-                `[FATAL:APPROVAL_DENIED] Tool "${toolCall.function.name}" requires approval and was denied. ` +
-                `Do NOT retry this tool. Find a different approach.`,
-                "fatal",
-              );
-              for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
-              const toolMessage = Message.tool(result.content, toolCall.id, toolCall.function.name);
-              this.contextManager.addMessage(toolMessage.toDict());
-              continue;
-            }
-          }
-
-          // Execute via ToolRegistry — never throws.
-          const result: ToolResult = await this.toolRegistry.execute(
-            toolCall.function.name,
-            args,
-          );
-
-          if (!result.success) {
-            roundHadFailure = true;
-            for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
-          } else {
-            for (const h of this.hooks) h.onToolEnd?.(toolCall.function.name, result.content);
-          }
-
-          const toolMessage = Message.tool(
-            result.content,
-            toolCall.id,
-            toolCall.function.name,
-          );
-
-          this.contextManager.addMessage(toolMessage.toDict());
-
-          // ── Post-execution handling for special tool types ────
-          const toolName = toolCall.function.name;
-
-          // Sub-agent spawned — purely informational; results arrive
-          // asynchronously and will be injected via pollSubAgentResults().
-          if (result.success && toolName === "spawn_subagent") {
-            this.logger.info(
-              "SubAgent",
-              `Spawned "${args.name ?? "unknown"}" — ` +
-              `result will arrive in a later iteration.`
-            );
-          }
-
-          // MCP tool failure — warn about potential connection loss so
-          // the LLM can stop calling tools from the same server.
-          // Only warn once per server per batch to avoid duplicate messages.
-          if (!result.success && !BUILTIN_TOOL_NAMES.has(toolName)) {
-            const serverName = toolName.split("_")[0] ?? "unknown";
-            if (!mcpWarnedServers.has(serverName)) {
-              const isConnErr =
-                result.content.includes("connection") ||
-                result.content.includes("not connected") ||
-                result.content.includes("ECONNREFUSED") ||
-                result.content.includes("ENOTFOUND");
-              if (isConnErr) {
-                mcpWarnedServers.add(serverName);
-                this.logger.info(
-                  "MCP",
-                  `Connection lost to server "${serverName}" — ` +
-                  `further calls to this server may fail.`
-                );
-                const mcpWarn = Message.system(
-                  `MCP server "${serverName}" appears to be disconnected: ${result.content.slice(0, 200)}`
-                );
-                this.contextManager.addMessage(mcpWarn.toDict());
-              }
-            }
-          }
-        }
+        const { hadFailure: roundHadFailure } = await this.executeToolCallsBatch(
+          response.tool_calls,
+          mcpWarnedServers,
+        );
 
         // Update consecutive failure count and step progress
         if (roundHadFailure) {

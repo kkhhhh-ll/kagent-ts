@@ -30,14 +30,26 @@ export interface AgentHooks {
 
   // ─── Tool Lifecycle ──────────────────────────────────────────────────
 
-  /** Called before a tool begins execution. */
-  onToolStart?: (toolName: string, args: Record<string, unknown>) => void;
+  /**
+   * Called before a tool begins execution.
+   * @param toolCallId The unique ID assigned by the LLM to this tool call
+   *                   (from `response.tool_calls[].id`). Used for exact
+   *                   matching when the same tool is called multiple times
+   *                   in one batch.
+   */
+  onToolStart?: (toolName: string, args: Record<string, unknown>, toolCallId?: string) => void;
 
-  /** Called after a tool returns successfully. */
-  onToolEnd?: (toolName: string, result: string) => void;
+  /**
+   * Called after a tool returns successfully.
+   * @param toolCallId Matches the ID passed to `onToolStart`.
+   */
+  onToolEnd?: (toolName: string, result: string, toolCallId?: string) => void;
 
-  /** Called when a tool throws or returns an error string. */
-  onToolError?: (toolName: string, error: string) => void;
+  /**
+   * Called when a tool throws or returns an error string.
+   * @param toolCallId Matches the ID passed to `onToolStart`.
+   */
+  onToolError?: (toolName: string, error: string, toolCallId?: string) => void;
 
   // ─── Reasoning ───────────────────────────────────────────────────────
 

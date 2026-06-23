@@ -41,10 +41,11 @@ export class ToolCallEvaluator implements AgentHooks {
 
   onLLMError?: ((error: LLMNetworkError) => void) | undefined = undefined;
 
-  onToolStart(toolName: string, args: Record<string, unknown>): void {
+  onToolStart(toolName: string, args: Record<string, unknown>, toolCallId?: string): void {
     const attempt = this.attemptCounters.get(toolName) ?? 0;
 
     this.records.push({
+      toolCallId,
       toolName,
       args,
       startTime: new Date().toISOString(),
@@ -53,10 +54,10 @@ export class ToolCallEvaluator implements AgentHooks {
     });
   }
 
-  onToolEnd(toolName: string, result: string): void {
+  onToolEnd(toolName: string, result: string, toolCallId?: string): void {
     this.attemptCounters.set(toolName, 0); // reset on success
 
-    const record = this.findLatestRecord(toolName);
+    const record = this.findRecord(toolName, toolCallId);
     if (!record) return;
 
     record.endTime = new Date().toISOString();
@@ -68,11 +69,11 @@ export class ToolCallEvaluator implements AgentHooks {
     record.resultLength = result.length;
   }
 
-  onToolError(toolName: string, error: string): void {
+  onToolError(toolName: string, error: string, toolCallId?: string): void {
     const attempt = (this.attemptCounters.get(toolName) ?? 0) + 1;
     this.attemptCounters.set(toolName, attempt);
 
-    const record = this.findLatestRecord(toolName);
+    const record = this.findRecord(toolName, toolCallId);
     if (!record) return;
 
     record.endTime = new Date().toISOString();
@@ -202,7 +203,30 @@ export class ToolCallEvaluator implements AgentHooks {
 
   // ─── Private Helpers ───────────────────────────────────────────────────
 
-  private findLatestRecord(toolName: string): ToolCallRecord | undefined {
+  /**
+   * Find the matching uncompleted record for a tool call.
+   *
+   * When `toolCallId` is provided, performs an exact match (preferred:
+   * handles parallel calls to the same tool correctly). Falls back to
+   * reverse-scan by tool name when the ID is not available (legacy
+   * hooks that don't pass `toolCallId`).
+   */
+  private findRecord(
+    toolName: string,
+    toolCallId?: string,
+  ): ToolCallRecord | undefined {
+    // Exact ID match — correct even when the same tool is called
+    // multiple times within one LLM response batch.
+    if (toolCallId) {
+      for (let i = this.records.length - 1; i >= 0; i--) {
+        if (this.records[i].toolCallId === toolCallId && !this.records[i].endTime) {
+          return this.records[i];
+        }
+      }
+      return undefined;
+    }
+
+    // Legacy fallback — reverse scan by tool name only.
     for (let i = this.records.length - 1; i >= 0; i--) {
       if (this.records[i].toolName === toolName && !this.records[i].endTime) {
         return this.records[i];

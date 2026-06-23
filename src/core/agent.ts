@@ -1,4 +1,4 @@
-import { LLMProvider } from "../llm/interface";
+import { LLMProvider, ToolCall } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
@@ -7,6 +7,7 @@ import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
 import { ToolErrorTracker } from "../tools/error-tracker";
 import { ToolOutputTruncator } from "../tools/tool-output-truncator";
+import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { SkillManager } from "../skills/skill-manager";
 import { MemoryManager } from "../memory/memory-manager";
 import { ProjectRules } from "../rules/project-rules";
@@ -26,6 +27,7 @@ import { createListErrorsTool } from "../tools/builtin/list-errors";
 import { createSkillTool } from "../tools/builtin/skill";
 import { createRememberTool } from "../tools/builtin/remember";
 import { createRecallTool } from "../tools/builtin/recall";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 
@@ -269,6 +271,18 @@ export interface AgentConfig {
    * `clearConversation()` and `reset()`.
    */
   tokenBudgetConfig?: TokenBudgetConfig;
+
+  /**
+   * Enable parallel execution of tool calls within a single LLM response.
+   *
+   * When `true` (default), tool calls from the same LLM response that are
+   * all parallel-safe (no `sequential: true` marks) execute concurrently
+   * via `Promise.allSettled`. This reduces per-turn latency from
+   * `sum(latency)` to `max(latency)`.
+   *
+   * Set to `false` to always execute tools one at a time (legacy behaviour).
+   */
+  enableParallelToolExecution?: boolean;
 }
 
 /**
@@ -318,6 +332,9 @@ export abstract class Agent {
   /** Human-in-the-loop approval callback (from AgentConfig). */
   protected onToolApproval?: ApprovalCallback;
 
+  /** Whether to execute independent tool calls in parallel (default: true). */
+  protected enableParallelToolExecution: boolean;
+
   // ─── Session & Cancellation ─────────────────────────────────────────
 
   /** Session manager for checkpoint persistence (optional). */
@@ -359,6 +376,7 @@ export abstract class Agent {
     this.llm = config.llm;
     this.logger = config.logger ?? new ConsoleLogger();
     this.onToolApproval = config.onToolApproval;
+    this.enableParallelToolExecution = config.enableParallelToolExecution ?? true;
     this.contextManager = config.contextManager ?? new ContextManager(undefined, this.logger);
 
     // Prefer toolRegistry; fall back to plain tools array
@@ -699,6 +717,190 @@ export abstract class Agent {
       this.logger.warn("Approval", `Approval callback threw for "${toolName}" — denied.`);
       return false;
     }
+  }
+
+  /**
+   * Execute a batch of tool calls from a single LLM response.
+   *
+   * When `enableParallelToolExecution` is true and all tools in the batch are
+   * parallel-safe (`sequential` is not set), tools execute concurrently via
+   * `Promise.allSettled`. Otherwise, they execute one at a time (serial).
+   *
+   * Handles the full lifecycle for each tool call:
+   * 1. Parse JSON arguments (malformed args → error result, no execution)
+   * 2. HITL approval check for tools marked `requireApproval`
+   * 3. Hook notifications (`onToolStart`, `onToolEnd`, `onToolError`)
+   * 4. Execution via `ToolRegistry.execute()`
+   * 5. Context injection (all results added after execution completes)
+   * 6. Post-execution: sub-agent spawn tracking, MCP failure warnings
+   *
+   * @param toolCalls       The tool calls from the LLM response.
+   * @param mcpWarnedServers Set tracking which MCP servers have already
+   *                         been warned about in this batch.
+   * @returns Whether any tool in the batch failed.
+   */
+  protected async executeToolCallsBatch(
+    toolCalls: ToolCall[],
+    mcpWarnedServers: Set<string>,
+  ): Promise<{ hadFailure: boolean }> {
+    // Per-slot state: parsed args + eventual result
+    interface Slot {
+      toolCall: ToolCall;
+      args: Record<string, unknown>;
+      result?: ToolResult;
+    }
+
+    // ── Step 1: Parse all arguments up front ──────────────────────────
+    const slots: Slot[] = [];
+    for (const tc of toolCalls) {
+      try {
+        const args = JSON.parse(tc.function.arguments);
+        slots.push({ toolCall: tc, args });
+      } catch {
+        const result = toolError(
+          ToolErrorCode.ARGUMENTS_PARSE_ERROR,
+          `[RETRYABLE:ARGUMENTS_PARSE_ERROR] Failed to parse arguments for tool "${tc.function.name}". ` +
+            `The raw arguments were: ${tc.function.arguments || "(empty)"}\n\n` +
+            `Please re-invoke the tool with correctly formatted JSON arguments.`,
+          "retryable",
+        );
+        for (const h of this.hooks) h.onToolError?.(tc.function.name, result.content, tc.id);
+        slots.push({ toolCall: tc, args: {}, result });
+      }
+    }
+
+    // ── Step 2: HITL approval — check all requiring tools upfront ────
+    for (const slot of slots) {
+      if (slot.result) continue; // already failed at parse stage
+      const tool = this.toolRegistry.getTool(slot.toolCall.function.name);
+      if (tool?.requireApproval) {
+        const approved = await this.checkToolApproval(
+          slot.toolCall.function.name,
+          slot.args,
+        );
+        if (!approved) {
+          slot.result = toolError(
+            ToolErrorCode.APPROVAL_DENIED,
+            `[FATAL:APPROVAL_DENIED] Tool "${slot.toolCall.function.name}" requires approval and was denied. ` +
+              `Do NOT retry this tool. Find a different approach.`,
+            "fatal",
+          );
+          for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+        }
+      }
+    }
+
+    // ── Step 3: Decide serial vs parallel ──────────────────────────────
+    const executable = slots.filter((s) => !s.result);
+    const allParallelSafe = executable.every((s) => {
+      const tool = this.toolRegistry.getTool(s.toolCall.function.name);
+      return !tool?.sequential;
+    });
+    const shouldParallelize =
+      this.enableParallelToolExecution &&
+      allParallelSafe &&
+      executable.length > 1;
+
+    // ── Step 4: Execute ────────────────────────────────────────────────
+    if (shouldParallelize) {
+      // Fire onToolStart for all executable tools before concurrent execution
+      for (const slot of executable) {
+        for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
+      }
+
+      // Execute all in parallel.
+      // Each task fires its own onToolEnd / onToolError hooks so the
+      // TraceLogger (and other hook consumers) see events in actual
+      // completion order rather than array order.
+      await Promise.allSettled(
+        executable.map(async (slot) => {
+          const result = await this.toolRegistry.execute(
+            slot.toolCall.function.name,
+            slot.args,
+          );
+          slot.result = result;
+
+          if (result.success) {
+            for (const h of this.hooks) h.onToolEnd?.(slot.toolCall.function.name, result.content, slot.toolCall.id);
+          } else {
+            for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, result.content, slot.toolCall.id);
+          }
+        }),
+      );
+    } else {
+      // Serial path (legacy behaviour or forced by sequential tools)
+      for (const slot of executable) {
+        for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
+
+        slot.result = await this.toolRegistry.execute(
+          slot.toolCall.function.name,
+          slot.args,
+        );
+
+        if (slot.result.success) {
+          for (const h of this.hooks) h.onToolEnd?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+        } else {
+          for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+        }
+      }
+    }
+
+    // ── Step 5: Inject results into context & post-process ─────────────
+    let hadFailure = false;
+    for (const slot of slots) {
+      const result = slot.result!;
+      const toolMessage = Message.tool(
+        result.content,
+        slot.toolCall.id,
+        slot.toolCall.function.name,
+      );
+      this.contextManager.addMessage(toolMessage.toDict());
+
+      if (!result.success) {
+        hadFailure = true;
+      }
+
+      // Sub-agent spawned — purely informational; results arrive
+      // asynchronously and will be injected via pollSubAgentResults().
+      if (result.success && slot.toolCall.function.name === "spawn_subagent") {
+        this.logger.info(
+          "SubAgent",
+          `Spawned "${slot.args.name ?? "unknown"}" — ` +
+            `result will arrive in a later iteration.`,
+        );
+      }
+
+      // MCP tool failure — warn about potential connection loss.
+      // Only warn once per server per batch to avoid duplicate messages.
+      if (
+        !result.success &&
+        !BUILTIN_TOOL_NAMES.has(slot.toolCall.function.name)
+      ) {
+        const serverName =
+          slot.toolCall.function.name.split("_")[0] ?? "unknown";
+        if (!mcpWarnedServers.has(serverName)) {
+          const isConnErr =
+            result.content.includes("connection") ||
+            result.content.includes("not connected") ||
+            result.content.includes("ECONNREFUSED") ||
+            result.content.includes("ENOTFOUND");
+          if (isConnErr) {
+            mcpWarnedServers.add(serverName);
+            this.logger.info(
+              "MCP",
+              `Connection lost to server "${serverName}" — ` +
+                `further calls to this server may fail.`,
+            );
+            const mcpWarn = Message.system(
+              `MCP server "${serverName}" appears to be disconnected: ${result.content.slice(0, 200)}`,
+            );
+            this.contextManager.addMessage(mcpWarn.toDict());
+          }
+        }
+      }
+    }
+
+    return { hadFailure };
   }
 
   /**

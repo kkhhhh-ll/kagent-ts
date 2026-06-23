@@ -12,7 +12,7 @@
 - **备选模型切换** — `FallbackProvider` 在主模型网络异常时自动切换到备选 LLM
 - **调用频率控制** — `RateLimitedProvider` 基于滑动窗口限制每分钟最大 LLM 调用次数
 - **Token 预算** — 会话级别的 Token 消耗追踪与硬上限控制
-- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链（失败→LLM分析→规则提取→预防）
+- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链（失败→LLM分析→规则提取→预防）+ 并行执行（同轮独立工具并发调用）
 - **工具输出截断** — 超大工具输出自动落盘（`.kagent-context/`），保留摘要 + 按需读取
 - **工具过滤器** — 白名单/黑名单/正则匹配，灵活控制子 Agent 可用工具集
 - **Human-in-the-Loop** — 危险工具（`requireApproval: true`）执行前回调审批，安全默认拒绝
@@ -436,6 +436,43 @@ const agent = new ReActAgent({
 
 未配置 `onToolApproval` 时，所有需审批的工具默认被**拒绝**（安全默认值）。
 
+### 并行工具执行
+
+同一轮 LLM 响应中的多个工具调用默认**并行执行**，延迟从 `sum(各工具耗时)` 降为 `max(各工具耗时)`：
+
+```typescript
+// 默认开启——LLM 同时调用 read_file A、read_file B、grep C
+// → 三个工具并发执行，总耗时 = max(200ms, 300ms, 150ms) = 300ms
+// → 串行模式下总耗时 = 200ms + 300ms + 150ms = 650ms
+
+const agent = new ReActAgent({ llm, tools });  // 默认并行
+```
+
+**关闭并行**（回退串行）：
+
+```typescript
+const agent = new ReActAgent({
+  llm,
+  tools,
+  enableParallelToolExecution: false,  // 恢复旧行为
+});
+```
+
+**标记工具为串行**（有副作用、不可并发的工具）：
+
+```typescript
+const writeAndRead: Tool = {
+  name: "atomic_write_read",
+  description: "写入后立即校验",
+  sequential: true,  // 始终串行执行，不与其他工具并发
+  // ...
+};
+```
+
+当同一轮 LLM 响应中任一工具标记了 `sequential: true`，整批工具回退为串行执行。
+
+**设计原理**：LLM 在同一轮 response 中发出的多个 `tool_calls` 本质上是彼此独立的（LLM 发出时还未看到任何工具结果），因此可以安全并行。有依赖关系的调用自然会跨轮次发生。
+
 ### 内置工具
 
 ```typescript
@@ -798,9 +835,9 @@ const hooks: AgentHooks = {
   onLLMStart: (messages, tools) => { /* LLM 调用开始 */ },
   onLLMEnd: (response) => { /* LLM 调用结束 */ },
   onLLMError: (error) => { /* LLM 调用出错 */ },
-  onToolStart: (name, args) => { /* 工具开始执行 */ },
-  onToolEnd: (name, output) => { /* 工具执行成功 */ },
-  onToolError: (name, error) => { /* 工具执行失败 */ },
+  onToolStart: (name, args, toolCallId?) => { /* 工具开始执行 */ },
+  onToolEnd: (name, output, toolCallId?) => { /* 工具执行成功 */ },
+  onToolError: (name, error, toolCallId?) => { /* 工具执行失败 */ },
   onThought: (thought) => { /* Agent 思考内容 */ },
   onFinish: (answer) => { /* Agent 产生最终答案 */ },
 };

@@ -175,25 +175,28 @@ export class TraceLogger implements AgentHooks {
     this.flush();
   }
 
-  onToolStart(toolName: string, args: Record<string, unknown>): void {
+  onToolStart(toolName: string, args: Record<string, unknown>, toolCallId?: string): void {
     this.toolCallCount++;
     this.addEvent("tool_start", `Tool: ${toolName}`, {
       toolName,
+      toolCallId,
       args,
     });
   }
 
-  onToolEnd(toolName: string, result: string): void {
+  onToolEnd(toolName: string, result: string, toolCallId?: string): void {
     this.addEvent("tool_end", `Tool Result: ${toolName}`, {
       toolName,
+      toolCallId,
       result: result.length > 2000 ? result.slice(0, 2000) + "\n... (truncated)" : result,
       resultLength: result.length,
     });
   }
 
-  onToolError(toolName: string, error: string): void {
+  onToolError(toolName: string, error: string, toolCallId?: string): void {
     this.addEvent("tool_error", `Tool Error: ${toolName}`, {
       toolName,
+      toolCallId,
       error,
     });
   }
