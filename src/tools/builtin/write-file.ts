@@ -57,4 +57,5 @@ export const WriteFileTool: Tool = {
       return `Error writing file "${resolvedPath}": ${message}`;
     }
   },
+  requireApproval: true,
 };

@@ -21,6 +21,8 @@ export enum ToolErrorCode {
   TRUNCATED_OUTPUT = "truncated_output",
   /** An internal error occurred in the tool registry / infrastructure. */
   INTERNAL_ERROR = "internal_error",
+  /** Tool execution was denied by the user (human-in-the-loop approval). */
+  APPROVAL_DENIED = "approval_denied",
 }
 
 /**
@@ -81,6 +83,12 @@ export interface Tool {
   parameters: Record<string, unknown>;
   /** Execute the tool with the given arguments and return a raw result string. */
   execute(args: Record<string, unknown>): Promise<string>;
+  /**
+   * Whether this tool requires human approval before execution.
+   * When `true`, the agent calls `onToolApproval` before executing.
+   * Defaults to `false` (tools execute immediately).
+   */
+  requireApproval?: boolean;
 }
 
 /**

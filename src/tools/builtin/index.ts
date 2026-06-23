@@ -5,6 +5,8 @@ import { WriteFileTool } from "./write-file";
 import { EditFileTool } from "./edit-file";
 import { GrepSearchTool } from "./grep-search";
 import { GlobSearchTool } from "./glob-search";
+import { WebFetchTool } from "./web-fetch";
+import { BashTool } from "./bash";
 
 /**
  * Array of all built-in tools.
@@ -15,6 +17,8 @@ export const BUILTIN_TOOLS: Tool[] = [
   EditFileTool,
   GrepSearchTool,
   GlobSearchTool,
+  WebFetchTool,
+  BashTool,
 ];
 
 /**
@@ -27,6 +31,8 @@ export const BUILTIN_TOOL_NAMES = new Set([
   "edit_file",
   "glob_search",
   "grep_search",
+  "web_fetch",
+  "bash",
   "skill",
   "spawn_subagent",
   "list_subagents",
@@ -41,6 +47,8 @@ export { WriteFileTool } from "./write-file";
 export { EditFileTool } from "./edit-file";
 export { GrepSearchTool } from "./grep-search";
 export { GlobSearchTool } from "./glob-search";
+export { WebFetchTool } from "./web-fetch";
+export { BashTool } from "./bash";
 export { createListSubagentsTool } from "./list-subagents";
 export { createSpawnSubagentTool } from "./spawn-subagent";
 export { createListErrorsTool } from "./list-errors";

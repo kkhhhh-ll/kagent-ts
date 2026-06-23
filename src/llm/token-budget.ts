@@ -18,6 +18,21 @@ export interface TokenBudgetConfig {
    * Default: 0.8 (80 %).
    */
   warnThreshold?: number;
+
+  /**
+   * Pricing model for cost estimation.
+   * Prices are per 1,000 tokens (standard LLM pricing unit).
+   *
+   * @example
+   * ```ts
+   * // GPT-4o
+   * pricing: { inputPricePer1K: 0.0025, outputPricePer1K: 0.01 }
+   * ```
+   */
+  pricing?: {
+    inputPricePer1K: number;
+    outputPricePer1K: number;
+  };
 }
 
 export interface TokenBudgetStatus {
@@ -33,18 +48,32 @@ export interface TokenBudgetStatus {
   callCount: number;
 }
 
+/** Cumulative cost breakdown for the current session. */
+export interface TokenBudgetCost {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  inputCost: number;
+  outputCost: number;
+  totalCost: number;
+}
+
 // ─── TokenBudget ─────────────────────────────────────────────────────────────
 
 export class TokenBudget {
   private maxTotalTokens: number;
   private warnThreshold: number;
+  private pricing?: { inputPricePer1K: number; outputPricePer1K: number };
   private totalTokensUsed = 0;
+  private inputTokensUsed = 0;
+  private outputTokensUsed = 0;
   private callCount = 0;
   private warned = false;
 
   constructor(config: TokenBudgetConfig) {
     this.maxTotalTokens = config.maxTotalTokens;
     this.warnThreshold = config.warnThreshold ?? 0.8;
+    this.pricing = config.pricing;
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -55,6 +84,8 @@ export class TokenBudget {
    */
   recordUsage(promptTokens: number, completionTokens: number): void {
     this.totalTokensUsed += promptTokens + completionTokens;
+    this.inputTokensUsed += promptTokens;
+    this.outputTokensUsed += completionTokens;
     this.callCount++;
   }
 
@@ -93,10 +124,34 @@ export class TokenBudget {
   }
 
   /**
+   * Get the cumulative cost of the current session.
+   * Returns all zeros if no pricing model was configured.
+   */
+  getSessionCost(): TokenBudgetCost {
+    const inputCost = this.pricing
+      ? Math.round(this.inputTokensUsed / 1000 * this.pricing.inputPricePer1K * 10000) / 10000
+      : 0;
+    const outputCost = this.pricing
+      ? Math.round(this.outputTokensUsed / 1000 * this.pricing.outputPricePer1K * 10000) / 10000
+      : 0;
+
+    return {
+      inputTokens: this.inputTokensUsed,
+      outputTokens: this.outputTokensUsed,
+      totalTokens: this.totalTokensUsed,
+      inputCost,
+      outputCost,
+      totalCost: Math.round((inputCost + outputCost) * 10000) / 10000,
+    };
+  }
+
+  /**
    * Reset the budget for a new conversation.
    */
   reset(): void {
     this.totalTokensUsed = 0;
+    this.inputTokensUsed = 0;
+    this.outputTokensUsed = 0;
     this.callCount = 0;
     this.warned = false;
   }

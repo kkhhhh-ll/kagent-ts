@@ -68,4 +68,39 @@ describe("TokenBudget", () => {
     expect(budget.shouldWarn()).toBe(true);
     expect(budget.shouldWarn()).toBe(false); // second call returns false
   });
+
+  it("getSessionCost returns zero when no pricing configured", () => {
+    const budget = new TokenBudget({ maxTotalTokens: 1000 });
+    budget.recordUsage(500, 300);
+    const cost = budget.getSessionCost();
+    expect(cost.inputTokens).toBe(500);
+    expect(cost.outputTokens).toBe(300);
+    expect(cost.totalTokens).toBe(800);
+    expect(cost.totalCost).toBe(0);
+  });
+
+  it("getSessionCost calculates correctly with pricing", () => {
+    const budget = new TokenBudget({
+      maxTotalTokens: 10000,
+      pricing: { inputPricePer1K: 0.0025, outputPricePer1K: 0.01 },
+    });
+    budget.recordUsage(2000, 1000); // 2K input, 1K output
+    const cost = budget.getSessionCost();
+    expect(cost.inputTokens).toBe(2000);
+    expect(cost.outputTokens).toBe(1000);
+    expect(cost.inputCost).toBeCloseTo(0.005, 4);  // 2 * 0.0025
+    expect(cost.outputCost).toBeCloseTo(0.01, 4);  // 1 * 0.01
+    expect(cost.totalCost).toBeCloseTo(0.015, 4);
+  });
+
+  it("reset clears cost tracking", () => {
+    const budget = new TokenBudget({
+      maxTotalTokens: 1000,
+      pricing: { inputPricePer1K: 0.01, outputPricePer1K: 0.02 },
+    });
+    budget.recordUsage(100, 200);
+    expect(budget.getSessionCost().totalCost).toBeGreaterThan(0);
+    budget.reset();
+    expect(budget.getSessionCost().totalCost).toBe(0);
+  });
 });

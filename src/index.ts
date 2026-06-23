@@ -1,6 +1,6 @@
 // Core Agent
 export { Agent } from "./core/agent";
-export type { AgentConfig } from "./core/agent";
+export type { AgentConfig, ApprovalCallback } from "./core/agent";
 export { ReActAgent } from "./core/react-agent";
 export type { ReActAgentConfig } from "./core/react-agent";
 export { PlanSolveAgent } from "./core/plan-solve-agent";
@@ -89,7 +89,7 @@ export type { MessageData, ToolCall } from "./messages/types";
 export type { LLMProvider, LLMResponse } from "./llm/interface";
 export { LLMResponseErrorCode } from "./llm/interface";
 export { TokenBudget } from "./llm/token-budget";
-export type { TokenBudgetConfig, TokenBudgetStatus } from "./llm/token-budget";
+export type { TokenBudgetConfig, TokenBudgetStatus, TokenBudgetCost } from "./llm/token-budget";
 export { LLMNetworkError } from "./llm/errors";
 export type { NetworkErrorCause, RetryConfig } from "./llm/errors";
 
@@ -104,6 +104,12 @@ export type { AnthropicConfig } from "./llm/anthropic-provider";
 // LLM — Factory
 export { createLLMProvider } from "./llm/factory";
 export type { LLMProviderConfig, ProviderType } from "./llm/factory";
+
+// LLM — Fallback & Rate Limiting
+export { FallbackProvider } from "./llm/fallback-provider";
+export type { FallbackProviderConfig } from "./llm/fallback-provider";
+export { RateLimitedProvider } from "./llm/rate-limiter";
+export type { RateLimitedProviderConfig } from "./llm/rate-limiter";
 
 // Context
 export { ContextManager } from "./context/context-manager";

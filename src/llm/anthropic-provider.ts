@@ -88,6 +88,23 @@ export interface AnthropicConfig {
   retry?: RetryConfig;
   /** Request timeout in ms (default: none). */
   timeout?: number;
+
+  /**
+   * Enable Anthropic prompt caching on the system prompt.
+   *
+   * When `true`, the system prompt is sent as a content block with
+   * `cache_control: { type: "ephemeral" }`. Cached tokens are billed at
+   * 10 % of the normal input price, and the cache TTL is 5 minutes
+   * (refreshed on each hit).
+   *
+   * Best for agents with a **static** system prompt (e.g. ReActAgent).
+   * For PlanSolveAgent the plan-progress section changes each iteration
+   * which breaks cache hits — only enable if you accept cache misses.
+   *
+   * Minimum 1 024 tokens for caching to activate (Anthropic API requirement).
+   * Default: `false`.
+   */
+  cacheSystemPrompt?: boolean;
 }
 
 /** Retry callbacks shared by all AnthropicProvider instances. */
@@ -122,6 +139,7 @@ export class AnthropicProvider implements LLMProvider {
   private maxTokens: number;
   private retryConfig: Required<RetryConfig>;
   private timeout: number | undefined;
+  private cacheSystemPrompt: boolean;
 
   constructor(config: AnthropicConfig) {
     this.client = new Anthropic({
@@ -143,6 +161,7 @@ export class AnthropicProvider implements LLMProvider {
     this.temperature = config.temperature ?? 0.7;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.timeout = config.timeout;
+    this.cacheSystemPrompt = config.cacheSystemPrompt ?? false;
     this.retryConfig = {
       maxRetries: config.retry?.maxRetries ?? 3,
       baseDelayMs: config.retry?.baseDelayMs ?? 1000,
@@ -152,6 +171,26 @@ export class AnthropicProvider implements LLMProvider {
 
   // ─── LLMProvider Implementation ─────────────────────────────────────────
 
+  /**
+   * Build the `system` parameter for the Anthropic API.
+   * When `cacheSystemPrompt` is enabled and the system prompt is non-empty,
+   * wraps it in a content block with `cache_control` so Anthropic caches it.
+   */
+  private buildSystemParam(
+    systemPrompt: string | undefined,
+  ): string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> | undefined {
+    if (!systemPrompt) return undefined;
+    if (!this.cacheSystemPrompt) return systemPrompt;
+
+    return [
+      {
+        type: "text",
+        text: systemPrompt,
+        cache_control: { type: "ephemeral" },
+      },
+    ] as Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>;
+  }
+
   async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
     const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
     const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
@@ -160,7 +199,7 @@ export class AnthropicProvider implements LLMProvider {
       () =>
         this.client.messages.create({
           model: this.model,
-          system: systemPrompt,
+          system: this.buildSystemParam(systemPrompt),
           messages: formattedMessages,
           tools: anthropicTools,
           max_tokens: this.maxTokens,
@@ -189,7 +228,7 @@ export class AnthropicProvider implements LLMProvider {
       async () =>
         this.client.messages.stream({
           model: this.model,
-          system: systemPrompt,
+          system: this.buildSystemParam(systemPrompt),
           messages: formattedMessages,
           tools: anthropicTools,
           max_tokens: this.maxTokens,

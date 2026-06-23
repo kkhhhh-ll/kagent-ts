@@ -251,6 +251,24 @@ export class ReActAgent extends Agent {
 
           for (const h of this.hooks) h.onToolStart?.(toolCall.function.name, args);
 
+          // ── Human-in-the-loop approval check ─────────────────────────
+          const tool = this.toolRegistry.getTool(toolCall.function.name);
+          if (tool?.requireApproval) {
+            const approved = await this.checkToolApproval(toolCall.function.name, args);
+            if (!approved) {
+              const result: ToolResult = toolError(
+                ToolErrorCode.APPROVAL_DENIED,
+                `[FATAL:APPROVAL_DENIED] Tool "${toolCall.function.name}" requires approval and was denied. ` +
+                `Do NOT retry this tool. Find a different approach.`,
+                "fatal",
+              );
+              for (const h of this.hooks) h.onToolError?.(toolCall.function.name, result.content);
+              const toolMessage = Message.tool(result.content, toolCall.id, toolCall.function.name);
+              this.contextManager.addMessage(toolMessage.toDict());
+              continue;
+            }
+          }
+
           // Execute via ToolRegistry — never throws.
           const result: ToolResult = await this.toolRegistry.execute(
             toolCall.function.name,

@@ -36,6 +36,20 @@ export interface TraceLoggerConfig {
 
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
+
+  /**
+   * Pricing model for cost estimation in the trace report.
+   * Prices are per 1,000 tokens.
+   *
+   * @example
+   * ```ts
+   * pricing: { inputPricePer1K: 0.0025, outputPricePer1K: 0.01 }
+   * ```
+   */
+  pricing?: {
+    inputPricePer1K: number;
+    outputPricePer1K: number;
+  };
 }
 
 /**
@@ -68,6 +82,13 @@ export class TraceLogger implements AgentHooks {
   private modelName: string;
   private startTime: number;
   private logger: Logger;
+  private pricing?: { inputPricePer1K: number; outputPricePer1K: number };
+
+  // ── Session-level counters for summary stats ──
+  private llmCallCount = 0;
+  private toolCallCount = 0;
+  private totalPromptTokens = 0;
+  private totalCompletionTokens = 0;
 
   constructor(config?: TraceLoggerConfig) {
     const ts = Date.now();
@@ -78,6 +99,7 @@ export class TraceLogger implements AgentHooks {
     this.agentLabel = config?.agentLabel ?? "Agent";
     this.modelName = config?.modelName ?? "unknown";
     this.logger = config?.logger ?? new ConsoleLogger();
+    this.pricing = config?.pricing;
     this.startTime = ts;
   }
 
@@ -115,7 +137,8 @@ export class TraceLogger implements AgentHooks {
   // ─── AgentHooks Implementation ─────────────────────────────────────────
 
   onLLMStart(messages: MessageData[], tools: Tool[]): void {
-    this.addEvent("llm_start", "LLM Call", {
+    this.llmCallCount++;
+    this.addEvent("llm_start", `LLM Call #${this.llmCallCount}`, {
       messageCount: messages.length,
       toolCount: tools.length,
       messages: messages.map((m) => ({
@@ -133,6 +156,10 @@ export class TraceLogger implements AgentHooks {
   }
 
   onLLMEnd(response: LLMResponse): void {
+    if (response.usage) {
+      this.totalPromptTokens += response.usage.prompt_tokens;
+      this.totalCompletionTokens += response.usage.completion_tokens;
+    }
     this.addEvent("llm_end", "LLM Response", {
       content: response.content,
       tool_calls: response.tool_calls,
@@ -149,6 +176,7 @@ export class TraceLogger implements AgentHooks {
   }
 
   onToolStart(toolName: string, args: Record<string, unknown>): void {
+    this.toolCallCount++;
     this.addEvent("tool_start", `Tool: ${toolName}`, {
       toolName,
       args,
@@ -209,6 +237,12 @@ export class TraceLogger implements AgentHooks {
     const duration = ((Date.now() - this.startTime) / 1000).toFixed(1);
     const eventCards = this.events.map((e) => this.renderEventCard(e)).join("\n");
 
+    // ── Summary stats ──────────────────────────────────────────────────
+    const totalTokens = this.totalPromptTokens + this.totalCompletionTokens;
+    const costStr = this.pricing
+      ? ` | 💰 ${this.fmtCost(this.totalPromptTokens, this.totalCompletionTokens)}`
+      : "";
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -227,13 +261,23 @@ export class TraceLogger implements AgentHooks {
   .header {
     background: linear-gradient(135deg, #161b22, #1c2333);
     border: 1px solid #30363d; border-radius: 12px; padding: 24px 28px;
-    margin-bottom: 28px;
+    margin-bottom: 20px;
   }
   .header h1 { font-size: 20px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
   .header h1 span { background: #238636; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .header .meta { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: #8b949e; }
   .header .meta .item { display: flex; align-items: center; gap: 4px; }
   .header .meta .item strong { color: #c9d1d9; }
+
+  /* ── Summary Stats Bar ── */
+  .summary {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 14px 20px; margin-bottom: 24px;
+    display: flex; flex-wrap: wrap; gap: 20px; font-size: 13px;
+  }
+  .summary .stat { display: flex; align-items: center; gap: 6px; }
+  .summary .stat .val { color: #e6edf3; font-weight: 600; font-family: monospace; }
+  .summary .stat .lbl { color: #8b949e; }
 
   /* ── Timeline ── */
   .timeline { position: relative; padding-left: 36px; }
@@ -259,6 +303,12 @@ export class TraceLogger implements AgentHooks {
   }
   .event-header .icon { font-size: 16px; flex-shrink: 0; }
   .event-header .label { flex: 1; font-weight: 600; color: #e6edf3; }
+  .event-header .badge {
+    font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    font-family: monospace; white-space: nowrap;
+  }
+  .badge-tokens { background: #1a2332; color: #79c0ff; }
+  .badge-cost { background: #1a2f1a; color: #3fb950; }
   .event-header .time { color: #8b949e; font-size: 11px; font-family: monospace; }
   .event-header .toggle { color: #8b949e; font-size: 12px; }
   .event-detail {
@@ -313,6 +363,7 @@ export class TraceLogger implements AgentHooks {
   @media (max-width: 640px) {
     body { padding: 12px; }
     .timeline { padding-left: 28px; }
+    .summary { gap: 12px; }
   }
 </style>
 </head>
@@ -328,6 +379,13 @@ export class TraceLogger implements AgentHooks {
       <span class="item"><strong>Events:</strong> ${this.events.length}</span>
       <span class="item"><strong>Generated:</strong> ${new Date().toLocaleString("zh-CN", { hour12: false })}</span>
     </div>
+  </div>
+
+  <div class="summary">
+    <span class="stat"><span class="lbl">LLM Calls:</span><span class="val">${this.llmCallCount}</span></span>
+    <span class="stat"><span class="lbl">Tool Calls:</span><span class="val">${this.toolCallCount}</span></span>
+    <span class="stat"><span class="lbl">Tokens:</span><span class="val">${this.fmtNum(totalTokens)}</span></span>
+    <span class="stat"><span class="lbl">In / Out:</span><span class="val">${this.fmtNum(this.totalPromptTokens)} / ${this.fmtNum(this.totalCompletionTokens)}</span></span>${costStr}
   </div>
 
   <div class="timeline">
@@ -353,6 +411,7 @@ ${eventCards}
     const cls = `event event-type-${event.type}`;
     const time = new Date(event.timestamp).toLocaleTimeString("en-US", { hour12: false });
     const icon = this.eventIcon(event.type);
+    let headerBadge = ""; // inline stat badge shown on the card header
     let detail = "";
 
     switch (event.type) {
@@ -385,6 +444,17 @@ ${eventCards}
         }
         const usage = event.data.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
         if (usage) {
+          // Inline badge for the card header
+          const pts = usage.prompt_tokens ?? 0;
+          const cts = usage.completion_tokens ?? 0;
+          const tokensBadge = `<span class="badge badge-tokens">${this.fmtNum(pts)}+${this.fmtNum(cts)} tok</span>`;
+          let costBadge = "";
+          if (this.pricing) {
+            const cost = (pts / 1000) * this.pricing.inputPricePer1K + (cts / 1000) * this.pricing.outputPricePer1K;
+            costBadge = `<span class="badge badge-cost">$${cost.toFixed(4)}</span>`;
+          }
+          headerBadge = tokensBadge + costBadge;
+
           detail += `<div class="detail-section">
             <h4>Usage</h4>
             <table class="kv-table"><tr>
@@ -459,12 +529,29 @@ ${eventCards}
         <div class="event-header">
           <span class="icon">${icon}</span>
           <span class="label">${this.escapeHtml(event.label)}</span>
+          ${headerBadge}
           <span class="time">${time}</span>
           <span class="toggle">▶</span>
         </div>
         <div class="event-detail">${detail}</div>
       </div>
     </div>`;
+  }
+
+  /** Format large numbers with K/M suffix. */
+  private fmtNum(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+    return String(n);
+  }
+
+  /** Format cost summary string for the summary bar. */
+  private fmtCost(promptTokens: number, completionTokens: number): string {
+    if (!this.pricing) return "";
+    const cost =
+      (promptTokens / 1000) * this.pricing.inputPricePer1K +
+      (completionTokens / 1000) * this.pricing.outputPricePer1K;
+    return `<span class="stat"><span class="lbl">Cost:</span><span class="val">$${cost.toFixed(4)}</span></span>`;
   }
 
   private eventIcon(type: AgentTraceEventType): string {

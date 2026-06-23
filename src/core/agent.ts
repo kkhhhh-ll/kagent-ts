@@ -29,6 +29,17 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 
 /**
+ * Callback for human-in-the-loop tool approval.
+ *
+ * Called before executing a tool marked `requireApproval: true`.
+ * Return `true` to approve execution, `false` to deny it.
+ */
+export type ApprovalCallback = (
+  toolName: string,
+  args: Record<string, unknown>,
+) => Promise<boolean>;
+
+/**
  * Base configuration for any Agent.
  */
 export interface AgentConfig {
@@ -114,6 +125,18 @@ export interface AgentConfig {
    * Accepts a single AgentHooks or an array of them.
    */
   hooks?: AgentHooks | AgentHooks[];
+
+  /**
+   * Human-in-the-loop approval callback.
+   *
+   * Called before executing tools marked `requireApproval: true`.
+   * Return `true` to approve, `false` to deny (the tool is skipped and
+   * an APPROVAL_DENIED result is injected into context).
+   *
+   * If not provided, tools with `requireApproval: true` are ALWAYS DENIED
+   * (safe default — no silent execution of dangerous tools).
+   */
+  onToolApproval?: ApprovalCallback;
 
   /**
    * Logger instance for framework-internal messages.
@@ -271,6 +294,9 @@ export abstract class Agent {
   /** Token budget for session-level cost control (optional). */
   protected tokenBudget?: TokenBudget;
 
+  /** Human-in-the-loop approval callback (from AgentConfig). */
+  protected onToolApproval?: ApprovalCallback;
+
   // ─── Session & Cancellation ─────────────────────────────────────────
 
   /** Session manager for checkpoint persistence (optional). */
@@ -308,6 +334,7 @@ export abstract class Agent {
     this._cancelled = false;
     this.llm = config.llm;
     this.logger = config.logger ?? new ConsoleLogger();
+    this.onToolApproval = config.onToolApproval;
     this.contextManager = config.contextManager ?? new ContextManager(undefined, this.logger);
 
     // Prefer toolRegistry; fall back to plain tools array
@@ -620,6 +647,27 @@ export abstract class Agent {
   }
 
   /**
+   * Check whether a tool that requires approval should be executed.
+   *
+   * @returns `true` if approved, `false` if denied (or no callback configured).
+   */
+  protected async checkToolApproval(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<boolean> {
+    if (!this.onToolApproval) {
+      this.logger.warn("Approval", `Tool "${toolName}" requires approval but no onToolApproval configured — denied.`);
+      return false;
+    }
+    try {
+      return await this.onToolApproval(toolName, args);
+    } catch {
+      this.logger.warn("Approval", `Approval callback threw for "${toolName}" — denied.`);
+      return false;
+    }
+  }
+
+  /**
    * Check whether the token budget allows another LLM call.
    *
    * @param estimatedInputTokens  Approximate tokens in the upcoming request
@@ -896,6 +944,14 @@ export abstract class Agent {
    */
   get conversationLength(): number {
     return this.contextManager.getMessages().length;
+  }
+
+  /**
+   * Get the cumulative token consumption and cost for the current session.
+   * Returns null if no `tokenBudgetConfig` was configured.
+   */
+  getSessionCost() {
+    return this.tokenBudget?.getSessionCost() ?? null;
   }
 
   /**
