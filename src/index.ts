@@ -187,3 +187,21 @@ export type {
 } from "./reflection/reflection-agent";
 export { createReflectionHook } from "./reflection/reflection-hook";
 export type { ReflectionHookConfig } from "./reflection/reflection-hook";
+
+// Evaluation — tool call metrics, end-to-end testing, regression benchmarks
+export { ToolCallEvaluator, EvalRunner, Benchmark } from "./eval";
+export type {
+  ToolCallRecord,
+  ToolCallStats,
+  ToolCallScorecard,
+  EvalCase,
+  EvalResult,
+  LLMEvalJudgment,
+  EvalRunnerConfig,
+  AgentFactory,
+  BenchmarkConfig,
+  Regression,
+  Improvement,
+  BenchmarkSummary,
+  BenchmarkResult,
+} from "./eval";

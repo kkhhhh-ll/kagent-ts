@@ -79,6 +79,11 @@ export class ContextManager {
    * @returns true when remaining free tokens < compressionThreshold.
    */
   shouldCompress(model?: string): boolean {
+    // Short-circuit: too few messages to ever hit the compression threshold.
+    // The system message + a handful of conversation turns won't breach
+    // typical thresholds (64K+). Avoids unnecessary tiktoken calls.
+    const totalMsgs = (this.systemMessage ? 1 : 0) + this.messages.length;
+    if (totalMsgs < 20) return false;
     return this.getCurrentTokens(model) >= this.triggerTokens();
   }
 

@@ -1,26 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { ReActAgent } from "../../src/core/react-agent";
-import type { LLMProvider, LLMResponse } from "../../src/llm/interface";
 import { ToolRegistry } from "../../src/tools/tool-registry";
 import { SilentLogger } from "../../src/logging/logger";
-
-function mockLLM(answer: string): LLMProvider {
-  return {
-    model: "test-model",
-    chat: async (): Promise<LLMResponse> => ({
-      content: JSON.stringify({ thought: "ok", answer }),
-    }),
-    chatStream: async function* () {
-      yield { type: "chunk", content: answer };
-      yield { type: "done" };
-    },
-    getTokenCount: () => 10,
-  };
-}
+import { mockAnswerLLM } from "../mocks/mock-llm-provider";
 
 function createAgent(answer = "Hello!") {
   return new ReActAgent({
-    llm: mockLLM(answer),
+    llm: mockAnswerLLM(answer),
     toolRegistry: new ToolRegistry(),
     logger: new SilentLogger(),
     maxIterations: 3,

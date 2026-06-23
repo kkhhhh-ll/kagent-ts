@@ -77,7 +77,7 @@ console.log(response);
 
 ## 项目架构
 
-```
+```text
 src/
 ├── core/                  # Agent 基类、ReActAgent、PlanSolveAgent
 │   ├── agent.ts           # 抽象基类（共享基础设施）
@@ -116,10 +116,18 @@ src/
 │   ├── error-tracker.ts   # 工具错误链追踪
 │   ├── tool-output-truncator.ts # 大输出截断落盘
 │   └── tool-filter.ts     # 工具过滤器
+├── eval/                   # Agent 评估体系
+│   ├── types.ts             # 共享评估类型
+│   ├── tool-call-evaluator.ts # 工具调用指标收集（AgentHooks）
+│   ├── eval-runner.ts       # 端到端评估 + LLM 评判
+│   ├── benchmark.ts         # 回归测试 & 基线对比
+│   └── index.ts             # 统一导出
 ├── trace/                 # 执行追踪事件日志
 ├── logging/               # 结构化日志接口
 ├── utils/                 # Token 计数等工具函数
 └── index.ts               # 公共 API 导出
+```
+
 ```
 
 ## Agent 循环范式
@@ -861,6 +869,159 @@ const agent = new ReActAgent({
   llm,
   logger: new SilentLogger(),  // 静默模式
 });
+```
+
+## Agent 评估
+
+框架提供三层评估体系，从工具调用指标到端到端回归测试：
+
+```text
+ToolCallEvaluator  →  工具级：成功率 / 延迟 / 错误分布 / 熔断统计
+EvalRunner         →  用例级：工具调用检查 + 输出匹配 + LLM 评判
+Benchmark          →  回归级：基线对比 + 退化检测 + 改进标记
+```
+
+### 1. 工具调用指标（ToolCallEvaluator）
+
+挂载到 `AgentHooks`，自动收集每次工具调用的指标：
+
+```typescript
+import { ToolCallEvaluator } from "kagent-ts";
+
+const evaluator = new ToolCallEvaluator();
+const agent = new ReActAgent({ llm, hooks: [evaluator] });
+
+await agent.run("帮我计算 2+2");
+
+// 聚合指标
+const scorecard = evaluator.getScorecard();
+// {
+//   totalCalls: 3, overallSuccessRate: 1.0, avgLatencyMs: 120,
+//   circuitBreakerTrips: 0, uniqueToolsUsed: 2,
+//   perTool: [{ toolName: "calculator", successRate: 1.0, p50LatencyMs: 100, ... }]
+// }
+
+// Markdown 报告
+console.log(evaluator.generateReport());
+```
+
+报告示例：
+
+```text
+# Tool Call Evaluation Report
+
+## Summary
+| Total Calls | Success Rate | Avg Latency | Circuit Breaker Trips |
+|-------------|-------------|-------------|----------------------|
+| 3           | 100%        | 120ms       | 0                    |
+
+## Per-Tool Breakdown
+| Tool | Calls | Success Rate | Avg Latency | P50 | P99 | Avg Retries | CB Trips |
+|------|-------|-------------|-------------|-----|-----|-------------|----------|
+| `calculator` | 2 | 100% | 100ms | 98ms | 102ms | 0.0 | 0 |
+| `read_file`  | 1 | 100% | 160ms | 160ms | 160ms | 0.0 | 0 |
+```
+
+### 2. 端到端评估（EvalRunner）
+
+用测试用例集跑 Agent，检查工具调用正确性 + 输出匹配 + 可选的 LLM 独立评判：
+
+```typescript
+import { EvalRunner, ModelRouter } from "kagent-ts";
+
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o" }),
+  reflection: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
+});
+
+const runner = new EvalRunner({
+  judgeLLM: router.forReflection(),  // 独立模型评判，避免"自审自"
+});
+
+const results = await runner.run(
+  // Agent 工厂 — 每个用例创建全新实例，避免上下文污染
+  (evaluator) => new ReActAgent({ llm: router, hooks: [evaluator] }),
+  [
+    {
+      name: "basic math",
+      input: "2+2=?",
+      expectedTools: ["calculator"],           // 必须调用这些工具
+      forbiddenTools: ["bash", "write_file"],   // 绝不能调用这些
+      expectedOutput: /4/,                      // 答案必须匹配
+    },
+    {
+      name: "readme exists",
+      input: "读取 README.md 的前 10 行",
+      expectedTools: ["read_file"],
+      timeoutMs: 30_000,                        // 超时覆盖
+    },
+  ],
+);
+
+// 报告
+console.log(runner.generateReport(results));
+```
+
+### 3. 回归测试（Benchmark）
+
+对比两次运行的基线，自动标记退化和改进，结果持久化到磁盘：
+
+```typescript
+import { Benchmark } from "kagent-ts";
+
+const benchmark = new Benchmark({
+  name: "tool-calling-v2",
+  agentFactory: (evaluator) => new ReActAgent({ llm, hooks: [evaluator] }),
+  cases: myEvalCases,
+  baselinePath: ".kagent-benchmarks/tool-calling-v1.json",  // 上次的基线
+});
+
+const result = await benchmark.run();
+console.log(benchmark.generateReport(result));
+```
+
+```text
+# Benchmark: tool-calling-v2
+
+## ⚠️ Regressions
+| Target | Metric | Baseline | Current | Details |
+|--------|--------|----------|---------|---------|
+| overall | passRate | 95.0% | 82.0% | Pass rate dropped by 13.0 percentage points. |
+| complex_query | passed | true | false | Went from PASS to FAIL. Failures: ... |
+
+## 📈 Improvements
+| Target | Metric | Baseline | Current |
+|--------|--------|----------|--------|
+| overall | avgLatencyMs | 520ms | 340ms |
+```
+
+每次运行结果自动保存到 `.kagent-benchmarks/`，下次跑时可直接当基线用。
+
+### 测试 Mock
+
+测试 Agent 行为无需真实 API 调用。框架提供了共享的 Mock LLM Provider 工厂：
+
+```typescript
+import {
+  mockAnswerLLM,    // 直接返回最终答案
+  mockToolCallLLM,  // 返回工具调用
+  mockSequenceLLM,  // 多轮序列响应
+  answerContent,    // 预设的"最终答案"JSON content
+  toolCallContent,  // 预设的"工具调用"JSON content
+} from "./tests/mocks/mock-llm-provider";
+
+// 模拟"调用工具 → 得到结果 → 回答"的多轮交互
+const llm = mockSequenceLLM([
+  [toolCallContent("calculator"), [{
+    id: "c1", type: "function",
+    function: { name: "calculator", arguments: '{"expr":"2+2"}' },
+  }]],
+  [answerContent("结果是 4")],
+]);
+
+const agent = new ReActAgent({ llm, maxIterations: 3 });
+const result = await agent.run("2+2=?");
+expect(result).toContain("4");
 ```
 
 ## 运行测试

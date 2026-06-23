@@ -129,8 +129,10 @@ export class ReActAgent extends Agent {
       // Prepare messages for the LLM
       const contextMessages = this.contextManager.getContextMessages();
 
-      // Token budget check — stop if the session budget is exhausted
-      const budgetError = this.checkTokenBudget(this.contextManager.getCurrentTokens());
+      // Token budget check — skip token counting when no budget is configured
+      const budgetError = this.checkTokenBudget(
+        this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
+      );
       if (budgetError) {
         for (const h of this.hooks) h.onFinish?.(budgetError);
         return budgetError;
