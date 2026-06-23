@@ -1,5 +1,6 @@
 import { LLMProvider } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
+import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
@@ -242,6 +243,26 @@ export interface AgentConfig {
   subAgentsDir?: string;
 
   /**
+   * LLM provider for sub-agents spawned by the main agent.
+   *
+   * When set, sub-agents use this provider instead of the main agent's LLM.
+   * This enables model routing — use a cheaper/faster model for simple
+   * sub-agent tasks while keeping the main model for complex reasoning.
+   *
+   * When omitted, sub-agents inherit the main agent's `llm` provider.
+   *
+   * @example
+   * ```ts
+   * const agent = new ReActAgent({
+   *   llm: new OpenAIProvider({ model: "gpt-4o" }),
+   *   subAgentLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),
+   *   subAgentsDir: "./subagents",
+   * });
+   * ```
+   */
+  subAgentLLM?: LLMProvider;
+
+  /**
    * Token budget configuration for session-level cost control.
    * When set, the agent stops making LLM calls when cumulative token
    * consumption exceeds `maxTotalTokens`. The budget resets on
@@ -327,6 +348,9 @@ export abstract class Agent {
   /** Sub-agent definitions directory (from AgentConfig). */
   protected subAgentsDir?: string;
 
+  /** LLM provider for sub-agents (defaults to main llm if not set). */
+  protected subAgentLLM?: LLMProvider;
+
   /** Skills directory path (from AgentConfig). */
   protected skillsDir?: string;
 
@@ -389,6 +413,16 @@ export abstract class Agent {
     this.mcpServerConfigs = config.mcpServers;
     this.subAgentsDir = config.subAgentsDir;
     this.skillsDir = config.skillsDir;
+
+    // Resolve sub-agent LLM:
+    // 1. Explicit `subAgentLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forSubAgent()
+    // 3. Fallback → sub-agents share the main `llm`
+    if (config.subAgentLLM) {
+      this.subAgentLLM = config.subAgentLLM;
+    } else if (config.llm instanceof ModelRouter) {
+      this.subAgentLLM = config.llm.forSubAgent();
+    }
 
     // Token budget — session-level cost control
     if (config.tokenBudgetConfig) {
@@ -1018,7 +1052,7 @@ export abstract class Agent {
     if (this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
       this.subAgentManager.setLogger(this.logger);
-      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir);
+      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir, undefined, undefined, this.subAgentLLM);
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 
       // Register sub-agent tools into the tool registry
@@ -1095,6 +1129,32 @@ export abstract class Agent {
    * @param toolName The name of the tool that was executed.
    * @param result   The structured ToolResult returned by ToolRegistry.execute().
    */
+  /**
+   * Capture the LLM's reasoning as error analysis for any active tool error traces.
+   *
+   * Call this after parsing the LLM's `thought` from each response. If any tools
+   * have an open failure chain (active trace), the thought is recorded as the
+   * LLM's analysis of what went wrong and how to proceed.
+   *
+   * This feeds the error→analysis→rule→prevention pipeline:
+   *  1. Tool fails     → recordFailure() creates an active trace
+   *  2. LLM sees error → its next thought IS the analysis
+   *  3. Tool recovers  → recordRecovery() auto-extracts a rule from the analysis
+   *  4. Rules injected → buildRulesPrompt() includes them in the system prompt
+   *
+   * @param thought The LLM's reasoning (from parsed.thought).
+   */
+  protected captureErrorAnalysis(thought: string): void {
+    if (!thought) return;
+    const tracker = this.toolRegistry.getErrorTracker();
+    if (!tracker) return;
+
+    const activeTraces = tracker.getActiveTraces();
+    for (const { traceId } of activeTraces) {
+      tracker.recordAnalysis(traceId, thought);
+    }
+  }
+
   /**
    * Generate a markdown report of all recorded tool error traces.
    */

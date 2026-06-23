@@ -111,6 +111,10 @@ export type { FallbackProviderConfig } from "./llm/fallback-provider";
 export { RateLimitedProvider } from "./llm/rate-limiter";
 export type { RateLimitedProviderConfig } from "./llm/rate-limiter";
 
+// LLM — Model Router
+export { ModelRouter } from "./llm/model-router";
+export type { ModelRouterConfig, ModelRoute } from "./llm/model-router";
+
 // Context
 export { ContextManager } from "./context/context-manager";
 export type { ContextConfig, ContextState } from "./context/types";

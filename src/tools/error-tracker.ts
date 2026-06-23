@@ -323,6 +323,23 @@ export class ToolErrorTracker {
   }
 
   /**
+   * Get all currently active (unresolved) traces.
+   *
+   * Returns an array of {toolName, traceId} pairs so callers can iterate
+   * over all tools that have an open failure chain and attach LLM analysis.
+   */
+  getActiveTraces(): Array<{toolName: string; traceId: string}> {
+    const result: Array<{toolName: string; traceId: string}> = [];
+    for (const [toolName, traceId] of this.activeTraceByTool) {
+      const trace = this.traces.get(traceId);
+      if (trace && !trace.resolved) {
+        result.push({ toolName, traceId });
+      }
+    }
+    return result;
+  }
+
+  /**
    * Get the total number of traces recorded.
    */
   get traceCount(): number {

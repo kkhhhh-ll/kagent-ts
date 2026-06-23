@@ -6,12 +6,13 @@
 
 - **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）
 - **多 LLM 后端** — 支持 OpenAI 和 Anthropic，通过 `createLLMProvider()` 工厂函数自动检测后端类型
+- **模型路由** — `ModelRouter` 按任务类型路由到不同模型：主循环 → 主力模型，子 Agent → 轻量模型，反思 → 独立模型，每条路由内置灾备链
 - **Anthropic Prompt Caching** — 支持对系统提示词启用 Anthropic 的 ephemeral 缓存，降低 token 成本
 - **网络韧性** — 自动重试（指数退避 + 抖动），网络错误分类，`LLMNetworkError` 携带 `cause` 字段
 - **备选模型切换** — `FallbackProvider` 在主模型网络异常时自动切换到备选 LLM
 - **调用频率控制** — `RateLimitedProvider` 基于滑动窗口限制每分钟最大 LLM 调用次数
 - **Token 预算** — 会话级别的 Token 消耗追踪与硬上限控制
-- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链
+- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链（失败→LLM分析→规则提取→预防）
 - **工具输出截断** — 超大工具输出自动落盘（`.kagent-context/`），保留摘要 + 按需读取
 - **工具过滤器** — 白名单/黑名单/正则匹配，灵活控制子 Agent 可用工具集
 - **Human-in-the-Loop** — 危险工具（`requireApproval: true`）执行前回调审批，安全默认拒绝
@@ -24,7 +25,7 @@
 - **子 Agent 调度** — 定义 `AGENT.md`，主 Agent 通过 `spawn_subagent` 工具异步派发任务
 - **长期记忆** — 基于文件的持久化记忆系统（`MEMORY.md` 索引 + 独立 markdown 文件）
 - **项目规则** — 用户自定义规则文件（`RULES.md`），始终注入系统提示词
-- **反思 & 错题本** — `ReflectionAgent` 执行后自检 + `ErrorNotebook` 持久化错误记录，供后续参考
+- **反思 & 错题本** — `ReflectionAgent` 执行后自检 + `ErrorNotebook` 持久化错误记录，支持独立模型审查
 - **结构化输出** — LLM 以 JSON 格式返回思考与答案，解析可靠、无自由文本歧义
 - **执行追踪** — `TraceLogger` 记录 LLM 调用、工具执行、思考过程的完整事件时间线
 - **内置工具** — `ReadFile`、`WriteFile`、`EditFile`、`GrepSearch`、`GlobSearch`、`Bash`、`WebFetch` 等
@@ -91,6 +92,7 @@ src/
 │   ├── openai-provider.ts # OpenAI 实现（含重试）
 │   ├── anthropic-provider.ts # Anthropic 实现（含 prompt caching）
 │   ├── factory.ts         # createLLMProvider 工厂函数
+│   ├── model-router.ts    # 模型路由器（按任务类型分发）
 │   ├── fallback-provider.ts # 备选模型自动切换
 │   ├── rate-limiter.ts    # 滑动窗口频率控制
 │   ├── token-budget.ts    # 会话级 Token 预算
@@ -258,6 +260,47 @@ const llm = new RateLimitedProvider({
 });
 ```
 
+### 模型路由（ModelRouter）
+
+按任务类型将 LLM 调用路由到不同模型，避免所有决策都压在主力模型上：
+
+```typescript
+import { ModelRouter, OpenAIProvider, AnthropicProvider } from "kagent-ts";
+
+const router = new ModelRouter({
+  // 主力模型 — 复杂推理
+  main: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),
+
+  // 子 Agent — 降本用轻量模型
+  subAgent: new OpenAIProvider({ apiKey: "...", model: "gpt-4o-mini" }),
+
+  // 反思 QA — 换独立模型，避免"自审自"
+  reflection: new AnthropicProvider({ apiKey: "...", model: "claude-haiku-4-5-20251001" }),
+
+  // 轻量任务 — 记忆操作、错误列表等
+  lightweight: new OpenAIProvider({ apiKey: "...", model: "gpt-4o-mini" }),
+
+  // 共享灾备链 — 每条路由自动继承
+  fallbacks: [new AnthropicProvider({ apiKey: "...", model: "claude-sonnet-4-6" })],
+});
+
+// 直接当 LLMProvider 用 — Agent 自动检测并提取各路由
+const agent = new ReActAgent({
+  llm: router,                   // 主循环自动用 gpt-4o
+  subAgentsDir: "./subagents",   // 子 Agent 自动用 gpt-4o-mini
+});
+
+// 反思钩子 — 显式指定独立模型
+const hook = createReflectionHook({
+  llm: router.forReflection(),   // haiku 独立审查
+  notebook: errorNotebook,
+});
+```
+
+**路由优先级**：`forSubAgent()` / `forReflection()` / `forLightweight()` 各自返回配置的模型，未配置时回退到 `main`。每条路由自动包裹灾备链（`fallbacks`）。
+
+**Agent 自动检测**：当 `llm` 是 `ModelRouter` 时，Agent 构造器自动调用 `router.forSubAgent()` 为子 Agent 分配模型。也可通过 `subAgentLLM` 显式覆盖。
+
 ### Token 预算
 
 会话级别的 Token 消耗控制，超出预算自动停止 LLM 调用：
@@ -300,11 +343,36 @@ const result = await registry.execute("calculator", { expression: "2+2" });
 
 ### 工具错误追踪
 
-记录完整的工具失败链，并调用 LLM 分析根因：
+记录完整的工具失败生命周期，自动捕获 LLM 分析并提取预防规则：
+
+```text
+工具执行失败 → recordFailure() 创建跟踪链
+    ↓
+LLM 看到错误 → thought 自动捕获为 recordAnalysis()
+    ↓
+工具恢复成功 → recordRecovery() 标记解决 + extractRuleFromTrace() 提取规则
+    ↓
+规则注入 → buildRulesPrompt() 注入 system prompt，防止下次再犯
+```
 
 ```typescript
+// 启用错误追踪
+import { ToolErrorTracker } from "kagent-ts";
+
+const tracker = new ToolErrorTracker({ storageDir: ".error-traces" });
+const registry = new ToolRegistry(2, tracker);
+
+// 或通过 Agent 配置
+const agent = new ReActAgent({
+  llm,
+  toolRegistry: registry,
+});
+
+// 生成 Markdown 报告（含完整失败链 + LLM 分析 + 规则）
 const report = agent.generateErrorReport();
-// 生成结构化的 Markdown 报告，包含所有工具失败记录及 LLM 根因分析。
+
+// LLM 也可通过内置工具查询错误记录
+// → 调用 list_errors 工具，过滤特定工具或只看未解决错误
 ```
 
 ### 工具输出截断
@@ -595,11 +663,26 @@ skills: []
 ### 使用子 Agent
 
 ```typescript
+import { ReActAgent, ModelRouter, OpenAIProvider } from "kagent-ts";
+
+// 模型路由：子 Agent 自动使用轻量模型降本
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o" }),
+  subAgent: new OpenAIProvider({ model: "gpt-4o-mini" }),
+});
+
 const agent = new ReActAgent({
-  llm,
+  llm: router,                  // 主 Agent 用 gpt-4o，子 Agent 自动用 gpt-4o-mini
   tools: [myTools],
   subAgentsDir: "./subagents",
   skillsDir: "./skills",
+});
+
+// 也可用 subAgentLLM 显式覆盖（优先级高于 ModelRouter）
+const agent2 = new ReActAgent({
+  llm: new OpenAIProvider({ model: "gpt-4o" }),
+  subAgentLLM: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
+  subAgentsDir: "./subagents",
 });
 
 // 主 Agent 会自动注册 spawn_subagent 和 list_subagents 工具
@@ -678,12 +761,21 @@ const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
 ### 生命周期钩子
 
 ```typescript
-import { createReflectionHook } from "kagent-ts";
+import { createReflectionHook, ModelRouter } from "kagent-ts";
 
-const hook = createReflectionHook({ llm, notebook: errorNotebook });
+// 使用 ModelRouter 时，反思可指定独立模型避免"自审自"
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o" }),
+  reflection: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
+});
+
+const hook = createReflectionHook({
+  llm: router.forReflection(),  // 独立模型审查
+  notebook: errorNotebook,
+});
 
 const agent = new ReActAgent({
-  llm,
+  llm: router,
   tools: [myTool],
   hooks: [hook],  // 每次 run() 结束后自动触发反思
 });

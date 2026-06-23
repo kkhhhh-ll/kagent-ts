@@ -39,6 +39,14 @@ export class SubAgentManager {
   /** Shared LLM provider injected by the main agent. */
   private llmProvider?: LLMProvider;
 
+  /**
+   * Optional LLM provider for sub-agents.
+   * When set, sub-agents use this instead of `llmProvider`.
+   * Enables model routing — use a different (e.g. cheaper) model for
+   * sub-agent tasks while keeping the main model for complex reasoning.
+   */
+  private subAgentLLM?: LLMProvider;
+
   /** Reference to the main agent's ToolRegistry for tool lookup. */
   private toolRegistry?: ToolRegistry;
 
@@ -104,6 +112,9 @@ export class SubAgentManager {
    * @param defaultFilter Optional ToolFilter applied to all sub-agents.
    *                      Use this to globally deny dangerous tools
    *                      (e.g. `denylist("spawn_subagent")`).
+   * @param subAgentLLM   Optional LLM provider for sub-agents.
+   *                      When set, sub-agents use this instead of the main
+   *                      `llmProvider`. Enables model routing.
    */
   bind(
     llmProvider: LLMProvider,
@@ -112,6 +123,7 @@ export class SubAgentManager {
     skillsDir?: string,
     timeoutMs?: number,
     defaultFilter?: ToolFilter,
+    subAgentLLM?: LLMProvider,
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
@@ -119,6 +131,7 @@ export class SubAgentManager {
     this.skillsDir = skillsDir;
     if (timeoutMs !== undefined) this.timeoutMs = timeoutMs;
     this.defaultFilter = defaultFilter;
+    this.subAgentLLM = subAgentLLM;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -469,8 +482,12 @@ export class SubAgentManager {
     // Build system prompt: sub-agent definition prompt + active skill content
     const systemPrompt = definition.systemPrompt;
 
+    // Select the LLM provider for this sub-agent:
+    // subAgentLLM (from AgentConfig) takes priority over the main model.
+    const effectiveLLM = this.subAgentLLM ?? this.llmProvider!;
+
     return new ReActAgent({
-      llm: this.llmProvider!,
+      llm: effectiveLLM,
       systemPrompt,
       toolRegistry,
       skillManager,

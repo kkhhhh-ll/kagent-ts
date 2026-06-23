@@ -204,6 +204,11 @@ export class PlanSolveAgent extends Agent {
 
       const parsed = parsePlanSolveResponse(response.content);
 
+      // Capture LLM analysis of any active tool error traces
+      if (parsed.thought) {
+        this.captureErrorAnalysis(parsed.thought);
+      }
+
       // Create assistant message from the response
       const assistantMessage = Message.assistant(
         response.content,
