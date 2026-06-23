@@ -605,6 +605,19 @@ export abstract class Agent {
   }
 
   /**
+   * Re-read the MEMORY.md index from disk if it was manually edited
+   * between runs. The index is a lightweight list of memory names +
+   * descriptions — full content is loaded on demand via the recall tool.
+   */
+  protected reloadMemoryIfChanged(): boolean {
+    if (this.memoryManager.reloadIfChanged()) {
+      this.rebuildSystemPrompt();
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Incrementally connect to MCP servers that were added to the config
    * since the last run. Already-connected servers are left untouched.
    */
@@ -638,6 +651,7 @@ export abstract class Agent {
     this.reloadPreferencesIfChanged();  // rebuilds internally if changed
     const rulesChanged = this.projectRules.reloadIfChanged();
     this.reloadSkillsFromDirectory();   // rebuilds internally if changed
+    this.reloadMemoryIfChanged();       // rebuilds internally if changed
 
     if (rulesChanged) {
       this.rebuildSystemPrompt();

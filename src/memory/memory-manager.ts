@@ -64,6 +64,7 @@ export class MemoryManager {
   private index: IndexEntry[] = [];
   private storageDir: string;
   private indexFile: string;
+  private lastLoadedMtime: number = 0;
 
   constructor(storageDir?: string) {
     this.storageDir = path.resolve(storageDir ?? ".memory");
@@ -184,6 +185,28 @@ export class MemoryManager {
     );
   }
 
+  /**
+   * Re-read the MEMORY.md index from disk if it was modified since the
+   * last load. Returns true when a reload occurred.
+   *
+   * Individual memory files are NOT reloaded — the index is lightweight,
+   * and full memory content is fetched on demand via the `recall` tool.
+   */
+  reloadIfChanged(): boolean {
+    try {
+      const stat = fs.statSync(this.indexFile);
+      if (stat.mtimeMs === this.lastLoadedMtime) return false;
+      this.lastLoadedMtime = stat.mtimeMs;
+      const raw = fs.readFileSync(this.indexFile, "utf-8");
+      this.index = this.parseIndex(raw);
+      return true;
+    } catch {
+      this.lastLoadedMtime = 0;
+      this.index = [];
+      return true; // file was deleted — prompt needs updating
+    }
+  }
+
   // ─── Persistence ────────────────────────────────────────────────────────
 
   private memoryPath(name: string): string {
@@ -252,9 +275,12 @@ export class MemoryManager {
 
   private loadIndex(): void {
     try {
+      const stat = fs.statSync(this.indexFile);
+      this.lastLoadedMtime = stat.mtimeMs;
       const raw = fs.readFileSync(this.indexFile, "utf-8");
       this.index = this.parseIndex(raw);
     } catch {
+      this.lastLoadedMtime = 0;
       this.index = [];
     }
   }
