@@ -1,45 +1,61 @@
 # KAgent-TS
 
-A TypeScript agent framework for building LLM-powered applications with structured agent loops, tool management, session persistence, and user preference injection.
+一个 TypeScript Agent 框架，提供结构化的 Agent 循环范式、工具管理、会话持久化、子 Agent 调度、反思机制等多方面的能力，帮助开发者快速构建基于 LLM 的应用。
 
-## Features
+## 特性
 
-- **Agent Loop Paradigms** — Base `Agent` + `ReActAgent` (Thought → Action → Observation → Final) + `PlanSolveAgent` (Plan → Resolve → Revise → Final)
-- **LLM Integration** — OpenAI provider with automatic retry (exponential backoff + jitter) and network error classification
-- **Tool System** — `ToolRegistry` with circuit breaker (automatic disable after threshold) and structured error tracking
-- **Context Management** — Automatic token tracking, threshold-based compression with sliding window
-- **Session Persistence** — Checkpoint-and-resume: auto-save on network error, graceful discard on abort (SIGINT)
-- **User Preferences** — Plain-text Markdown file (`key: value`), injected into system prompt, auto-reloaded on file change
-- **Skills** — Progressive disclosure: skills auto-detect from user input and load on demand
-- **Built-in Tools** — Read file, write file, edit file, grep search, glob search
+- **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）
+- **多 LLM 后端** — 支持 OpenAI 和 Anthropic，通过 `createLLMProvider()` 工厂函数自动检测后端类型
+- **Anthropic Prompt Caching** — 支持对系统提示词启用 Anthropic 的 ephemeral 缓存，降低 token 成本
+- **网络韧性** — 自动重试（指数退避 + 抖动），网络错误分类，`LLMNetworkError` 携带 `cause` 字段
+- **备选模型切换** — `FallbackProvider` 在主模型网络异常时自动切换到备选 LLM
+- **调用频率控制** — `RateLimitedProvider` 基于滑动窗口限制每分钟最大 LLM 调用次数
+- **Token 预算** — 会话级别的 Token 消耗追踪与硬上限控制
+- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链
+- **工具输出截断** — 超大工具输出自动落盘（`.kagent-context/`），保留摘要 + 按需读取
+- **工具过滤器** — 白名单/黑名单/正则匹配，灵活控制子 Agent 可用工具集
+- **Human-in-the-Loop** — 危险工具（`requireApproval: true`）执行前回调审批，安全默认拒绝
+- **渐进式上下文压缩** — 4 步渐进压缩（大输出截断→旧轮丢弃→过期结果清除→LLM 摘要压缩）
+- **会话持久化** — 检查点 & 恢复：自动保存，网络中断后可从断点续跑
+- **生命周期钩子** — `AgentHooks`：`onLLMStart` / `onLLMEnd` / `onToolStart` / `onToolEnd` / `onThought` / `onFinish` 等
+- **用户偏好** — 纯文本 Markdown 文件（`key: value`），注入系统提示词，文件变化自动重载
+- **Skills 渐进式技能** — 按需加载：从 SKILL.md 自动注册技能，匹配关键词自动激活
+- **MCP 协议支持** — 接入 Model Context Protocol 服务端，动态发现并注册外部工具
+- **子 Agent 调度** — 定义 `AGENT.md`，主 Agent 通过 `spawn_subagent` 工具异步派发任务
+- **长期记忆** — 基于文件的持久化记忆系统（`MEMORY.md` 索引 + 独立 markdown 文件）
+- **项目规则** — 用户自定义规则文件（`RULES.md`），始终注入系统提示词
+- **反思 & 错题本** — `ReflectionAgent` 执行后自检 + `ErrorNotebook` 持久化错误记录，供后续参考
+- **结构化输出** — LLM 以 JSON 格式返回思考与答案，解析可靠、无自由文本歧义
+- **执行追踪** — `TraceLogger` 记录 LLM 调用、工具执行、思考过程的完整事件时间线
+- **内置工具** — `ReadFile`、`WriteFile`、`EditFile`、`GrepSearch`、`GlobSearch`、`Bash`、`WebFetch` 等
 
-## Installation
+## 安装
 
 ```bash
 npm install kagent-ts
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
-import { ReActAgent, OpenAIProvider, Tool } from "kagent-ts";
+import { ReActAgent, createLLMProvider, Tool } from "kagent-ts";
 
-// 1. Create an LLM provider
-const llm = new OpenAIProvider({
+// 1. 创建 LLM Provider（自动检测 OpenAI / Anthropic）
+const llm = createLLMProvider({
   apiKey: process.env.OPENAI_API_KEY!,
   model: "gpt-4o",
 });
 
-// 2. Define a tool
+// 2. 定义一个工具
 const calculator: Tool = {
   name: "calculator",
-  description: "Perform a mathematical calculation",
+  description: "执行数学运算",
   parameters: {
     type: "object",
     properties: {
       expression: {
         type: "string",
-        description: "The mathematical expression to evaluate",
+        description: "要计算的数学表达式",
       },
     },
     required: ["expression"],
@@ -50,37 +66,65 @@ const calculator: Tool = {
   },
 };
 
-// 3. Create the agent
+// 3. 创建 Agent
 const agent = new ReActAgent({ llm, tools: [calculator] });
 
-// 4. Run
-const response = await agent.run("What is 25 * 4 + 10?");
+// 4. 运行
+const response = await agent.run("25 * 4 + 10 是多少？");
 console.log(response);
 ```
 
-## Architecture
+## 项目架构
 
 ```
 src/
-├── core/                 # Agent classes: Agent, ReActAgent, PlanSolveAgent
-├── llm/                  # LLM provider interface + OpenAI implementation
-├── messages/             # Message types and builder class
-├── context/              # Context window management (token tracking)
-├── compression/          # Compression strategies (sliding window)
-├── session/              # Session checkpoint persistence & resume
-├── preferences/          # User preferences (Markdown file, auto-reload)
-├── skills/               # Progressive disclosure skill system
-├── tools/                # Tool registry, circuit breaker, error tracker
-│   └── builtin/          # Built-in file tools (read, write, edit, grep, glob)
-├── utils/                # Token counting utilities
-└── index.ts              # Public API exports
+├── core/                  # Agent 基类、ReActAgent、PlanSolveAgent
+│   ├── agent.ts           # 抽象基类（共享基础设施）
+│   ├── react-agent.ts     # 思考→行动→观察 循环
+│   ├── plan-solve-agent.ts# 规划→执行→修订 循环
+│   ├── types.ts           # Tool 等核心类型
+│   ├── hooks.ts           # 生命周期钩子接口
+│   ├── response-schema.ts # 结构化 JSON 输出解析
+│   └── system-prompts.ts  # 系统提示词片段
+├── llm/                   # LLM Provider 接口与实现
+│   ├── interface.ts       # LLMProvider 通用接口
+│   ├── openai-provider.ts # OpenAI 实现（含重试）
+│   ├── anthropic-provider.ts # Anthropic 实现（含 prompt caching）
+│   ├── factory.ts         # createLLMProvider 工厂函数
+│   ├── fallback-provider.ts # 备选模型自动切换
+│   ├── rate-limiter.ts    # 滑动窗口频率控制
+│   ├── token-budget.ts    # 会话级 Token 预算
+│   ├── retry.ts           # 通用重试逻辑
+│   └── errors.ts          # 网络错误分类
+├── messages/              # 消息类型与构造器
+├── context/               # 上下文窗口管理（Token 追踪）
+├── compression/           # 渐进式 4 步压缩策略
+├── session/               # 会话检查点持久化 & 恢复
+├── preferences/           # 用户偏好（Markdown 文件，自动重载）
+├── skills/                # 渐进式 Skill 系统（SKILL.md）
+├── subagent/              # 子 Agent 定义、加载、调度
+├── mcp/                   # MCP 协议客户端管理
+├── memory/                # 长期记忆（MEMORY.md + 独立文件）
+├── rules/                 # 项目规则加载
+├── reflection/            # 反思 Agent + 错题本（ErrorNotebook）
+├── tools/                 # 工具注册表、熔断器、错误追踪
+│   ├── builtin/           # 内置工具集
+│   ├── circuit-breaker.ts # 熔断器
+│   ├── tool-registry.ts   # 工具注册表
+│   ├── error-tracker.ts   # 工具错误链追踪
+│   ├── tool-output-truncator.ts # 大输出截断落盘
+│   └── tool-filter.ts     # 工具过滤器
+├── trace/                 # 执行追踪事件日志
+├── logging/               # 结构化日志接口
+├── utils/                 # Token 计数等工具函数
+└── index.ts               # 公共 API 导出
 ```
 
-## Agent Paradigms
+## Agent 循环范式
 
 ### ReActAgent
 
-The classic Thought → Action → Observation loop with tool-call support:
+经典的思考 → 行动 → 观察 循环，带有工具调用支持：
 
 ```typescript
 import { ReActAgent } from "kagent-ts";
@@ -88,15 +132,16 @@ import { ReActAgent } from "kagent-ts";
 const agent = new ReActAgent({
   llm,
   tools: [myTool],
-  systemPrompt: "You are a helpful assistant.",
+  systemPrompt: "你是一个有用的助手。",
   maxIterations: 10,
 });
-const response = await agent.run("Search for the latest news.");
+
+const response = await agent.run("搜索最新的新闻。");
 ```
 
 ### PlanSolveAgent
 
-Plan → Resolve → Revise loop for complex multi-step tasks:
+规划 → 执行 → 修订 循环，适合复杂的多步骤任务：
 
 ```typescript
 import { PlanSolveAgent } from "kagent-ts";
@@ -106,22 +151,48 @@ const agent = new PlanSolveAgent({
   tools: [searchTool, calculatorTool],
   maxIterations: 15,
   maxPlanSteps: 12,
-  replanThreshold: 2,  // auto-suggest replan after 2 consecutive failures
+  replanThreshold: 2,   // 连续失败 2 次后自动建议调整计划
 });
-const response = await agent.run("Analyze Q3 financial data and generate a report.");
+
+const response = await agent.run("分析 Q3 财务数据并生成报告。");
 ```
 
-The agent will:
-1. Create a detailed plan
-2. Execute each step with tools
-3. Revise the plan mid-execution if obstacles occur
-4. Deliver the final answer
+Agent 将会：
 
-## LLM & Network Resilience
+1. 制定详细计划
+2. 使用工具逐步执行
+3. 遇到障碍时中途修订计划
+4. 输出最终答案
 
-The OpenAI provider includes built-in retry logic:
+## LLM 后端
+
+### 工厂函数（推荐）
+
+使用 `createLLMProvider()` 自动检测后端类型：
 
 ```typescript
+import { createLLMProvider } from "kagent-ts";
+
+// 自动检测：baseURL 含 "anthropic" → AnthropicProvider，否则 → OpenAIProvider
+const llm = createLLMProvider({
+  apiKey: process.env.API_KEY!,
+  model: "claude-sonnet-4-6",
+  baseURL: "https://api.anthropic.com",
+});
+
+// 显式指定后端
+const llm2 = createLLMProvider({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: "gpt-4o",
+  provider: "openai",
+});
+```
+
+### OpenAI Provider
+
+```typescript
+import { OpenAIProvider } from "kagent-ts";
+
 const llm = new OpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY!,
   model: "gpt-4o",
@@ -133,64 +204,192 @@ const llm = new OpenAIProvider({
 });
 ```
 
-- **Retryable errors**: timeout, connection refused/reset, DNS failure, HTTP 429 (rate limit), HTTP 5xx (server error)
-- **Permanent errors**: HTTP 401 (auth), HTTP 400 (bad request), abort signal — propagate immediately
-- On retry exhaustion → throws `LLMNetworkError` with `cause` field for agent-level handling
+- **可重试错误**：超时、连接拒绝/重置、DNS 失败、HTTP 429（限流）、HTTP 5xx（服务端错误）
+- **立即传播错误**：HTTP 401（鉴权）、HTTP 400（请求错误）、abort 信号
+- 重试耗尽后抛出 `LLMNetworkError`，`cause` 字段标识具体原因
 
-## Tool System
+### Anthropic Provider
 
-### ToolRegistry + Circuit Breaker
+完整的 Anthropic SDK 集成，支持消息格式自动转换和 Prompt Caching：
 
-Tools can be registered with automatic failure detection and circuit breaking:
+```typescript
+import { AnthropicProvider } from "kagent-ts";
+
+const llm = new AnthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+  model: "claude-sonnet-4-6",
+  cacheSystemPrompt: true,  // 启用 Prompt Caching（适合静态系统提示词）
+});
+```
+
+- 自动将 OpenAI 兼容的 `MessageData[]` 格式转换为 Anthropic 原生格式
+- 支持 Claude 4.x 系列模型的 extended thinking（thinking 块合并到 content）
+- 暂不支持流式中断重连（由 Agent 外层循环处理）
+
+### 备选模型切换（FallbackProvider）
+
+主模型网络异常时自动切换到备选模型：
+
+```typescript
+import { FallbackProvider, OpenAIProvider, AnthropicProvider } from "kagent-ts";
+
+const llm = new FallbackProvider({
+  primary: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),
+  fallbacks: [
+    new AnthropicProvider({ apiKey: "...", model: "claude-haiku-4-5-20251001" }),
+    new OpenAIProvider({ apiKey: "...", model: "gpt-4o-mini" }),
+  ],
+});
+```
+
+- 按顺序尝试，首个成功即返回
+- 非网络错误（鉴权、请求格式）立即传播，不切换
+
+### 调用频率控制（RateLimitedProvider）
+
+基于滑动窗口限制每分钟最大调用次数，防止触发服务端限流（HTTP 429）：
+
+```typescript
+import { RateLimitedProvider } from "kagent-ts";
+
+const llm = new RateLimitedProvider({
+  provider: new OpenAIProvider({ ... }),
+  maxCallsPerMinute: 500,
+});
+```
+
+### Token 预算
+
+会话级别的 Token 消耗控制，超出预算自动停止 LLM 调用：
+
+```typescript
+const agent = new ReActAgent({
+  llm,
+  tools: [myTool],
+  tokenBudgetConfig: {
+    maxTotalTokens: 200_000,     // 会话总 Token 上限
+    warnAtPercent: 80,           // 80% 时警告
+  },
+});
+
+// 查询当前消耗
+const cost = agent.getSessionCost();
+console.log(cost);  // { totalTokens: 150000, callCount: 12, ... }
+```
+
+## 工具系统
+
+### ToolRegistry + Circuit Breaker（熔断器）
+
+工具注册时自动接入失败检测与熔断保护：
 
 ```typescript
 import { ToolRegistry } from "kagent-ts";
 
-const registry = new ToolRegistry({
-  breakerConfig: {
-    failureThreshold: 5,       // disable after 5 consecutive failures
-    cooldownMs: 60000,         // re-enable after 60s
-    halfOpenMaxRetries: 2,
-  },
-});
+const registry = new ToolRegistry(
+  2,  // 最多重试 2 次（共 3 次尝试）
+  errorTracker,
+  truncator,
+);
 
 registry.register(calculatorTool);
 const result = await registry.execute("calculator", { expression: "2+2" });
 ```
 
-States: `CLOSED` (normal) → `OPEN` (disabled) → `HALF_OPEN` (probing) → `CLOSED` (recovered).
+熔断状态机：`CLOSED`（正常）→ `OPEN`（禁用）→ `HALF_OPEN`（试探）→ `CLOSED`（恢复）。
 
-### Error Tracking
+### 工具错误追踪
 
-Track full tool failure chains with LLM analysis:
+记录完整的工具失败链，并调用 LLM 分析根因：
 
 ```typescript
 const report = agent.generateErrorReport();
-// Generates a structured markdown report of all tool failures,
-// including LLM analysis of root cause and recovery steps.
+// 生成结构化的 Markdown 报告，包含所有工具失败记录及 LLM 根因分析。
 ```
 
-### Built-in Tools
+### 工具输出截断
+
+超大工具输出自动截断落盘（`.kagent-context/`），上下文保留 2KB 摘要，完整内容按需读取：
 
 ```typescript
-import { registerAllBuiltinTools, ReadFileTool, WriteFileTool } from "kagent-ts";
+const agent = new ReActAgent({
+  llm,
+  tools: [myTool],
+  toolOutputMaxBytes: 50 * 1024,  // 超过 50KB 自动截断
+});
+```
 
-// Register individually
+### 工具过滤器
+
+限制子 Agent 可使用的工具范围：
+
+```typescript
+import { allowlist, denylist, pattern, filterTools } from "kagent-ts";
+
+// 白名单：只允许特定工具
+const filter = allowlist(["read_file", "grep_search"]);
+
+// 黑名单：排除危险工具
+const filter2 = denylist(["write_file", "bash"]);
+
+// 正则匹配
+const filter3 = pattern(/^(read|grep|glob)/);
+```
+
+### Human-in-the-Loop 审批
+
+标记 `requireApproval: true` 的工具在执行前会触发审批回调：
+
+```typescript
+const dangerousTool: Tool = {
+  name: "delete_file",
+  description: "删除文件",
+  requireApproval: true,  // 需要人工审批
+  // ...
+};
+
+const agent = new ReActAgent({
+  llm,
+  tools: [dangerousTool],
+  onToolApproval: async (toolName, args) => {
+    // 展示给用户，等待确认
+    return confirm(`确认执行 ${toolName}？参数：${JSON.stringify(args)}`);
+  },
+});
+```
+
+未配置 `onToolApproval` 时，所有需审批的工具默认被**拒绝**（安全默认值）。
+
+### 内置工具
+
+```typescript
+import { registerAllBuiltinTools } from "kagent-ts";
+
 const agent = new ReActAgent({
   llm,
   tools: [...registerAllBuiltinTools()],
 });
-
-// Or add at runtime
-agent.addTool(new ReadFileTool());
-agent.addTool(new WriteFileTool());
 ```
 
-Available: `ReadFileTool`, `WriteFileTool`, `EditFileTool`, `GrepSearchTool`, `GlobSearchTool`.
+| 工具 | 说明 |
+| ---- | ---- |
+| `read_file` | 读取文件内容 |
+| `write_file` | 写入文件 |
+| `edit_file` | 精确字符串替换编辑 |
+| `grep_search` | 正则内容搜索（基于 ripgrep） |
+| `glob_search` | 文件模式匹配 |
+| `bash` | 执行 Shell 命令 |
+| `web_fetch` | 获取 URL 内容并转为 Markdown |
+| `skill` | LLM 驱动的 Skill 激活 |
+| `remember` | 写入长期记忆 |
+| `recall` | 检索长期记忆 |
+| `list_subagents` | 列出可用子 Agent |
+| `spawn_subagent` | 派发子 Agent 任务 |
+| `list_errors` | 列出工具错误追踪记录 |
 
-## Session Persistence & Network Recovery
+## 会话持久化
 
-The agent can checkpoint its state mid-run and resume after disconnection:
+Agent 可在运行中保存检查点，断网后恢复：
 
 ```typescript
 const agent = new ReActAgent({
@@ -200,40 +399,78 @@ const agent = new ReActAgent({
   enableCheckpointing: true,
 });
 
-// Normal execution — auto-saves after each LLM+tools cycle.
-// On network error: saves "interrupted" checkpoint, returns resume instructions.
-const result = await agent.run("Do something...");
+// 正常执行 — 每轮 LLM+tools 后自动保存检查点
+const result = await agent.run("做某某任务...");
 
-// After network is restored:
-const resumed = await agent.resume("my-session", "continue");
+// 网络中断时：保存 "interrupted" 检查点并返回恢复指引
+// 网络恢复后：
+const resumed = await agent.resume("my-session", "继续之前的任务");
 ```
 
-When the user aborts (SIGINT / `agent.cancel()`), the checkpoint is discarded — no stale state persists.
+用户主动取消（SIGINT / `agent.cancel()`）时检查点会被丢弃，不残留过期状态。
 
-## User Preferences
+### 会话生命周期
 
-Preferences are stored as a Markdown file (`.kagent/preferences.md` by default) and injected into the system prompt as a `=== User Preferences ===` section. File changes are auto-detected each loop iteration.
+```typescript
+// 清空当前对话，保留系统提示词和配置
+agent.clearConversation();
+
+// 多轮对话续接（保留历史消息）
+const reply = await agent.chat("上一个结果能详细说明吗？");
+
+// 开启新话题（自动清除历史 + 重置 Token 预算）
+const reply2 = await agent.newTopic("帮我分析另一个问题");
+
+// 获取会话 Token 消耗
+const cost = agent.getSessionCost();
+
+// 完全重置到初始状态
+agent.reset();
+```
+
+## 上下文管理 & 渐进式压缩
+
+自动 Token 追踪 + 4 步渐进式压缩：
+
+```typescript
+import { ContextManager, ProgressiveCompressor } from "kagent-ts";
+
+const ctx = new ContextManager({
+  maxTokens: 128000,
+  compressionThresholdRatio: 0.75,  // 达到 75% 时触发压缩
+});
+
+// 4 步渐进压缩：
+// Step 1: 截断超大工具结果（>200KB → 保留 2KB，落盘）
+// Step 2: 丢弃 keepTurns 之前的旧对话轮次
+// Step 3: 清除过期的"读取型"工具结果（可重新执行获取）
+// Step 4: LLM 全对话摘要压缩（最终手段）
+```
+
+## 用户偏好
+
+偏好以 Markdown 文件（默认 `.kagent/preferences.md`）存储，注入到系统提示词中作为 `=== User Preferences ===` 段落。每次运行前自动检测文件变更。
 
 ```markdown
-# User Preferences
+# 用户偏好
 
-codeStyle: Use TypeScript with functional style. Prefer interfaces.
-language: Always respond in Chinese.
-forbidden: Never use `any` type. Avoid mutating function parameters.
+codeStyle: 使用 TypeScript 函数式风格，优先使用 interface。
+language: 始终使用中文回复。
+forbidden: 禁止使用 `any` 类型。避免修改函数参数。
 ```
 
 ```typescript
-// Via constructor
+// 通过构造函数设置
 const agent = new ReActAgent({
   llm,
   tools: [myTool],
   preferences: {
-    codeStyle: "Use TypeScript with functional style.",
-    language: "Always respond in Chinese.",
+    codeStyle: "使用 TypeScript 函数式风格。",
+    language: "始终使用中文回复。",
   },
 });
 
-// With file persistence
+// 文件持久化
 import { PreferenceManager } from "kagent-ts";
 
 const agent = new ReActAgent({
@@ -242,45 +479,24 @@ const agent = new ReActAgent({
   preferenceManager: new PreferenceManager(),
 });
 
-// Runtime CRUD (auto-persists if PreferenceManager configured)
-agent.setPreference("codeStyle", "Use TypeScript with functional style.");
-agent.getPreference("language");   // "Always respond in Chinese."
+// 运行时 CRUD（配置了 PreferenceManager 则自动持久化）
+agent.setPreference("codeStyle", "使用函数式风格。");
+agent.getPreference("language");   // "始终使用中文回复。"
 agent.removePreference("forbidden");
 agent.clearPreferences();
-
-// The LLM sees this in every system prompt:
-// === User Preferences ===
-//   - codeStyle: Use TypeScript with functional style.
-//   - language: Always respond in Chinese.
 ```
 
-### File Format
+## Skills（渐进式技能）
 
-`preferences.md` uses simple `key: value` lines. Lines starting with `#` are comments:
-
-```markdown
-# User Preferences
-
-codeStyle: Use TypeScript with functional style.
-replyLanguage: Always respond in Chinese.
-# This is a comment — ignored when loaded.
-```
-
-Manually edit the file while the agent is running — changes are auto-detected before the next LLM call.
-
-## Skills (Progressive Disclosure)
-
-Skills provide domain-specific knowledge and tools that load on demand. Skills are defined as file-based directories, making them easy to author and share.
-
-### Directory Structure
+Skills 以文件目录形式定义，提供领域知识和工具，按需加载：
 
 ```
 skills/
 ├── sql/
-│   ├── SKILL.md              # Frontmatter (metadata) + system prompt body
-│   ├── reference/            # Reference docs loaded on activation
+│   ├── SKILL.md              # Frontmatter（元数据）+ 系统提示词正文
+│   ├── reference/            # 激活时加载的参考文档
 │   │   └── cheatsheet.md
-│   └── scripts/              # Executable scripts registered as tools
+│   └── scripts/              # 作为工具注册的可执行脚本
 │       └── format_sql.sh
 ├── git/
 │   ├── SKILL.md
@@ -289,105 +505,276 @@ skills/
 └── ...
 ```
 
-### SKILL.md Format
+### SKILL.md 格式
 
 ```markdown
 ---
 name: sql
-description: SQL query writing and optimization
+description: SQL 查询编写与优化
 keywords: sql, query, database, select, join
 ---
 
-You are an expert in SQL. Write efficient queries, use appropriate indexes, and consider EXPLAIN plans.
+你是一位 SQL 专家。编写高效查询，合理使用索引，关注 EXPLAIN 计划。
 ```
 
-### Usage
-
-Point the agent to your `skills/` directory — skills are auto-discovered and lazily loaded:
+### 使用方式
 
 ```typescript
-import { ReActAgent, OpenAIProvider } from "kagent-ts";
-
 const agent = new ReActAgent({
-  llm: provider,
+  llm,
   tools: myTools,
-  skillsDir: "./skills",  // Auto-discover file-based skills
+  skillsDir: "./skills",  // 自动发现文件式 Skill
 });
 
-// Manual activation
+// 手动激活
 agent.activateSkill("sql");
 
-// Or rely on auto-detection: when user input contains matching
-// keywords (e.g., "write a SQL query"), the skill activates automatically.
-const response = await agent.run("Write a query to find top 10 customers by revenue.");
+// 或依赖自动检测：用户输入匹配关键词时自动激活
+const response = await agent.run("帮我写一个查询前10名客户的 SQL");
 ```
 
-### Skill Components
+### Skill 组成
 
-| Component | Location | Behavior |
-|-----------|----------|----------|
-| **Metadata** | SKILL.md frontmatter (`---`) | Registered on scan — name, description, keywords |
-| **System Prompt** | SKILL.md body | Loaded on activation — injected into the agent's system prompt |
-| **Reference Docs** | `reference/*.md`, `*.txt` | Appended to system prompt on activation, with `[Reference: filename]` headers |
-| **Scripts** | `scripts/*.sh`, `.py`, `.js`, `.bat` | Registered as executable `Tool` objects on activation, named `{skillName}_{scriptName}` |
+| 组件 | 位置 | 行为 |
+| ---- | ---- | ---- |
+| **元数据** | SKILL.md frontmatter (`---`) | 扫描时注册 — name、description、keywords |
+| **系统提示词** | SKILL.md 正文 | 激活时加载 — 注入 Agent 系统提示词 |
+| **参考文档** | `reference/*.md`、`*.txt` | 激活时追加到系统提示词，带 `[Reference: 文件名]` 标题 |
+| **脚本** | `scripts/*.sh`、`.py`、`.js`、`.bat` | 激活时注册为可执行 `Tool`，命名格式 `{skillName}_{scriptName}` |
 
-### Supported Script Types
+## MCP（Model Context Protocol）
 
-| Extension | Interpreter | Platform |
-|-----------|-------------|----------|
-| `.sh` | `bash` | Linux/macOS/WSL |
-| `.bat` / `.cmd` | `cmd.exe /c` | Windows |
-| `.ps1` | `powershell.exe -File` | Windows |
-| `.js` | `node` | Cross-platform |
-| `.py` | `python3` / `python` | Cross-platform |
-
-Each script becomes a Tool that accepts a single `args: string` parameter, passed as CLI arguments to the script.
-
-## Context Management
-
-Automatic token tracking with configurable thresholds:
+接入 MCP 服务端，动态发现并注册外部工具：
 
 ```typescript
-import { ContextManager } from "kagent-ts";
+const agent = new ReActAgent({
+  llm,
+  tools: myTools,
+  mcpServers: {
+    filesystem: {
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    },
+    weather: {
+      url: "http://localhost:3001/sse",
+    },
+  },
+});
+// 连接在 agent.run() 时异步建立
+// 工具自动注册，命名格式：{serverName}_{toolName}
+```
 
-const ctx = new ContextManager({
-  maxTokens: 128000,
-  compressionThresholdRatio: 0.75,  // compress at 75% capacity
-  compressionRatio: 0.5,            // remove 50% of messages on compress
+## 子 Agent 调度
+
+通过 `AGENT.md` 定义子 Agent，主 Agent 使用 `spawn_subagent` 工具异步派发任务：
+
+```
+subagents/
+├── code-reviewer/
+│   └── AGENT.md              # Frontmatter (name, description, tools, skills) + 系统提示词
+└── researcher/
+    └── AGENT.md
+```
+
+### AGENT.md 格式
+
+```markdown
+---
+name: code-reviewer
+description: 代码审查专家，检查代码质量和潜在 Bug
+tools: [read_file, grep_search, glob_search]
+skills: []
+---
+
+你是一位资深的代码审查专家。仔细审查代码，关注：
+1. 潜在的 Bug 和边界情况
+2. 性能优化机会
+3. 代码风格和可读性
+```
+
+### 使用子 Agent
+
+```typescript
+const agent = new ReActAgent({
+  llm,
+  tools: [myTools],
+  subAgentsDir: "./subagents",
+  skillsDir: "./skills",
+});
+
+// 主 Agent 会自动注册 spawn_subagent 和 list_subagents 工具
+// LLM 可以在推理过程中自主决定派发子 Agent 执行子任务
+```
+
+子 Agent 异步运行，结果在后续 ReAct 迭代中自动注入上下文。
+
+## 长期记忆
+
+基于文件的持久化记忆系统，跨会话保存：
+
+```typescript
+const agent = new ReActAgent({
+  llm,
+  tools: [myTools],
+  memoryDir: ".memory",
+});
+
+// LLM 可通过 remember 工具写入记忆
+// LLM 可通过 recall 工具检索记忆
+// 记忆以 MEMORY.md 索引 + 独立 markdown 文件存储
+```
+
+## 项目规则
+
+用户自定义规则文件，始终注入系统提示词，每次运行前自动检测变更：
+
+```markdown
+# RULES.md 示例
+- 始终使用 TypeScript strict 模式
+- 优先使用 interface 而非 type
+- 禁止使用 any 类型
+```
+
+```typescript
+const agent = new ReActAgent({
+  llm,
+  tools: [myTools],
+  rulesPath: "RULES.md",
 });
 ```
 
-## Compression
+## 反思 & 错题本
 
-Sliding window strategy keeps the most recent messages:
+### ReflectionAgent
+
+Agent 执行完毕后，`ReflectionAgent` 回顾完整会话，识别推理错误、工具误用、遗漏等问题：
 
 ```typescript
-import { SlidingWindowCompression } from "kagent-ts";
+import { ReflectionAgent, ErrorNotebook } from "kagent-ts";
 
-const compressor = new SlidingWindowCompression({
-  keepLastN: 20,
-  keepSystemMessages: true,
+const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
+const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
+
+const findings = await reflector.reflect({
+  userQuery: input,
+  finalAnswer: answer,
+  conversation: contextMessages,
+  errorTraces: errorTraces,
+  sessionId: "sess_123",
 });
-
-const result = compressor.compress(messages, systemPrompt);
-// result.messages — compressed list
-// result.removedCount — how many were removed
 ```
 
-## Message API
+### ErrorNotebook（错题本）
+
+持久化错误记录，供后续 Agent 运行参考，形成学习闭环：
+
+```typescript
+const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
+
+// 条目类别：reasoning_error | tool_misuse | missed_optimization |
+//           incomplete_answer | hallucination | context_mismanagement | other
+```
+
+### 生命周期钩子
+
+```typescript
+import { createReflectionHook } from "kagent-ts";
+
+const hook = createReflectionHook({ llm, notebook: errorNotebook });
+
+const agent = new ReActAgent({
+  llm,
+  tools: [myTool],
+  hooks: [hook],  // 每次 run() 结束后自动触发反思
+});
+```
+
+## 生命周期钩子（AgentHooks）
+
+观察 Agent 执行的各个环节：
+
+```typescript
+const hooks: AgentHooks = {
+  onLLMStart: (messages, tools) => { /* LLM 调用开始 */ },
+  onLLMEnd: (response) => { /* LLM 调用结束 */ },
+  onLLMError: (error) => { /* LLM 调用出错 */ },
+  onToolStart: (name, args) => { /* 工具开始执行 */ },
+  onToolEnd: (name, output) => { /* 工具执行成功 */ },
+  onToolError: (name, error) => { /* 工具执行失败 */ },
+  onThought: (thought) => { /* Agent 思考内容 */ },
+  onFinish: (answer) => { /* Agent 产生最终答案 */ },
+};
+
+const agent = new ReActAgent({
+  llm,
+  tools: [myTool],
+  hooks,  // 单个或数组
+});
+```
+
+## 执行追踪（TraceLogger）
+
+记录 Agent 执行过程的完整事件时间线：
+
+```typescript
+import { TraceLogger } from "kagent-ts";
+
+const traceLogger = new TraceLogger({ outputDir: ".kagent-traces" });
+
+// 事件类型：llm_start | llm_end | llm_error | tool_start | tool_end |
+//          tool_error | thought | plan_created | plan_revised | finish
+```
+
+## 结构化输出
+
+LLM 以结构化 JSON 格式返回思考内容和最终答案，解析可靠：
+
+```typescript
+import { parseReActResponse, parsePlanSolveResponse } from "kagent-ts";
+
+// ReAct 输出格式：
+// { "thought": "...", "answer": "..." }      ← 最终答案
+// { "thought": "..." }                        ← 中间思考（继续循环）
+
+// PlanSolve 输出格式：
+// { "phase": "plan", "plan": [...] }
+// { "phase": "resolve", "current_step": "...", "done": false }
+// { "phase": "resolve", "current_step": "...", "done": true, "final_answer": "..." }
+```
+
+## 消息 API
 
 ```typescript
 import { Message } from "kagent-ts";
 
-Message.user("Hello");
-Message.system("You are a helpful assistant.");
-Message.assistant("Hi there!");
-Message.tool("Result", "call_123", "calculator");
+Message.user("你好");
+Message.system("你是一个有用的助手。");
+Message.assistant("你好！有什么可以帮你的？");
+Message.tool("结果内容", "call_123", "calculator");
 
-msg.toDict();      // { role: "user", content: "Hello" }
-msg.toJSON();      // JSON string
-Message.fromJSON(json);  // Deserialize
-Message.fromJSONBulk(array); // Deserialize array
+msg.toDict();      // { role: "user", content: "你好" }
+msg.toJSON();      // JSON 字符串
+Message.fromJSON(json);          // 反序列化
+Message.fromJSONBulk(array);     // 批量反序列化
+```
+
+## 日志
+
+框架内部日志通过 `Logger` 接口输出，默认使用 `ConsoleLogger`（带 `[Tag]` 前缀），可替换为 `SilentLogger` 完全静默：
+
+```typescript
+import { ConsoleLogger, SilentLogger } from "kagent-ts";
+
+const agent = new ReActAgent({
+  llm,
+  logger: new SilentLogger(),  // 静默模式
+});
+```
+
+## 运行测试
+
+```bash
+npm test
 ```
 
 ## License
