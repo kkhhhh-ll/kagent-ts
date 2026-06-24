@@ -165,6 +165,13 @@ export type {
 // Project rules — user-authored, injected into system prompt
 export { ProjectRules } from "./rules/project-rules";
 
+// Security — prompt-injection defence helpers
+export {
+  wrapUntrusted,
+  detectInjectionSignatures,
+  buildInjectionWarning,
+} from "./security/index";
+
 // Logging — structured logger interface
 export { Logger, ConsoleLogger, SilentLogger } from "./logging/index";
 

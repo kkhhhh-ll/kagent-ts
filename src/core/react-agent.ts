@@ -1,13 +1,15 @@
 import { Agent, AgentConfig } from "./agent";
 import { Message } from "../messages/message";
+import { Role } from "../messages/types";
 import {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
   STRUCTURED_OUTPUT_REMINDER,
   parseReActResponse,
 } from "./response-schema";
-import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
+import { wrapUntrusted } from "../security/boundaries";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -27,6 +29,7 @@ Follow this process:
 
 If no tools are needed, respond with the final answer directly.
 Always think step by step before acting.
+${SECURITY_GUIDANCE}
 ${TOOL_ERROR_RECOVERY}${STRUCTURED_OUTPUT_INSTRUCTIONS}
 ${SUB_AGENT_DELEGATION}`;
 
@@ -115,8 +118,11 @@ export class ReActAgent extends Agent {
       // ── Poll sub-agent results ──────────────────────────────────────
       const subResults = await this.pollSubAgentResults();
       for (const r of subResults) {
-        const msg = Message.user(
-          `[Sub-agent "${r.name}" (${r.subAgentId}) completed]\n\n${r.output}`,
+        const source = `subagent:${r.name}`;
+        const msg = new Message(
+          Role.User,
+          wrapUntrusted(source, r.output),
+          { name: source },
         );
         this.contextManager.addMessage(msg.toDict());
       }

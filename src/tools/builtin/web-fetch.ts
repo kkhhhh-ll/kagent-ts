@@ -1,4 +1,5 @@
 import { Tool } from "../types";
+import { detectInjectionSignatures, buildInjectionWarning } from "../../security/boundaries";
 
 const MAX_CHARS = 100_000;
 const TIMEOUT_MS = 15_000;
@@ -94,7 +95,11 @@ export const WebFetchTool: Tool = {
 
       const contentTypeNote = contentType.includes("text/html") ? "" : `\nContent-Type: ${contentType}`;
 
-      return `# ${title}\n\nURL: ${url}${contentTypeNote}\n\n${content}`;
+      // Scan for prompt-injection signatures in the fetched content
+      const injectionPatterns = detectInjectionSignatures(content);
+      const warning = buildInjectionWarning(injectionPatterns, `web_fetch:${url}`);
+
+      return `${warning}# ${title}\n\nURL: ${url}${contentTypeNote}\n\n${content}`;
     } catch (err: unknown) {
       clearTimeout(timeout);
       const message = err instanceof Error ? err.message : String(err);

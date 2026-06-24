@@ -2,6 +2,8 @@ import { LLMProvider, ToolCall } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
+import { SECURITY_GUIDANCE } from "./system-prompts";
+import { wrapUntrusted } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
@@ -553,6 +555,7 @@ export abstract class Agent {
   protected buildSystemPrompt(): string {
     const sections = [
       this.coreSystemPrompt,
+      SECURITY_GUIDANCE,
       this.projectRules.buildPrompt(),
       PreferenceManager.toPrompt(this.preferences),
       this.toolRegistry.getErrorTracker()?.buildRulesPrompt(),
@@ -864,7 +867,7 @@ export abstract class Agent {
     for (const slot of slots) {
       const result = slot.result!;
       const toolMessage = Message.tool(
-        result.content,
+        wrapUntrusted(slot.toolCall.function.name, result.content),
         slot.toolCall.id,
         slot.toolCall.function.name,
       );
