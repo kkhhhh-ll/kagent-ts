@@ -244,7 +244,9 @@ export class ToolCallEvaluator implements AgentHooks {
   private extractErrorCode(error: string): ToolErrorCode {
     const match = error.match(/\[(?:RETRYABLE|FATAL):([A-Z_]+)\]/);
     if (match) {
-      const code = match[1] as ToolErrorCode;
+      // Error format uses uppercase (CIRCUIT_OPEN), but enum values are
+      // lowercase ("circuit_open"). Normalise before lookup.
+      const code = match[1].toLowerCase() as ToolErrorCode;
       if (Object.values(ToolErrorCode).includes(code)) {
         return code;
       }
