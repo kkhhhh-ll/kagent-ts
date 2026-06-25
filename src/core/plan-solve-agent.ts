@@ -1,10 +1,12 @@
 import { Agent, AgentConfig } from "./agent";
 import { Message } from "../messages/message";
+import { Role } from "../messages/types";
 import {
   parsePlanSolveResponse,
   PLAN_SOLVE_INSTRUCTIONS,
 } from "./response-schema";
 import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { wrapUntrusted } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { SessionState, SessionStatus } from "../session/session-types";
@@ -110,6 +112,15 @@ export class PlanSolveAgent extends Agent {
   }
 
   async run(input: string): Promise<string> {
+    // Consume the skip-reset flag immediately — no early return path
+    // may leave it dangling (resume() sets it before calling run()).
+    const skipPlanReset = this._skipPlanReset;
+    this._skipPlanReset = false;
+
+    // ── Pre-flight: reject oversized input before any setup ───────────
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) return sizeError;
+
     // ── Async initialization (MCP connections, etc.) ─────────────────
     await this.init();
 
@@ -119,22 +130,17 @@ export class PlanSolveAgent extends Agent {
     // ── Recover orphaned sub-agent results from a cancelled session ──
     this.recoverOrphanedSubAgentResults();
 
-    // ── Pre-flight: reject oversized input before any LLM call ───────
-    const sizeError = this.validateInputSize(input);
-    if (sizeError) return sizeError;
-
     // ── Create user message ─────────────────────────────────────────
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());
 
     // Reset plan state for this run (skip when resuming a session)
-    if (!this._skipPlanReset) {
+    if (!skipPlanReset) {
       this.currentPlan = [];
       this.hasPlan = false;
       this.consecutiveFailures = 0;
       this.completedSteps = 0;
     }
-    this._skipPlanReset = false;
 
     // Save initial checkpoint (captures user input before any LLM call)
     if (this.checkpointingEnabled) {
@@ -160,6 +166,18 @@ export class PlanSolveAgent extends Agent {
           `resume with agent.resume("${sid}", "<your prompt>").`;
         for (const h of this.hooks) h.onFinish?.(cancelMsg);
         return cancelMsg;
+      }
+
+      // ── Poll sub-agent results ──────────────────────────────────────
+      const subResults = await this.pollSubAgentResults();
+      for (const r of subResults) {
+        const source = `subagent:${r.name}`;
+        const msg = new Message(
+          Role.User,
+          wrapUntrusted(source, r.output),
+          { name: source },
+        );
+        this.contextManager.addMessage(msg.toDict());
       }
 
       await this.checkAndCompress();

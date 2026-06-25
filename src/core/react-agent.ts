@@ -72,6 +72,10 @@ export class ReActAgent extends Agent {
   }
 
   async run(input: string): Promise<string> {
+    // ── Pre-flight: reject oversized input before any setup ───────────
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) return sizeError;
+
     // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
 
@@ -80,10 +84,6 @@ export class ReActAgent extends Agent {
 
     // ── Recover orphaned sub-agent results from a cancelled session ──
     this.recoverOrphanedSubAgentResults();
-
-    // ── Pre-flight: reject oversized input before any LLM call ───────
-    const sizeError = this.validateInputSize(input);
-    if (sizeError) return sizeError;
 
     // ── Create user message ──────────────────────────────────────────
     const userMessage = Message.user(input);
