@@ -17,7 +17,7 @@
 - **工具过滤器** — 白名单/黑名单/正则匹配，灵活控制子 Agent 可用工具集
 - **Human-in-the-Loop** — 危险工具（`requireApproval: true`）执行前回调审批，安全默认拒绝
 - **渐进式上下文压缩** — 4 步渐进压缩（大输出截断→旧轮丢弃→过期结果清除→LLM 摘要压缩）
-- **会话持久化** — 检查点 & 恢复：自动保存，网络中断后可从断点续跑
+- **会话持久化** — 检查点 & 恢复：自动保存，网络中断/用户取消后可从断点续跑。`AbortController` 真正中断 LLM 请求
 - **生命周期钩子** — `AgentHooks`：`onLLMStart` / `onLLMEnd` / `onToolStart` / `onToolEnd` / `onThought` / `onFinish` 等
 - **用户偏好** — 纯文本 Markdown 文件（`key: value`），注入系统提示词，文件变化自动重载
 - **Skills 渐进式技能** — 按需加载：从 SKILL.md 自动注册技能，匹配关键词自动激活
@@ -702,9 +702,20 @@ const agent = new ReActAgent({
 | `spawn_subagent` | 派发子 Agent 任务 |
 | `list_errors` | 列出工具错误追踪记录 |
 
-## 会话持久化
+## 会话持久化 & 取消恢复
 
-Agent 可在运行中保存检查点，断网后恢复：
+Agent 在运行中自动保存检查点，支持网络中断和用户取消后无缝续跑。
+
+### 检查点保存时机
+
+| 事件 | 检查点状态 | 说明 |
+| ---- | ---------- | ---- |
+| 用户输入后 | `"active"` | 每轮 LLM+tools 完成 |
+| 网络中断 | `"interrupted"` | LLM 调用抛出 `LLMNetworkError` |
+| 用户取消 | `"cancelled"` | Ctrl+C / `agent.cancel()` |
+| 正常结束 | `"completed"` | Agent 返回最终答案 |
+
+取消的会话**不会丢失**——检查点保留完整消息历史，可随时恢复。
 
 ```typescript
 const agent = new ReActAgent({
@@ -714,15 +725,36 @@ const agent = new ReActAgent({
   enableCheckpointing: true,
 });
 
-// 正常执行 — 每轮 LLM+tools 后自动保存检查点
+// 正常执行 — 每轮 LLM+tools 后自动保存
 const result = await agent.run("做某某任务...");
 
-// 网络中断时：保存 "interrupted" 检查点并返回恢复指引
-// 网络恢复后：
+// 用户取消 — CTLR+C 中断执行，会话自动保存
+// 返回信息中会包含 sessionId，方便恢复
+// → "Execution cancelled by user. Session \"my-session\" preserved —
+//    resume with agent.resume(\"my-session\", \"<your prompt>\")."
+
+// 网络中断 — 同样保存检查点，恢复指引与取消相同
+
+// 恢复会话 — 加载消息历史，从断点继续
 const resumed = await agent.resume("my-session", "继续之前的任务");
 ```
 
-用户主动取消（SIGINT / `agent.cancel()`）时检查点会被丢弃，不残留过期状态。
+### 取消机制
+
+`cancel()` 调用 `AbortController` 真正中断正在进行的 LLM HTTP 请求——不是等到请求完成再退出，而是立即中止：
+
+```typescript
+// 用户按下 Ctrl+C → SIGINT handler 调用
+agent.cancel();
+
+// 内部流程：
+// 1. AbortController.abort() → 中断 LLM HTTP 请求
+// 2. _cancelled = true   → 循环退出标志
+// 3. subAgentManager.cancelAll() → 取消所有子 Agent
+// 4. 下一轮迭代检测 isCancelled → saveCheckpoint("cancelled") → 返回取消消息
+```
+
+**`cancel()` 在 `run()` 之前调用也有效**——标志位在 `run()` 的第一次迭代即被检测到，立即退出。
 
 ### 会话生命周期
 
@@ -739,7 +771,10 @@ const reply2 = await agent.newTopic("帮我分析另一个问题");
 // 获取会话 Token 消耗
 const cost = agent.getSessionCost();
 
-// 完全重置到初始状态
+// 取消后恢复（加载历史 + 清除取消标志，无需 reset）
+const resumed = await agent.resume("my-session", "继续");
+
+// 完全重置——清除取消标志、清空上下文、删除会话
 agent.reset();
 ```
 

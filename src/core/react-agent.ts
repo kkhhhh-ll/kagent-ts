@@ -76,6 +76,9 @@ export class ReActAgent extends Agent {
     const sizeError = this.validateInputSize(input);
     if (sizeError) return sizeError;
 
+    // ── Create fresh abort controller for this run ───────────────────
+    this._abortController = new AbortController();
+
     // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
 
@@ -149,8 +152,19 @@ export class ReActAgent extends Agent {
         response = await this.llm.chat(
           contextMessages,
           this.toolRegistry.getTools(),
+          this._abortController?.signal,
         );
       } catch (err: unknown) {
+        // Cancellation by user (AbortController) — exit the loop cleanly
+        if (this.isCancelled) {
+          this.saveCheckpoint("cancelled");
+          const sid = this.sessionManager?.getSessionId() ?? "unknown";
+          const cancelMsg =
+            `Execution cancelled by user. Session "${sid}" preserved — ` +
+            `resume with agent.resume("${sid}", "<your prompt>").`;
+          for (const h of this.hooks) h.onFinish?.(cancelMsg);
+          return cancelMsg;
+        }
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
           return this.handleNetworkError(err, iteration + 1, "continue with my previous request");

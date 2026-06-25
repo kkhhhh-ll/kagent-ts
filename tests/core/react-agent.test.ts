@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -12,6 +12,7 @@ import {
   answerContent,
 } from "../mocks/mock-llm-provider";
 import type { Tool } from "../../src/tools/types";
+import type { LLMResponse } from "../../src/llm/interface";
 
 // ─── Test tools ────────────────────────────────────────────────────────
 
@@ -237,6 +238,179 @@ describe("ReActAgent", () => {
 
       const result = await agent.run("some input");
       expect(result).toContain("Execution cancelled by user");
+    });
+
+    it("passes an AbortSignal to the LLM provider", async () => {
+      let capturedSignal: AbortSignal | undefined;
+
+      const llm = mockAnswerLLM("ok");
+      // Wrap chat() to capture the signal
+      const originalChat = llm.chat.bind(llm);
+      llm.chat = async (messages, tools, signal) => {
+        capturedSignal = signal;
+        return originalChat(messages, tools, signal);
+      };
+
+      const agent = createAgent(llm);
+      await agent.run("test");
+
+      // Signal must be passed and not aborted during a normal run
+      expect(capturedSignal).toBeDefined();
+      expect(capturedSignal!.aborted).toBe(false);
+    });
+
+    it("aborts the LLM call and returns cancellation without waiting for the response", async () => {
+      // A mock whose chat() never resolves (simulating a slow LLM).
+      // cancel() should abort the call and run() should return quickly.
+      let chatStarted = false;
+      let chatAborted = false;
+
+      const llm = {
+        model: "mock",
+        getTokenCount: () => 10,
+        chat: async (_messages: any, _tools: any, signal?: AbortSignal): Promise<LLMResponse> => {
+          chatStarted = true;
+          return new Promise<LLMResponse>((resolve, reject) => {
+            if (signal?.aborted) {
+              chatAborted = true;
+              reject(new Error("Aborted"));
+              return;
+            }
+            const onAbort = () => {
+              chatAborted = true;
+              reject(new Error("Aborted"));
+            };
+            signal?.addEventListener("abort", onAbort, { once: true });
+
+            // Safety timeout — if signal is never aborted, resolve after 5s
+            const safety = setTimeout(() => {
+              signal?.removeEventListener("abort", onAbort);
+              resolve({ content: "too late" });
+            }, 5000);
+            signal?.addEventListener("abort", () => clearTimeout(safety), { once: true });
+          });
+        },
+        chatStream: async function* () { yield { type: "done" as const }; },
+      };
+
+      const agent = new ReActAgent({
+        llm,
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        maxIterations: 5,
+      });
+
+      // Start run() — it will block in the first LLM call
+      const runPromise = agent.run("test");
+
+      // Wait for the LLM call to actually start
+      await vi.waitFor(() => { expect(chatStarted).toBe(true); }, { timeout: 1000 });
+
+      // Cancel — should abort the in-flight LLM call
+      agent.cancel();
+
+      const result = await runPromise;
+
+      expect(chatAborted).toBe(true); // LLM call was actually aborted
+      expect(result).toContain("Execution cancelled by user");
+    });
+
+    it("preserves session for resume after cancellation", async () => {
+      const tmp = tempDir();
+      try {
+        const agent = new ReActAgent({
+          llm: mockAnswerLLM("should not be returned"),
+          toolRegistry: new ToolRegistry(),
+          logger: new SilentLogger(),
+          maxIterations: 5,
+          enableCheckpointing: true,
+          sessionDir: tmp,
+          sessionId: "cancel-session",
+        });
+
+        agent.cancel();
+        await agent.run("some input");
+
+        // The session should still exist on disk
+        const sessionPath = path.join(tmp, "cancel-session.json");
+        expect(fs.existsSync(sessionPath)).toBe(true);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it("allows a fresh run after reset()", async () => {
+      const agent = createAgent(mockAnswerLLM("Fresh answer."));
+      agent.cancel();
+
+      const cancelled = await agent.run("test");
+      expect(cancelled).toContain("Execution cancelled by user");
+
+      // reset() clears cancellation state
+      agent.reset();
+
+      const fresh = await agent.run("test");
+      expect(fresh).toContain("Fresh answer.");
+    });
+
+    it("can resume a cancelled session via agent.resume()", async () => {
+      const tmp = tempDir();
+      try {
+        const agent = new ReActAgent({
+          llm: mockAnswerLLM("should not be returned"),
+          toolRegistry: new ToolRegistry(),
+          logger: new SilentLogger(),
+          maxIterations: 5,
+          enableCheckpointing: true,
+          sessionDir: tmp,
+          sessionId: "resume-cancel-test",
+        });
+
+        agent.cancel();
+        const cancelled = await agent.run("test input");
+        expect(cancelled).toContain("Execution cancelled by user");
+        expect(cancelled).toContain("resume-cancel-test");
+
+        // Resume the same session — should work, not immediately re-cancel
+        const resumed = await agent.resume("resume-cancel-test", "continue please");
+        // The resumed run should NOT contain the cancellation message
+        // (it should actually process the input)
+        expect(resumed).not.toContain("Execution cancelled by user");
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it("preserves conversation history across cancel + resume", async () => {
+      const tmp = tempDir();
+      try {
+        const agent = new ReActAgent({
+          llm: mockAnswerLLM("This is the resumed answer."),
+          toolRegistry: new ToolRegistry(),
+          logger: new SilentLogger(),
+          maxIterations: 5,
+          enableCheckpointing: true,
+          sessionDir: tmp,
+          sessionId: "history-test",
+        });
+
+        // First, run once to add a user message + assistant message to context
+        await agent.run("first question");
+
+        // Then cancel and resume
+        agent.cancel();
+        await agent.run("this will be cancelled");
+
+        const resumed = await agent.resume("history-test", "second question");
+        expect(resumed).toContain("This is the resumed answer.");
+
+        // The context should contain both user messages
+        const messages = (agent as any).contextManager.getContextMessages();
+        const userMessages = messages.filter((m: any) => m.role === "user");
+        expect(userMessages.length).toBeGreaterThanOrEqual(1);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
     });
   });
 

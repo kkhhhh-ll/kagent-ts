@@ -42,8 +42,7 @@ export function isNetworkError(error: unknown): boolean {
       msg.includes("fetch failed") ||
       msg.includes("network") ||
       msg.includes("socket hang up") ||
-      msg.includes("econnaborted") ||
-      msg.includes("abort")
+      msg.includes("econnaborted")
     );
   }
 
@@ -135,7 +134,7 @@ export class OpenAIProvider implements LLMProvider {
     };
   }
 
-  async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
+  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
     // Convert internal Tool definitions to OpenAI tool format
     const openaiTools = tools?.map((t) => ({
       type: "function" as const,
@@ -156,7 +155,7 @@ export class OpenAIProvider implements LLMProvider {
             max_tokens: this.maxTokens,
             tools: openaiTools,
           },
-          { timeout: this.timeout }
+          { timeout: this.timeout, signal }
         ),
       this.retryConfig,
       { isRetryable: isNetworkError, classifyError },
@@ -209,6 +208,7 @@ export class OpenAIProvider implements LLMProvider {
   async *chatStream(
     messages: MessageData[],
     tools?: Tool[],
+    signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
     const openaiTools = tools?.map((t) => ({
       type: "function" as const,
@@ -233,7 +233,7 @@ export class OpenAIProvider implements LLMProvider {
             stream: true,
             stream_options: { include_usage: true },
           },
-          { timeout: this.timeout }
+          { timeout: this.timeout, signal }
         )) as unknown as Stream<OpenAI.Chat.ChatCompletionChunk>
       ,
       this.retryConfig,

@@ -349,6 +349,9 @@ export abstract class Agent {
   /** Whether the current run has been cancelled by the user. */
   protected _cancelled = false;
 
+  /** Controller for aborting in-flight LLM requests on cancellation. */
+  protected _abortController?: AbortController;
+
   // ─── MCP (Model Context Protocol) ─────────────────────────────────────
 
   /** MCP server configurations (from AgentConfig). */
@@ -973,11 +976,15 @@ export abstract class Agent {
   /**
    * Cancel the current run.
    *
-   * Sets the cancellation flag; the loop will save a "cancelled" checkpoint
-   * at its next iteration and exit. Call this when the user presses SIGINT.
+   * Aborts any in-flight LLM request via the AbortController, sets the
+   * cancellation flag, and cancels all running sub-agents. The agent loop
+   * will save a "cancelled" checkpoint and exit at its next iteration.
    * The session is preserved on disk and can be resumed later.
    */
   cancel(): void {
+    // Abort the in-flight LLM request first so the agent doesn't keep
+    // waiting for a response that's about to be discarded anyway.
+    this._abortController?.abort();
     this._cancelled = true;
     this.subAgentManager?.cancelAll();
   }
@@ -1146,6 +1153,10 @@ export abstract class Agent {
       );
     }
 
+    // Clear cancellation state — the user explicitly chose to resume
+    this._cancelled = false;
+    this._abortController = undefined; // will be recreated in run()
+
     // Sync session manager to the restored session ID so subsequent
     // checkpoints write to the correct file
     this.sessionManager.setSessionId(state.sessionId);
@@ -1230,6 +1241,8 @@ export abstract class Agent {
    * After calling reset(), the agent behaves as if newly constructed.
    */
   reset(): void {
+    this._abortController?.abort();
+    this._cancelled = false;
     this.contextManager.clear();
     this.coreSystemPrompt = "";
     this.preferences = {};

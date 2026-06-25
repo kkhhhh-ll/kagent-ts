@@ -65,11 +65,11 @@ export function mockLLM(
 ): LLMProvider {
   return {
     model,
-    chat: async (): Promise<LLMResponse> => ({
+    chat: async (_messages, _tools, _signal): Promise<LLMResponse> => ({
       content,
       tool_calls: toolCalls,
     }),
-    chatStream: async function* (): AsyncIterable<LLMStreamEvent> {
+    chatStream: async function* (_messages, _tools, _signal): AsyncIterable<LLMStreamEvent> {
       yield { type: "chunk", content };
       yield { type: "done" };
     },
@@ -110,13 +110,13 @@ export function mockSequenceLLM(
 
   return {
     model,
-    chat: async (): Promise<LLMResponse> => {
+    chat: async (_messages, _tools, _signal): Promise<LLMResponse> => {
       const index = Math.min(callCount, responses.length - 1);
       const [content, toolCalls] = responses[index];
       callCount++;
       return { content, tool_calls: toolCalls };
     },
-    chatStream: async function* (): AsyncIterable<LLMStreamEvent> {
+    chatStream: async function* (_messages, _tools, _signal): AsyncIterable<LLMStreamEvent> {
       const index = Math.min(callCount, responses.length - 1);
       const [content] = responses[index];
       callCount++;

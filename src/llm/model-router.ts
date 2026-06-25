@@ -102,15 +102,16 @@ export class ModelRouter implements LLMProvider {
     return this.config.main.model;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
-    return this.route("main").chat(messages, tools);
+  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
+    return this.route("main").chat(messages, tools, signal);
   }
 
   async *chatStream(
     messages: MessageData[],
     tools?: Tool[],
+    signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
-    yield* this.route("main").chatStream(messages, tools);
+    yield* this.route("main").chatStream(messages, tools, signal);
   }
 
   getTokenCount(text: string, model?: string): number {
@@ -206,12 +207,13 @@ export class ModelRouter implements LLMProvider {
       async chat(
         messages: MessageData[],
         tools?: Tool[],
+        signal?: AbortSignal,
       ): Promise<LLMResponse> {
         let lastError: LLMNetworkError | undefined;
 
         for (let i = 0; i < chain.length; i++) {
           try {
-            const response = await chain[i].chat(messages, tools);
+            const response = await chain[i].chat(messages, tools, signal);
             if (i > 0) {
               logger.info(
                 "ModelRouter",
@@ -236,12 +238,13 @@ export class ModelRouter implements LLMProvider {
       async *chatStream(
         messages: MessageData[],
         tools?: Tool[],
+        signal?: AbortSignal,
       ): AsyncIterable<LLMStreamEvent> {
         let lastError: LLMNetworkError | undefined;
 
         for (let i = 0; i < chain.length; i++) {
           try {
-            const stream = chain[i].chatStream(messages, tools);
+            const stream = chain[i].chatStream(messages, tools, signal);
             if (i > 0) {
               logger.info(
                 "ModelRouter",

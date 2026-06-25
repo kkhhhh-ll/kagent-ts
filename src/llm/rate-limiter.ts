@@ -92,17 +92,18 @@ export class RateLimitedProvider implements LLMProvider {
     return this.provider.model;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
+  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
     await this.limiter.acquire();
-    return this.provider.chat(messages, tools);
+    return this.provider.chat(messages, tools, signal);
   }
 
   async *chatStream(
     messages: MessageData[],
     tools?: Tool[],
+    signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
     await this.limiter.acquire();
-    yield* this.provider.chatStream(messages, tools);
+    yield* this.provider.chatStream(messages, tools, signal);
   }
 
   getTokenCount(text: string, model?: string): number {

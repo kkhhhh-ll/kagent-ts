@@ -33,8 +33,7 @@ function isNetworkError(error: unknown): boolean {
       msg.includes("enotfound") ||
       msg.includes("fetch failed") ||
       msg.includes("network") ||
-      msg.includes("socket hang up") ||
-      msg.includes("abort")
+      msg.includes("socket hang up")
     );
   }
 
@@ -191,7 +190,7 @@ export class AnthropicProvider implements LLMProvider {
     ] as Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
+  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
     const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
     const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
 
@@ -204,7 +203,7 @@ export class AnthropicProvider implements LLMProvider {
           tools: anthropicTools,
           max_tokens: this.maxTokens,
           temperature: this.temperature,
-        }),
+        }, { signal }),
       this.retryConfig,
       anthropicRetryCallbacks,
     );
@@ -215,6 +214,7 @@ export class AnthropicProvider implements LLMProvider {
   async *chatStream(
     messages: MessageData[],
     tools?: Tool[],
+    signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
     const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
     const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
@@ -233,7 +233,7 @@ export class AnthropicProvider implements LLMProvider {
           tools: anthropicTools,
           max_tokens: this.maxTokens,
           temperature: this.temperature,
-        }),
+        }, { signal }),
       this.retryConfig,
       anthropicRetryCallbacks,
     );

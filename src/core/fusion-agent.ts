@@ -236,6 +236,9 @@ export class FusionAgent extends Agent {
     const sizeError = this.validateInputSize(input);
     if (sizeError) return sizeError;
 
+    // ── Create fresh abort controller for this run ───────────────────
+    this._abortController = new AbortController();
+
     // ── Async initialization ─────────────────────────────────────────
     await this.init();
 
@@ -339,7 +342,7 @@ export class FusionAgent extends Agent {
     ];
 
     try {
-      const response = await this.llm.chat(messages, []);
+      const response = await this.llm.chat(messages, [], this._abortController?.signal);
       const parsed = parseFusionRouteResponse(response.content);
 
       // Record token usage
@@ -404,8 +407,19 @@ export class FusionAgent extends Agent {
       response = await this.llm.chat(
         contextMessages,
         this.toolRegistry.getTools(),
+        this._abortController?.signal,
       );
     } catch (err: unknown) {
+      // Cancellation by user (AbortController)
+      if (this.isCancelled) {
+        this.saveCheckpoint("cancelled");
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        const cancelMsg =
+          `Execution cancelled by user. Session "${sid}" preserved — ` +
+          `resume with agent.resume("${sid}", "<your prompt>").`;
+        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        return cancelMsg;
+      }
       if (err instanceof LLMNetworkError) {
         for (const h of this.hooks) h.onLLMError?.(err);
         return this.handleNetworkError(err, 0, "continue creating a plan");
@@ -563,8 +577,19 @@ export class FusionAgent extends Agent {
         response = await this.llm.chat(
           contextMessages,
           this.toolRegistry.getTools(),
+          this._abortController?.signal,
         );
       } catch (err: unknown) {
+        // Cancellation by user (AbortController) — exit the loop cleanly
+        if (this.isCancelled) {
+          this.saveCheckpoint("cancelled");
+          const sid = this.sessionManager?.getSessionId() ?? "unknown";
+          const cancelMsg =
+            `Execution cancelled by user. Session "${sid}" preserved — ` +
+            `resume with agent.resume("${sid}", "<your prompt>").`;
+          for (const h of this.hooks) h.onFinish?.(cancelMsg);
+          return cancelMsg;
+        }
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
           return this.handleNetworkError(

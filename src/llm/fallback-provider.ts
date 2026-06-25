@@ -55,13 +55,13 @@ export class FallbackProvider implements LLMProvider {
     return this.providers[0].model;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse> {
+  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
     let lastError: LLMNetworkError | undefined;
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i];
       try {
-        const response = await provider.chat(messages, tools);
+        const response = await provider.chat(messages, tools, signal);
         if (i > 0) {
           this.logger.info(
             "Fallback",
@@ -91,13 +91,14 @@ export class FallbackProvider implements LLMProvider {
   async *chatStream(
     messages: MessageData[],
     tools?: Tool[],
+    signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
     let lastError: LLMNetworkError | undefined;
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i];
       try {
-        const stream = provider.chatStream(messages, tools);
+        const stream = provider.chatStream(messages, tools, signal);
         if (i > 0) {
           this.logger.info(
             "Fallback",

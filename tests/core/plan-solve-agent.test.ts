@@ -352,4 +352,39 @@ describe("PlanSolveAgent", () => {
       expect((agent as any).currentPlan.length).toBe(5);
     });
   });
+
+  // ── Cancellation ──────────────────────────────────────────────────────
+
+  describe("cancellation", () => {
+    it("returns cancellation message when cancel() is called before run", async () => {
+      const agent = new PlanSolveAgent({
+        llm: mockAnswerLLM("should not be returned"),
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        maxIterations: 5,
+      });
+      agent.cancel();
+
+      const result = await agent.run("some input");
+      expect(result).toContain("Execution cancelled by user");
+    });
+
+    it("allows a fresh run after reset()", async () => {
+      const agent = new PlanSolveAgent({
+        llm: mockAnswerLLM("Fresh answer."),
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        maxIterations: 5,
+      });
+      agent.cancel();
+
+      const cancelled = await agent.run("test");
+      expect(cancelled).toContain("Execution cancelled by user");
+
+      agent.reset();
+
+      const fresh = await agent.run("test");
+      expect(fresh).toContain("Fresh answer.");
+    });
+  });
 });

@@ -17,7 +17,7 @@ import {
   mockAnswerLLM,
   mockSequenceLLM,
 } from "../mocks/mock-llm-provider";
-import type { LLMProvider } from "../../src/llm/interface";
+import type { LLMProvider, LLMResponse } from "../../src/llm/interface";
 import type { Tool } from "../../src/tools/types";
 
 // ─── Test tools ──────────────────────────────────────────────────────────
@@ -718,6 +718,45 @@ describe("FusionAgent", () => {
 
       const result = await agent.run("anything");
       expect(result).toContain("Execution cancelled by user");
+    });
+
+    it("cancels during plan creation (force-plan mode)", async () => {
+      // force-plan goes through plan creation → LLM call for plan generation
+      const agent = createSimpleAgent({ routing: "force-plan" });
+      agent.cancel();
+
+      const result = await agent.run("anything");
+      expect(result).toContain("Execution cancelled by user");
+    });
+
+    it("passes an AbortSignal to the LLM provider in all phases", async () => {
+      const signals: Array<{ phase: string; aborted: boolean }> = [];
+
+      const llm = {
+        model: "mock",
+        getTokenCount: () => 10,
+        chat: async (_m: any, _t: any, signal?: AbortSignal): Promise<LLMResponse> => {
+          signals.push({ phase: "called", aborted: signal?.aborted ?? false });
+          return { content: JSON.stringify({ thought: "ok", answer: "done" }) };
+        },
+        chatStream: async function* () { yield { type: "done" as const }; },
+      };
+
+      const agent = new FusionAgent({
+        llm,
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        maxIterations: 3,
+        routing: "force-plan",
+      });
+
+      await agent.run("test");
+      // With force-plan: 1 call for plan creation, 1+ calls in execution loop
+      expect(signals.length).toBeGreaterThanOrEqual(2);
+      // Every call should have received a non-aborted signal
+      for (const s of signals) {
+        expect(s.aborted).toBe(false);
+      }
     });
 
     it("rejects oversized input", async () => {

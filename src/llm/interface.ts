@@ -116,8 +116,9 @@ export interface LLMProvider {
    * Send a chat completion request (non-streaming).
    * @param messages  The conversation messages so far.
    * @param tools     Optional tool definitions for function calling.
+   * @param signal    Optional AbortSignal for cancellation.
    */
-  chat(messages: MessageData[], tools?: Tool[]): Promise<LLMResponse>;
+  chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse>;
 
   /**
    * Send a chat completion request and yield events as they arrive.
@@ -127,8 +128,9 @@ export interface LLMProvider {
    *
    * @param messages  The conversation messages so far.
    * @param tools     Optional tool definitions for function calling.
+   * @param signal    Optional AbortSignal for cancellation.
    */
-  chatStream(messages: MessageData[], tools?: Tool[]): AsyncIterable<LLMStreamEvent>;
+  chatStream(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): AsyncIterable<LLMStreamEvent>;
 
   /**
    * Count tokens in a text string.
