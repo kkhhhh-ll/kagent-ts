@@ -23,6 +23,8 @@ export enum ToolErrorCode {
   INTERNAL_ERROR = "internal_error",
   /** Tool execution was denied by the user (human-in-the-loop approval). */
   APPROVAL_DENIED = "approval_denied",
+  /** Arguments failed JSON Schema validation against the tool's parameters. */
+  VALIDATION_ERROR = "validation_error",
 }
 
 /**

@@ -10,6 +10,7 @@ import { ToolRegistry } from "../tools/tool-registry";
 import { ToolErrorTracker } from "../tools/error-tracker";
 import { ToolOutputTruncator } from "../tools/tool-output-truncator";
 import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
+import { validateToolArgs } from "../tools/tool-validator";
 import { SkillManager } from "../skills/skill-manager";
 import { MemoryManager } from "../memory/memory-manager";
 import { ProjectRules } from "../rules/project-rules";
@@ -767,12 +768,13 @@ export abstract class Agent {
       result?: ToolResult;
     }
 
-    // ── Step 1: Parse all arguments up front ──────────────────────────
+    // ── Step 1: Parse & validate all arguments up front ──────────────
     const slots: Slot[] = [];
     for (const tc of toolCalls) {
+      // 1a. JSON syntax check
+      let args: Record<string, unknown>;
       try {
-        const args = JSON.parse(tc.function.arguments);
-        slots.push({ toolCall: tc, args });
+        args = JSON.parse(tc.function.arguments);
       } catch {
         const result = toolError(
           ToolErrorCode.ARGUMENTS_PARSE_ERROR,
@@ -783,7 +785,21 @@ export abstract class Agent {
         );
         for (const h of this.hooks) h.onToolError?.(tc.function.name, result.content, tc.id);
         slots.push({ toolCall: tc, args: {}, result });
+        continue;
       }
+
+      // 1b. JSON Schema validation against the tool's parameter definition
+      const tool = this.toolRegistry.getTool(tc.function.name);
+      if (tool) {
+        const validationError = validateToolArgs(tc.function.name, tool.parameters, args);
+        if (validationError) {
+          for (const h of this.hooks) h.onToolError?.(tc.function.name, validationError.content, tc.id);
+          slots.push({ toolCall: tc, args, result: validationError });
+          continue;
+        }
+      }
+
+      slots.push({ toolCall: tc, args });
     }
 
     // ── Step 2: HITL approval — check all requiring tools upfront ────

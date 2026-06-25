@@ -38,6 +38,7 @@ export type { CircuitBreakerConfig } from "./tools/circuit-breaker";
 export { BreakerState, ToolErrorCode } from "./tools/types";
 export type { BreakerStatus, ToolResult } from "./tools/types";
 export { toolSuccess, toolError } from "./tools/types";
+export { validateToolArgs } from "./tools/tool-validator";
 
 // Tool output truncator — large output to disk
 export { ToolOutputTruncator } from "./tools/tool-output-truncator";

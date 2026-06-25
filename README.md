@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）
+- **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）+ `FusionAgent`（三者融合：自动路由→规划→执行→反思）
 - **多 LLM 后端** — 支持 OpenAI 和 Anthropic，通过 `createLLMProvider()` 工厂函数自动检测后端类型
 - **模型路由** — `ModelRouter` 按任务类型路由到不同模型：主循环 → 主力模型，子 Agent → 轻量模型，反思 → 独立模型，每条路由内置灾备链
 - **Anthropic Prompt Caching** — 支持对系统提示词启用 Anthropic 的 ephemeral 缓存，降低 token 成本
@@ -12,7 +12,7 @@
 - **备选模型切换** — `FallbackProvider` 在主模型网络异常时自动切换到备选 LLM
 - **调用频率控制** — `RateLimitedProvider` 基于滑动窗口限制每分钟最大 LLM 调用次数
 - **Token 预算** — 会话级别的 Token 消耗追踪与硬上限控制
-- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 错误追踪链（失败→LLM分析→规则提取→预防）+ 并行执行（同轮独立工具并发调用）
+- **工具系统** — `ToolRegistry` + `CircuitBreaker`（熔断器：连续失败自动禁用）+ 参数校验（JSON Schema 事前验证）+ 错误追踪链（失败→LLM分析→规则提取→预防）+ 并行执行（同轮独立工具并发调用）
 - **工具输出截断** — 超大工具输出自动落盘（`.kagent-context/`），保留摘要 + 按需读取
 - **工具过滤器** — 白名单/黑名单/正则匹配，灵活控制子 Agent 可用工具集
 - **Human-in-the-Loop** — 危险工具（`requireApproval: true`）执行前回调审批，安全默认拒绝
@@ -40,7 +40,7 @@ npm install kagent-ts
 ## 快速开始
 
 ```typescript
-import { ReActAgent, createLLMProvider, Tool } from "kagent-ts";
+import { ReActAgent, FusionAgent, createLLMProvider, Tool } from "kagent-ts";
 
 // 1. 创建 LLM Provider（自动检测 OpenAI / Anthropic）
 const llm = createLLMProvider({
@@ -80,10 +80,11 @@ console.log(response);
 
 ```text
 src/
-├── core/                  # Agent 基类、ReActAgent、PlanSolveAgent
+├── core/                  # Agent 基类、ReActAgent、PlanSolveAgent、FusionAgent
 │   ├── agent.ts           # 抽象基类（共享基础设施）
 │   ├── react-agent.ts     # 思考→行动→观察 循环
 │   ├── plan-solve-agent.ts# 规划→执行→修订 循环
+│   ├── fusion-agent.ts    # 融合 Agent：自动路由 + Plan + ReAct + Reflection
 │   ├── types.ts           # Tool 等核心类型
 │   ├── hooks.ts           # 生命周期钩子接口
 │   ├── response-schema.ts # 结构化 JSON 输出解析
@@ -115,6 +116,7 @@ src/
 │   ├── builtin/           # 内置工具集
 │   ├── circuit-breaker.ts # 熔断器
 │   ├── tool-registry.ts   # 工具注册表
+│   ├── tool-validator.ts  # 参数校验（JSON Schema 事前验证）
 │   ├── error-tracker.ts   # 工具错误链追踪
 │   ├── tool-output-truncator.ts # 大输出截断落盘
 │   └── tool-filter.ts     # 工具过滤器
@@ -173,6 +175,66 @@ Agent 将会：
 2. 使用工具逐步执行
 3. 遇到障碍时中途修订计划
 4. 输出最终答案
+
+### FusionAgent
+
+融合 ReAct + Plan-Solve + Reflection 三种范式的统一 Agent，根据任务复杂度自动选择策略：
+
+```typescript
+import { FusionAgent, ErrorNotebook } from "kagent-ts";
+
+const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
+
+const agent = new FusionAgent({
+  llm,
+  tools: [searchTool, calculatorTool, writeTool],
+
+  // ── Routing: 任务复杂度判定 ──
+  routing: "auto",            // "auto" | "force-plan" | "force-react"
+
+  // ── Plan: 计划生成与确认 ──
+  planConfirmation: "auto",   // "auto" | "always" | "never"
+  onPlanConfirm: async (plan) => {
+    // 向用户展示计划，等待确认
+    console.log("Plan:", plan);
+    return confirm("执行此计划？");
+  },
+  maxPlanSteps: 12,
+
+  // ── Reflection: 反思模式 ──
+  reflection: "both",          // "off" | "post-hoc" | "inline" | "both"
+  reflectionInterval: 3,       // inline 模式每 3 步反思一次
+  notebook,                    // post-hoc 模式必需
+
+  // ── Loop control ──
+  maxIterations: 15,
+  replanThreshold: 2,          // 连续失败 2 次后建议修订计划
+});
+
+const response = await agent.run("分析项目架构并生成重构方案。");
+```
+
+**执行流程：**
+
+```text
+用户输入
+  ↓
+[1. Route]    LLM 判断复杂度 → simple / complex（可 force 跳过）
+  ↓
+├─ simple → [3. ReAct 执行循环]
+│
+└─ complex → [2. Plan]  LLM 生成计划
+                ↓
+              [确认？]  可选用户审批（planConfirmation）
+                ↓
+              [3. ReAct 执行循环]  带计划追踪 + 失败自动修订
+  ↓
+[4. Reflect]  off | post-hoc（错题本）| inline（循环内自检）| both
+  ↓
+最终答案
+```
+
+**与独立 Agent 的关系：** `FusionAgent` 是新增的独立类，不影响现有的 `ReActAgent` 和 `PlanSolveAgent`，三者可以按需选用。
 
 ## LLM 后端
 
@@ -348,6 +410,47 @@ const result = await registry.execute("calculator", { expression: "2+2" });
 ```
 
 熔断状态机：`CLOSED`（正常）→ `OPEN`（禁用）→ `HALF_OPEN`（试探）→ `CLOSED`（恢复）。
+
+### 参数校验
+
+工具调用在 JSON 解析后、执行前，自动用工具自身的 `parameters`（JSON Schema）校验参数，拦截缺失必填字段、类型不匹配等问题，避免无效调用浪费熔断器配额和 LLM 往返：
+
+```typescript
+// 工具定义自带的 JSON Schema 就是校验规则
+const calculator: Tool = {
+  name: "calculator",
+  description: "执行数学运算",
+  parameters: {
+    type: "object",
+    properties: {
+      expression: { type: "string", description: "数学表达式" },
+    },
+    required: ["expression"],  // 缺了这个字段 → 直接拦截
+  },
+  async execute(args) { /* ... */ },
+};
+```
+
+校验失败时返回结构化错误：
+
+```text
+[RETRYABLE:VALIDATION_ERROR] Tool "calculator" was called with invalid arguments.
+
+Validation errors:
+  - /: must have required property 'expression'
+
+Required fields: "expression"
+
+Received arguments: {}
+
+Please correct the arguments and re-invoke the tool with valid parameters.
+```
+
+**设计要点**：
+- **校验器缓存**：同一工具只编译一次，后续调用直接命中缓存
+- **安全降级**：schema 为空、编译失败时不校验，不影响工具正常执行
+- **面向 LLM 的错误消息**：包含 `[RETRYABLE:VALIDATION_ERROR]` 标签、具体字段路径、必填字段列表、接收到的实际参数
+- **防御三角**：参数校验（事前）+ 熔断器 + 错误追踪（事后）构成完整的工具防护体系
 
 ### 工具错误追踪
 
@@ -966,16 +1069,29 @@ const traceLogger = new TraceLogger({ outputDir: ".kagent-traces" });
 LLM 以结构化 JSON 格式返回思考内容和最终答案，解析可靠：
 
 ```typescript
-import { parseReActResponse, parsePlanSolveResponse } from "kagent-ts";
+import {
+  parseReActResponse,
+  parsePlanSolveResponse,
+  parseFusionRouteResponse,
+  parseFusionResponse,
+} from "kagent-ts";
 
 // ReAct 输出格式：
 // { "thought": "...", "answer": "..." }      ← 最终答案
 // { "thought": "..." }                        ← 中间思考（继续循环）
 
 // PlanSolve 输出格式：
-// { "phase": "plan", "plan": [...] }
-// { "phase": "resolve", "current_step": "...", "done": false }
-// { "phase": "resolve", "current_step": "...", "done": true, "final_answer": "..." }
+// { "thought": "...", "plan": [...] }         ← 初始计划
+// { "thought": "...", "currentStep": 2 }      ← 步骤进度
+// { "thought": "...", "revised_plan": [...] } ← 修订计划
+// { "thought": "...", "answer": "..." }       ← 最终答案
+
+// Fusion 路由输出格式：
+// { "complexity": "simple", "reason": "..." }  ← 任务分类
+
+// Fusion 执行输出格式（兼容 PlanSolve 格式）：
+// { "thought": "...", "plan": [...] }          ← 初始计划
+// { "thought": "...", "answer": "..." }        ← 最终答案
 ```
 
 ## 消息 API
