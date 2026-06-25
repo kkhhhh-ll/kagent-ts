@@ -13,8 +13,7 @@ import { PlanSolveAgent } from "../../src/core/plan-solve-agent";
 import { ContextManager } from "../../src/context/context-manager";
 import { ToolRegistry } from "../../src/tools/tool-registry";
 import { SilentLogger } from "../../src/logging/logger";
-import { mockLLM, mockAnswerLLM, mockSequenceLLM } from "../mocks/mock-llm-provider";
-import type { LLMProvider } from "../../src/llm/interface";
+import { mockAnswerLLM, mockSequenceLLM } from "../mocks/mock-llm-provider";
 
 // ─── Plan-Solve JSON helpers ───────────────────────────────────────────
 

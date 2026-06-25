@@ -23,7 +23,7 @@ const echoTool: Tool = {
     properties: { message: { type: "string" } },
     required: ["message"],
   },
-  func: async (args: Record<string, unknown>) =>
+  execute: async (args: Record<string, unknown>) =>
     `ECHO: ${args.message ?? ""}`,
 };
 
@@ -35,7 +35,7 @@ const addTool: Tool = {
     properties: { a: { type: "number" }, b: { type: "number" } },
     required: ["a", "b"],
   },
-  func: async (args: Record<string, unknown>) =>
+  execute: async (args: Record<string, unknown>) =>
     String(Number(args.a) + Number(args.b)),
 };
 

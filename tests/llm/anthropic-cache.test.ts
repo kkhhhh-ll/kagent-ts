@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { AnthropicProvider } from "../../src/llm/anthropic-provider";
-import type { MessageData } from "../../src/messages/types";
 
 // NOTE: These tests verify the config wiring — they don't make real API calls.
 // The `cacheSystemPrompt` behaviour is validated by inspecting the provider

@@ -2,9 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { Benchmark, EvalRunner, ToolCallEvaluator } from "../../src/eval";
+import { Benchmark } from "../../src/eval";
 import type { AgentFactory, EvalCase } from "../../src/eval";
-import type { BenchmarkResult } from "../../src/eval/types";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 

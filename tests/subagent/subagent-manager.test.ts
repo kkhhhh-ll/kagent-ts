@@ -45,7 +45,7 @@ const dummyTool: Tool = {
     properties: { message: { type: "string" } },
     required: ["message"],
   },
-  func: async (args: Record<string, unknown>) =>
+  execute: async (args: Record<string, unknown>) =>
     `echo: ${args.message ?? ""}`,
 };
 
@@ -387,7 +387,7 @@ describe("SubAgentManager", () => {
           name: "restricted_tool",
           description: "Should NOT be available.",
           parameters: { type: "object", properties: {} },
-          func: async () => "restricted",
+          execute: async () => "restricted",
         },
       ]);
 

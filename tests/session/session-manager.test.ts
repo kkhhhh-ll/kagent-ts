@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { SessionManager } from "../../src/session/session-manager";
 import type { SessionState } from "../../src/session/session-types";
+import { Role } from "../../src/messages/types";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "kagent-test-"));
@@ -15,9 +16,9 @@ function makeState(overrides: Partial<SessionState> = {}): SessionState {
     agentType: "react",
     systemPrompt: "You are helpful.",
     messages: [
-      { role: "system", content: "sys" },
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "hi!" },
+      { role: Role.System, content: "sys" },
+      { role: Role.User, content: "hello" },
+      { role: Role.Assistant, content: "hi!" },
     ],
     createdAt: "2025-01-01T00:00:00Z",
     updatedAt: "2025-01-01T00:00:00Z",

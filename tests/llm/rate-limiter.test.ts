@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { RateLimitedProvider } from "../../src/llm/rate-limiter";
 import type { LLMProvider, LLMResponse } from "../../src/llm/interface";
+import { Role } from "../../src/messages/types";
 
 function makeProvider(): LLMProvider {
   return {
@@ -20,7 +21,7 @@ describe("RateLimitedProvider", () => {
       maxCallsPerMinute: 100,
     });
 
-    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    const result = await provider.chat([{ role: Role.User, content: "hi" }]);
     expect(result.content).toContain("done");
   });
 
@@ -31,7 +32,7 @@ describe("RateLimitedProvider", () => {
     });
 
     expect(provider.currentRateCount).toBe(0);
-    await provider.chat([{ role: "user", content: "hi" }]);
+    await provider.chat([{ role: Role.User, content: "hi" }]);
     expect(provider.currentRateCount).toBe(1);
   });
 
@@ -41,10 +42,10 @@ describe("RateLimitedProvider", () => {
       maxCallsPerMinute: 100,
     });
 
-    await provider.chat([{ role: "user", content: "1" }]);
-    await provider.chat([{ role: "user", content: "2" }]);
+    await provider.chat([{ role: Role.User, content: "1" }]);
+    await provider.chat([{ role: Role.User, content: "2" }]);
     expect(provider.currentRateCount).toBe(2);
-    await provider.chat([{ role: "user", content: "3" }]);
+    await provider.chat([{ role: Role.User, content: "3" }]);
     expect(provider.currentRateCount).toBe(3);
   });
 
@@ -56,7 +57,7 @@ describe("RateLimitedProvider", () => {
 
     const results = await Promise.all(
       Array.from({ length: 10 }, (_, i) =>
-        provider.chat([{ role: "user", content: String(i) }]),
+        provider.chat([{ role: Role.User, content: String(i) }]),
       ),
     );
 
@@ -70,8 +71,8 @@ describe("RateLimitedProvider", () => {
       maxCallsPerMinute: 100,
     });
 
-    await provider.chat([{ role: "user", content: "1" }]);
-    await provider.chat([{ role: "user", content: "2" }]);
+    await provider.chat([{ role: Role.User, content: "1" }]);
+    await provider.chat([{ role: Role.User, content: "2" }]);
     expect(provider.currentRateCount).toBe(2);
 
     provider.resetRateLimiter();

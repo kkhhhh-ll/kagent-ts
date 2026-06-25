@@ -3,6 +3,7 @@ import { FallbackProvider } from "../../src/llm/fallback-provider";
 import { LLMNetworkError } from "../../src/llm/errors";
 import type { LLMProvider, LLMResponse } from "../../src/llm/interface";
 import { SilentLogger } from "../../src/logging/logger";
+import { Role } from "../../src/messages/types";
 
 function makeProvider(model: string, fail: boolean = false): LLMProvider {
   return {
@@ -26,7 +27,7 @@ describe("FallbackProvider", () => {
       logger: new SilentLogger(),
     });
 
-    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    const result = await provider.chat([{ role: Role.User, content: "hi" }]);
     expect(result.content).toContain("Response from gpt-4o");
   });
 
@@ -37,7 +38,7 @@ describe("FallbackProvider", () => {
       logger: new SilentLogger(),
     });
 
-    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    const result = await provider.chat([{ role: Role.User, content: "hi" }]);
     expect(result.content).toContain("Response from claude");
   });
 
@@ -48,7 +49,7 @@ describe("FallbackProvider", () => {
       logger: new SilentLogger(),
     });
 
-    const result = await provider.chat([{ role: "user", content: "hi" }]);
+    const result = await provider.chat([{ role: Role.User, content: "hi" }]);
     expect(result.content).toContain("Response from p3");
   });
 
@@ -66,7 +67,7 @@ describe("FallbackProvider", () => {
     });
 
     await expect(
-      provider.chat([{ role: "user", content: "hi" }]),
+      provider.chat([{ role: Role.User, content: "hi" }]),
     ).rejects.toThrow("Invalid API key");
   });
 
@@ -78,7 +79,7 @@ describe("FallbackProvider", () => {
     });
 
     await expect(
-      provider.chat([{ role: "user", content: "hi" }]),
+      provider.chat([{ role: Role.User, content: "hi" }]),
     ).rejects.toThrow(LLMNetworkError);
   });
 

@@ -705,8 +705,7 @@ export class FusionAgent extends Agent {
         if (
           (this.reflectionMode === "inline" ||
             this.reflectionMode === "both") &&
-          (iteration + 1) % this.reflectionInterval === 0 &&
-          iteration > 0
+          (iteration + 1) % this.reflectionInterval === 0
         ) {
           await this.reflectInline(iteration);
         }
