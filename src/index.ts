@@ -5,6 +5,8 @@ export { ReActAgent } from "./core/react-agent";
 export type { ReActAgentConfig } from "./core/react-agent";
 export { PlanSolveAgent } from "./core/plan-solve-agent";
 export type { PlanSolveAgentConfig } from "./core/plan-solve-agent";
+export { FusionAgent } from "./core/fusion-agent";
+export type { FusionAgentConfig, PlanConfirmCallback } from "./core/fusion-agent";
 export type { Tool } from "./core/types";
 export type { AgentHooks } from "./core/hooks";
 
@@ -14,12 +16,19 @@ export {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
   parsePlanSolveResponse,
   PLAN_SOLVE_INSTRUCTIONS,
+  parseFusionRouteResponse,
+  parseFusionResponse,
+  FUSION_ROUTE_INSTRUCTIONS,
+  FUSION_EXECUTION_INSTRUCTIONS,
+  INLINE_REFLECTION_PROMPT,
 } from "./core/response-schema";
 export type {
   ReActResponse,
   ReActReasoning,
   ReActFinalAnswer,
   PlanSolveResponse,
+  FusionRouteResponse,
+  FusionResponse,
 } from "./core/response-schema";
 
 // Tools — circuit breaker & registry
@@ -139,6 +148,7 @@ export type {
   SessionStatus,
   AgentType,
   PlanSolveSessionState,
+  FusionSessionState,
 } from "./session/session-types";
 
 // Utils

@@ -363,3 +363,228 @@ Rules:
 IMPORTANT: Replanning is a normal part of problem-solving. If in doubt,
 output a "revised_plan" rather than retrying the same failing approach.`;
 
+// ─── Fusion Agent Response Types ──────────────────────────────────────────
+
+/**
+ * Response from the LLM during the routing phase (complexity judgement).
+ */
+export interface FusionRouteResponse {
+  /** "simple" = ReAct only, "complex" = Plan → Execute. */
+  complexity: "simple" | "complex";
+  /** Short explanation of why this complexity was chosen. */
+  reason: string;
+}
+
+/**
+ * Parse a raw LLM content string into a FusionRouteResponse.
+ *
+ * Handles the same JSON extraction strategies as the other parsers.
+ */
+export function parseFusionRouteResponse(raw: string): FusionRouteResponse {
+  const json = extractJSON(raw);
+
+  if (json) {
+    try {
+      const parsed = JSON.parse(json);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        const complexity = parsed.complexity;
+        if (complexity === "simple" || complexity === "complex") {
+          return {
+            complexity,
+            reason: String(parsed.reason ?? ""),
+          };
+        }
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  // Default: assume complex to be safe (planning never hurts)
+  return { complexity: "complex", reason: "Route response unparseable; defaulting to complex." };
+}
+
+/**
+ * Response from the Fusion Agent combining ReAct + Plan-and-Solve shapes.
+ *
+ * Different phases produce different shapes:
+ * - Planning:    { thought, plan: string[] }
+ * - Executing:   { thought, currentStep?: number }
+ * - Revising:    { thought, revised_plan: string[] }
+ * - Final:       { thought, answer }
+ */
+export interface FusionResponse {
+  /** Step-by-step reasoning (required in every response). */
+  thought: string;
+  /** Initial plan — numbered steps covering the full task. */
+  plan?: string[];
+  /** Replacement plan — overrides remaining steps. */
+  revised_plan?: string[];
+  /** Final answer for the user. */
+  answer?: string;
+  /**
+   * 1-based index of the step the LLM is currently working on.
+   * Used for plan progress tracking and display.
+   */
+  currentStep?: number;
+}
+
+/**
+ * Parse a raw LLM content string into a FusionResponse.
+ *
+ * This is a thin wrapper around parsePlanSolveResponse — the Fusion
+ * response shape is intentionally compatible with PlanSolveResponse.
+ */
+export function parseFusionResponse(raw: string): FusionResponse {
+  const json = extractJSON(raw);
+
+  if (json) {
+    try {
+      const parsed = JSON.parse(json);
+
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        const thought = String(parsed.thought ?? "");
+        const result: FusionResponse = { thought };
+
+        if (parsed.plan && Array.isArray(parsed.plan)) {
+          result.plan = parsed.plan.map(String);
+        }
+
+        if (parsed.revised_plan && Array.isArray(parsed.revised_plan)) {
+          result.revised_plan = parsed.revised_plan.map(String);
+        }
+
+        if (parsed.answer !== undefined && parsed.answer !== null) {
+          result.answer = String(parsed.answer);
+        }
+
+        if (typeof parsed.currentStep === "number" && parsed.currentStep >= 1) {
+          result.currentStep = Math.floor(parsed.currentStep);
+        }
+
+        return result;
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  return { thought: raw };
+}
+
+// ─── Fusion Agent System Prompt Templates ─────────────────────────────────
+
+/**
+ * Instructions injected into the system prompt for the routing phase.
+ *
+ * The LLM is asked to classify whether the user's request needs a plan.
+ */
+export const FUSION_ROUTE_INSTRUCTIONS = `
+You are a task complexity classifier. Analyze the user's request and determine whether it requires a structured plan.
+
+A request needs a PLAN when it:
+- Involves multiple distinct steps or sub-tasks
+- Requires research, analysis, or data gathering before answering
+- Spans multiple domains or tools
+- Is a "build", "create", "analyze", "refactor", or "investigate" type request
+- Will likely take 3+ tool calls to resolve
+
+A request does NOT need a plan when it is:
+- A simple factual question or lookup
+- A single straightforward action (read this file, run this command)
+- A brief conversational exchange
+- Immediately answerable from knowledge without tools
+
+Respond with ONLY a JSON object:
+{"complexity": "simple", "reason": "..."}
+or
+{"complexity": "complex", "reason": "..."}
+
+Rules:
+- The JSON must be valid and parseable — no trailing commas, no comments.
+- "reason" should be a short (1 sentence) explanation of your classification.
+- When unsure, default to "complex" — having a plan for a simple task is harmless.`;
+
+/**
+ * Full system prompt instructions for Fusion Agent execution mode.
+ *
+ * Combines ReAct JSON format rules with Plan-and-Solve plan management.
+ */
+export const FUSION_EXECUTION_INSTRUCTIONS = `
+=== Fusion Agent Paradigm ===
+You are a Fusion Agent that combines ReAct (Reasoning + Acting) with Plan-and-Solve.
+
+When you HAVE a plan (complex tasks):
+1. Work through each step of the plan using tools as needed.
+2. Track your progress with "currentStep" (1-based index of the step you are about to execute).
+3. If you encounter unexpected results or tool failures, revise remaining steps with "revised_plan".
+4. When all steps are complete, provide the final "answer".
+
+When you DON'T have a plan (simple tasks):
+1. Think step by step about what the user needs.
+2. Use tools as needed to gather information.
+3. When you have enough information, provide the final "answer".
+
+=== Response Format ===
+You MUST respond with a valid JSON object in the "content" field.
+
+Creating the INITIAL PLAN:
+{"thought": "...analysis...", "plan": ["Step 1: description", "Step 2: description", "..."]}
+
+Executing steps (with a plan):
+{"thought": "...reasoning...", "currentStep": 2}
+
+REVISING the plan (replaces REMAINING steps only):
+{"thought": "...reasoning about why the plan needs to change...", "revised_plan": ["Updated Step A: ...", "Updated Step B: ..."]}
+
+Final answer:
+{"thought": "...summary...", "answer": "...complete answer for the user..."}
+
+Simple execution (no plan):
+{"thought": "...reasoning..."}
+
+Rules:
+- "thought" is REQUIRED in every response.
+- "plan" is ONLY for the initial plan creation (first response after user input).
+- "revised_plan" replaces REMAINING steps — do NOT re-list already done steps.
+- "currentStep" is the 1-based index of the step you are about to execute next.
+- "answer" is ONLY for the final response, when the task is fully complete.
+- The JSON must be valid and parseable — no trailing commas, no comments.
+- If you need to use a tool, put your reasoning in "thought" as JSON, and send the tool call via the function calling mechanism.
+
+=== When to Replan ===
+1. REPEATED TOOL FAILURES: A tool fails 2+ consecutive times on the same step.
+2. CONTRADICTED ASSUMPTIONS: Tool results disprove a key plan assumption.
+3. EXECUTION DRIFT: The actual state differs from what the plan expected.
+4. STUCK ON A STEP: Cannot make progress after multiple attempts.
+
+If in doubt, output a "revised_plan" rather than retrying.`;
+
+/**
+ * Inline-reflection prompt template.
+ *
+ * Injected as a user message during execution so the LLM self-checks
+ * its progress before continuing.
+ */
+export const INLINE_REFLECTION_PROMPT =
+  `[Internal Reflection] Pause and evaluate your progress so far:
+
+1. Are you on track to answer the user's original request?
+2. Have any tool calls returned unexpected or empty results?
+3. Is the current plan still appropriate, or should it be revised?
+4. What is the single most important action to take next?
+
+Respond with a JSON object:
+{
+  "on_track": true,
+  "issues_found": ["..."],
+  "should_replan": false,
+  "next_action": "..."
+}
+
+Then resume execution normally — do NOT include "answer" unless you are truly done.`;
+

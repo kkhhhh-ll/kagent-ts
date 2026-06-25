@@ -3,7 +3,7 @@ import { MessageData } from "../messages/types";
 /**
  * Which agent paradigm the session belongs to.
  */
-export type AgentType = "react" | "plan-solve";
+export type AgentType = "react" | "plan-solve" | "fusion";
 
 /**
  * Lifecycle status of a persisted session.
@@ -22,6 +22,22 @@ export interface PlanSolveSessionState {
   hasPlan: boolean;
   completedSteps: number;
   consecutiveFailures: number;
+}
+
+/**
+ * Serializable fusion state for FusionAgent sessions.
+ */
+export interface FusionSessionState {
+  /** Task complexity determined during routing. */
+  complexity: "simple" | "complex";
+  /** Whether routing has been completed. */
+  routed: boolean;
+  currentPlan: string[];
+  hasPlan: boolean;
+  completedSteps: number;
+  consecutiveFailures: number;
+  reflectionEnabled: boolean;
+  inlineReflectionsDone: number;
 }
 
 /**
@@ -48,6 +64,9 @@ export interface SessionState {
 
   /** Plan-Solve specific state (only present for plan-solve agents). */
   planState?: PlanSolveSessionState;
+
+  /** Fusion specific state (only present for fusion agents). */
+  fusionState?: FusionSessionState;
 
   /** ISO-8601 timestamp of session creation (stable across saves). */
   createdAt: string;
