@@ -31,7 +31,7 @@
     "agents",
     "tool-use"
   ],
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "author": "kyk",
   "repository": {
     "type": "git",
