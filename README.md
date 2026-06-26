@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）+ `FusionAgent`（三者融合：自动路由→规划→执行→反思）
+- **Agent 循环范式** — `ReActAgent`（思考→行动→观察→最终答案）+ `PlanSolveAgent`（规划→执行→修订→最终答案）+ `FusionAgent`（三者融合：自动路由→规划→执行→反思）+ `OrchestratorAgent`（编排器：分解→分发→合成→自适应，DAG 子任务并行调度）
 - **多 LLM 后端** — 支持 OpenAI 和 Anthropic，通过 `createLLMProvider()` 工厂函数自动检测后端类型
 - **模型路由** — `ModelRouter` 按任务类型路由到不同模型：主循环 → 主力模型，子 Agent → 轻量模型，反思 → 独立模型，每条路由内置灾备链
 - **Anthropic Prompt Caching** — 支持对系统提示词启用 Anthropic 的 ephemeral 缓存，降低 token 成本
@@ -40,7 +40,7 @@ npm install kagent-ts
 ## 快速开始
 
 ```typescript
-import { ReActAgent, FusionAgent, createLLMProvider, Tool } from "kagent-ts";
+import { ReActAgent, FusionAgent, OrchestratorAgent, createLLMProvider, Tool } from "kagent-ts";
 
 // 1. 创建 LLM Provider（自动检测 OpenAI / Anthropic）
 const llm = createLLMProvider({
@@ -89,6 +89,11 @@ src/
 │   ├── hooks.ts           # 生命周期钩子接口
 │   ├── response-schema.ts # 结构化 JSON 输出解析
 │   └── system-prompts.ts  # 系统提示词片段
+├── orchestrator/           # 编排器 Agent
+│   ├── orchestrator-agent.ts   # OrchestratorAgent：Decompose→Dispatch→Synthesize→Adapt
+│   ├── orchestrator-types.ts   # TaskNode, TaskGraph, OrchestrationPlan 等类型
+│   ├── orchestrator-response.ts# 各阶段 LLM prompt 模板 + JSON 解析器
+│   └── json-extractor.ts       # 共享 JSON 提取工具
 ├── llm/                   # LLM Provider 接口与实现
 │   ├── interface.ts       # LLMProvider 通用接口
 │   ├── openai-provider.ts # OpenAI 实现（含重试）
@@ -235,6 +240,91 @@ const response = await agent.run("分析项目架构并生成重构方案。");
 ```
 
 **与独立 Agent 的关系：** `FusionAgent` 是新增的独立类，不影响现有的 `ReActAgent` 和 `PlanSolveAgent`，三者可以按需选用。
+
+### OrchestratorAgent
+
+编排器 Agent：父 Agent 不自己执行任务，而是将任务**分解为 DAG 子任务图**，分发给不同子 Agent 并行/串行执行，**合成结果**，并根据子 Agent 返回的信息**自适应调整后续编排**。
+
+```typescript
+import { OrchestratorAgent } from "kagent-ts";
+
+const agent = new OrchestratorAgent({
+  llm,                          // 编排器的主 LLM（决策分解/合成/自适应）
+  subAgentsDir: "./subagents",  // 子 Agent 定义目录
+  subAgentLLM: lightLLM,        // 子 Agent 使用的 LLM（降本）
+  maxRounds: 3,                 // 最大编排轮次（默认 3）
+  maxParallelNodes: 5,          // 最大并行子任务数（默认 5）
+  maxTotalNodes: 20,            // 总子任务数上限（默认 20）
+});
+
+const response = await agent.run("审查这个项目的安全性，包括 SQL 注入、XSS 和认证漏洞。");
+```
+
+**执行流程：**
+
+```text
+用户输入
+  ↓
+[1. Decompose]   LLM 分析请求 → 构建 TaskGraph（含依赖关系 DAG）
+  ↓
+┌─ 编排循环（最多 maxRounds 轮）─────────────────┐
+│                                                  │
+│ [2. Dispatch]   拓扑排序 → 无依赖节点并行 spawn  │
+│     - 等待一批节点完成 → 级联触发下游节点          │
+│     - 上游结果通过 {{node_id.output}} 模板注入    │
+│                                                  │
+│ [3. Synthesize]  LLM 审查所有结果 → 判断完整性     │
+│     ├─ 充分 → 返回 finalAnswer                   │
+│     └─ 不足 → 产出 gaps[]                         │
+│                                                  │
+│ [4. Adapt]       LLM 根据 gaps 生成新 TaskNode    │
+│     └─ 追加到 TaskGraph → 回到 Dispatch           │
+│                                                  │
+└──────────────────────────────────────────────────┘
+  ↓
+最终答案
+```
+
+**任务图示例：**
+
+```json
+{
+  "thought": "安全检查拆分为 3 个并行维度 + 1 个汇总",
+  "taskGraph": {
+    "nodes": [
+      { "id": "check_sql", "subAgentName": "security-scanner",
+        "input": "检查 SQL 注入漏洞", "dependsOn": [] },
+      { "id": "check_xss", "subAgentName": "security-scanner",
+        "input": "检查 XSS 漏洞",     "dependsOn": [] },
+      { "id": "check_auth", "subAgentName": "security-scanner",
+        "input": "检查认证漏洞",       "dependsOn": [] },
+      { "id": "aggregate", "subAgentName": "analyst",
+        "input": "汇总 {{check_sql.output}} {{check_xss.output}} {{check_auth.output}}",
+        "dependsOn": ["check_sql", "check_xss", "check_auth"] }
+    ]
+  }
+}
+```
+
+**自适应编排：**
+
+当 Synthesize 阶段发现信息不足时，Adapt 阶段生成新的子任务节点加入下一轮：
+
+```text
+Round 1: Decompose(3 nodes) → Dispatch → Synthesize → ❌ incomplete (gaps: ["missing CSRF check"])
+Round 2: Adapt(1 new node: "check_csrf") → Dispatch → Synthesize → ✅ complete
+```
+
+**与现有 Agent 的关系：**
+
+| Agent | 谁干活 | 适用场景 |
+|-------|--------|---------|
+| `ReActAgent` | 自己干 | 简单问答、单步操作 |
+| `PlanSolveAgent` | 自己按计划干 | 复杂多步任务，需要全局规划 |
+| `FusionAgent` | 自己干（自适应策略） | 混合复杂度任务，需反思 |
+| `OrchestratorAgent` | **编排子 Agent 干** | 大规模并行任务、多领域协作、信息汇总 |
+
+**子 Agent 并发限制已解除：** 从 v0.2.0 起，`SubAgentManager.spawn()` 不再限制同名子 Agent 同时只能运行一个实例。编排场景下，同一个 `security-scanner` 可以同时扫描 3 个不同维度，每个获取唯一 `runId`。
 
 ## LLM 后端
 
@@ -973,6 +1063,10 @@ const agent2 = new ReActAgent({
 
 子 Agent 异步运行，结果在后续 ReAct 迭代中自动注入上下文。
 
+**并发支持：** 从 v0.2.0 起，`SubAgentManager.spawn()` 支持同名子 Agent 多实例并发运行，每个实例获取唯一 `runId`。这使得编排器可以同时派发多个同类子 Agent 处理不同输入。
+
+更高级的编排用法请参考上面的 [OrchestratorAgent](#orchestratoragent) 章节。
+
 ## 长期记忆
 
 基于文件的持久化记忆系统，跨会话保存：
@@ -1109,6 +1203,9 @@ import {
   parsePlanSolveResponse,
   parseFusionRouteResponse,
   parseFusionResponse,
+  parseDecomposeResponse,
+  parseSynthesizeResponse,
+  parseAdaptResponse,
 } from "kagent-ts";
 
 // ReAct 输出格式：
@@ -1127,6 +1224,16 @@ import {
 // Fusion 执行输出格式（兼容 PlanSolve 格式）：
 // { "thought": "...", "plan": [...] }          ← 初始计划
 // { "thought": "...", "answer": "..." }        ← 最终答案
+
+// Orchestrator Decompose 输出格式：
+// { "thought": "...", "taskGraph": { "nodes": [...] } }  ← 任务图
+
+// Orchestrator Synthesize 输出格式：
+// { "thought": "...", "isComplete": true, "finalAnswer": "..." }  ← 完整
+// { "thought": "...", "isComplete": false, "gaps": [...] }        ← 不足
+
+// Orchestrator Adapt 输出格式：
+// { "thought": "...", "newNodes": [...], "stuck": false }  ← 新任务
 ```
 
 ## 消息 API
