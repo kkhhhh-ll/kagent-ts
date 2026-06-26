@@ -1,0 +1,130 @@
+# Agent 基类
+
+`Agent` 是所有 Agent 类型的抽象基类。它提供了共享的基础设施，包括 LLM 调用、工具管理、上下文压缩、会话持久化等。
+
+## 构造函数
+
+```ts
+import { Agent } from 'kagent-ts'
+
+// Agent 是抽象类，不能直接实例化
+// 请使用 ReActAgent / PlanSolveAgent / FusionAgent / OrchestratorAgent
+```
+
+## 通用方法
+
+所有 Agent 子类都继承以下方法：
+
+### `run(input: string): Promise<string>`
+
+执行 Agent 的主循环，处理用户输入并返回最终答案。
+
+```ts
+const answer = await agent.run('请帮我分析这个项目的代码结构。')
+```
+
+### `chat(input: string): Promise<string>`
+
+单轮对话，不触发 Agent 循环（不调用工具，仅 LLM 回复）。
+
+```ts
+const reply = await agent.chat('你好，你能做什么？')
+```
+
+### `newTopic(): void`
+
+清除当前对话历史，开始新的话题。保留系统提示词和配置。
+
+```ts
+agent.newTopic()
+```
+
+### `cancel(): void`
+
+取消当前正在执行的 `run()` 调用。已执行的工具调用无法回滚。
+
+```ts
+agent.cancel()
+```
+
+### `reset(): void`
+
+完全重置 Agent 到初始状态（清除对话历史、会话状态等）。
+
+```ts
+agent.reset()
+```
+
+### `clearConversation(): void`
+
+仅清除对话消息，保留其他状态。
+
+```ts
+agent.clearConversation()
+```
+
+### `resume(sessionId: string, input?: string): Promise<string>`
+
+从持久化的 Checkpoint 恢复会话并继续执行。
+
+```ts
+const answer = await agent.resume('session_abc123', '继续之前的任务')
+```
+
+### `shutdown(): Promise<void>`
+
+优雅关闭 Agent，断开 MCP 连接，保存最终状态。
+
+```ts
+await agent.shutdown()
+```
+
+## 生命周期钩子
+
+通过 `AgentHooks` 接口可以监听 Agent 执行的各个阶段。详见 [生命周期钩子](/core/hooks)。
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  hooks: [{
+    onLLMStart: (messages) => console.log('LLM 调用开始'),
+    onLLMEnd: (response) => console.log('LLM 调用结束'),
+    onToolStart: (name, args) => console.log(`工具调用: ${name}`),
+    onToolEnd: (name, result) => console.log(`工具结果: ${name}`),
+    onThought: (thought) => console.log(`思考: ${thought}`),
+    onFinish: (answer, stats) => console.log(`完成: ${stats.iterations} 轮`),
+  }],
+})
+```
+
+## 工具审批 (HITL)
+
+通过 `onToolApproval` 回调实现 Human-In-The-Loop 工具审批：
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  onToolApproval: async (toolName, args) => {
+    console.log(`确认执行 ${toolName}?`, args)
+    // 返回 true 允许执行，false 拒绝
+    return true
+  },
+})
+```
+
+## 并行工具调用
+
+设置 `allowParallelToolCalls: true` 允许 LLM 在同一轮中并行调用多个独立工具：
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  allowParallelToolCalls: true,
+})
+```
+
+## 下一步
+
+- [生命周期钩子](/core/hooks) — 详细的钩子使用指南
+- [LLM 后端](/llm/overview) — 配置 LLM Provider
+- [工具系统](/tools/overview) — 注册和自定义工具

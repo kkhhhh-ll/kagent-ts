@@ -8,3 +8,5 @@ dist/
 .vscode/
 .memory/
 .claude/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
