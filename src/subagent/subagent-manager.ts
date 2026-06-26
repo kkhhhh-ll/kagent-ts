@@ -140,15 +140,14 @@ export class SubAgentManager {
    * Spawn a sub-agent by definition name. Returns immediately with a run ID;
    * the sub-agent executes asynchronously.
    *
-   * Only one sub-agent can be spawned at a time from the same definition
-   * (active runs are tracked per name). Additional spawn attempts with the
-   * same name while a run is still pending will be rejected.
+   * Multiple instances of the same definition can run concurrently — each
+   * gets a unique run ID. This enables orchestrator patterns where the same
+   * sub-agent type handles different inputs in parallel.
    *
    * @param name  The registered sub-agent definition name.
    * @param input The task description passed to the sub-agent.
    * @returns The unique run ID (used to correlate results later).
-   * @throws If the definition is unknown, LLM is not bound, or a run is
-   *         already active for the given name.
+   * @throws If the definition is unknown or the manager is not yet bound.
    */
   spawn(name: string, input: string): string {
     const definition = this.definitions.get(name);
@@ -163,15 +162,6 @@ export class SubAgentManager {
       throw new Error(
         "SubAgentManager is not bound to an LLM provider / ToolRegistry / SkillManager. " +
         "Call bind() before spawn().",
-      );
-    }
-
-    // Reject duplicate spawns for the same definition name
-    const alreadyRunning = this.pending.find((r) => r.name === name && !r.resolved);
-    if (alreadyRunning) {
-      throw new Error(
-        `Sub-agent "${name}" is already running (${alreadyRunning.subAgentId}). ` +
-        `Wait for it to complete before spawning again.`,
       );
     }
 

@@ -7,6 +7,8 @@ export { PlanSolveAgent } from "./core/plan-solve-agent";
 export type { PlanSolveAgentConfig } from "./core/plan-solve-agent";
 export { FusionAgent } from "./core/fusion-agent";
 export type { FusionAgentConfig, PlanConfirmCallback } from "./core/fusion-agent";
+export { OrchestratorAgent } from "./orchestrator/orchestrator-agent";
+export type { OrchestratorAgentConfig } from "./orchestrator/orchestrator-agent";
 export type { Tool } from "./core/types";
 export type { AgentHooks } from "./core/hooks";
 
@@ -30,6 +32,25 @@ export type {
   FusionRouteResponse,
   FusionResponse,
 } from "./core/response-schema";
+
+// Orchestrator — structured decomposition, dispatch, synthesis, adapt
+export {
+  parseDecomposeResponse,
+  parseSynthesizeResponse,
+  parseAdaptResponse,
+  buildDecomposePrompt,
+  buildSynthesizePrompt,
+  buildAdaptPrompt,
+} from "./orchestrator/orchestrator-response";
+export type {
+  TaskNode,
+  TaskNodeStatus,
+  TaskGraph,
+  OrchestrationPlan,
+  SynthesisResult,
+  AdaptResult,
+  OrchestratorSessionState,
+} from "./orchestrator/orchestrator-types";
 
 // Tools — circuit breaker & registry
 export { ToolRegistry } from "./tools/tool-registry";

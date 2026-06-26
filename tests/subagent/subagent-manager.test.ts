@@ -196,13 +196,15 @@ describe("SubAgentManager", () => {
       );
     });
 
-    it("throws when spawning a duplicate while already running", () => {
+    it("allows multiple concurrent spawns of the same definition", () => {
       const manager = setupManager("worker");
-      manager.spawn("worker", "task 1");
+      const runId1 = manager.spawn("worker", "task 1");
+      const runId2 = manager.spawn("worker", "task 2");
 
-      expect(() => manager.spawn("worker", "task 2")).toThrow(
-        /already running/,
-      );
+      expect(runId1).toContain("worker_");
+      expect(runId2).toContain("worker_");
+      expect(runId1).not.toBe(runId2);
+      expect(manager.getActiveCount()).toBe(2);
     });
 
     it("returns a run ID on successful spawn", () => {

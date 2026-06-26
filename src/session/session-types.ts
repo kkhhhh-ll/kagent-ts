@@ -1,9 +1,10 @@
 import { MessageData } from "../messages/types";
+import type { OrchestratorSessionState } from "../orchestrator/orchestrator-types";
 
 /**
  * Which agent paradigm the session belongs to.
  */
-export type AgentType = "react" | "plan-solve" | "fusion";
+export type AgentType = "react" | "plan-solve" | "fusion" | "orchestrator";
 
 /**
  * Lifecycle status of a persisted session.
@@ -67,6 +68,9 @@ export interface SessionState {
 
   /** Fusion specific state (only present for fusion agents). */
   fusionState?: FusionSessionState;
+
+  /** Orchestrator specific state (only present for orchestrator agents). */
+  orchestratorState?: OrchestratorSessionState;
 
   /** ISO-8601 timestamp of session creation (stable across saves). */
   createdAt: string;
