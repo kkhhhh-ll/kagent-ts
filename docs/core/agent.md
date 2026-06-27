@@ -142,11 +142,10 @@ const agent = new ReActAgent({
   },
 })
 
-// Agent 在回答前会自动调用 search_knowledge 检索相关文档
+// 支持纯向量检索、混合检索（BM25 + RRF）、Re-rank 精排
+// 详见 [RAG 知识库](/advanced/rag)
 await agent.run('怎么配置 MCP？')
 ```
-
-详见 [RAG 知识库](/advanced/rag)。
 
 ## 下一步
 

@@ -143,6 +143,18 @@ const agent = new ReActAgent({
 
     /** 相邻 chunk 重叠字符数（默认: 200） */
     chunkOverlap?: number
+
+    /** 自定义向量存储 — Chroma / Milvus / Pinecone 等（默认: InMemoryVectorStore） */
+    store?: VectorStore
+
+    /** 启用混合检索 — BM25 + 向量 + RRF 融合（默认: false） */
+    hybridSearch?: boolean
+
+    /** 混合检索时每路取 topK × factor 条候选（默认: 3） */
+    hybridRetrievalFactor?: number
+
+    /** Re-rank 精排器 — LLM / Cross-Encoder（可选） */
+    reRanker?: ReRanker
   },
 })
 ```
