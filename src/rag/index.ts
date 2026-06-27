@@ -2,6 +2,14 @@ export { RAGManager } from "./rag-manager";
 export { OpenAIEmbeddingProvider } from "./embedding-provider";
 export type { OpenAIEmbeddingConfig } from "./embedding-provider";
 export { InMemoryVectorStore, cosineSimilarity } from "./vector-store";
+export { ChromaVectorStore } from "./chroma-store";
+export type { ChromaVectorStoreConfig } from "./chroma-store";
+export { InMemoryKeywordIndex } from "./keyword-index";
+export type { BM25Result } from "./keyword-index";
+export { rrfFusion, chunkKey } from "./rrf";
+export type { RankedResult, RRFFusionResult } from "./rrf";
+export { LLMReRanker } from "./llm-reranker";
+export type { LLMReRankerConfig } from "./llm-reranker";
 export { loadDocuments } from "./document-loader";
 export { splitText } from "./text-splitter";
 export type {
@@ -11,6 +19,7 @@ export type {
   VectorStore,
   RAGSearchResult,
   RAGConfig,
+  ReRanker,
 } from "./rag-types";
 export {
   createSearchKnowledgeTool,

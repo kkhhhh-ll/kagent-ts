@@ -121,7 +121,7 @@ describe("RAGManager", () => {
     await manager.index();
     expect(manager.documentCount).toBe(1);
 
-    manager.clear();
+    await manager.clear();
     expect(manager.documentCount).toBe(0);
     expect(manager.chunkCount).toBe(0);
     expect(manager.indexed).toBe(false);
@@ -341,5 +341,119 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
     const tool = createListKnowledgeDocumentsTool(manager);
     const result = await tool.execute({});
     expect(result).toContain("No documents");
+  });
+});
+
+// ─── Hybrid Search (BM25 + Vector + RRF) ──────────────────────────────────
+
+describe("RAGManager — hybrid search", () => {
+  let docsDir: string;
+
+  beforeEach(() => {
+    docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "kagent-rag-hybrid-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(docsDir, { recursive: true, force: true });
+  });
+
+  it("hybrid mode indexes both vector and keyword stores", async () => {
+    fs.writeFileSync(path.join(docsDir, "a.md"), "Machine learning is transforming industries.", "utf-8");
+
+    const manager = new RAGManager(
+      {
+        documentsDir: docsDir,
+        embeddingProvider: new MockEmbeddingProvider(),
+        hybridSearch: true,
+      },
+      new SilentLogger(),
+    );
+    await manager.index();
+    expect(manager.indexed).toBe(true);
+    expect(manager.chunkCount).toBeGreaterThan(0);
+  });
+
+  it("hybrid search returns results for keyword matches", async () => {
+    fs.writeFileSync(path.join(docsDir, "a.md"), "TypeScript is a strongly typed programming language.", "utf-8");
+
+    const manager = new RAGManager(
+      {
+        documentsDir: docsDir,
+        embeddingProvider: new MockEmbeddingProvider(),
+        hybridSearch: true,
+      },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const results = await manager.search("TypeScript", 3);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  it("hybrid mode returns fewer results when topK is small", async () => {
+    fs.writeFileSync(path.join(docsDir, "a.md"), "A B C D E F G H I J", "utf-8");
+
+    const manager = new RAGManager(
+      {
+        documentsDir: docsDir,
+        embeddingProvider: new MockEmbeddingProvider(),
+        hybridSearch: true,
+        topK: 1,
+      },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const results = await manager.search("A");
+    expect(results.length).toBeLessThanOrEqual(1);
+  });
+
+  it("hybrid clear() resets both indexes", async () => {
+    fs.writeFileSync(path.join(docsDir, "a.md"), "Some content.", "utf-8");
+
+    const manager = new RAGManager(
+      {
+        documentsDir: docsDir,
+        embeddingProvider: new MockEmbeddingProvider(),
+        hybridSearch: true,
+      },
+      new SilentLogger(),
+    );
+    await manager.index();
+    expect(manager.indexed).toBe(true);
+
+    await manager.clear();
+    expect(manager.indexed).toBe(false);
+    expect(manager.chunkCount).toBe(0);
+
+    const results = await manager.search("content", 3);
+    expect(results).toHaveLength(0);
+  });
+
+  it("hybrid search returns empty when not indexed", async () => {
+    const manager = new RAGManager(
+      {
+        documentsDir: docsDir,
+        embeddingProvider: new MockEmbeddingProvider(),
+        hybridSearch: true,
+      },
+      new SilentLogger(),
+    );
+    const results = await manager.search("anything", 3);
+    expect(results).toHaveLength(0);
+  });
+
+  it("pure vector mode (default) still works (backward compat)", async () => {
+    fs.writeFileSync(path.join(docsDir, "a.md"), "Hello world.", "utf-8");
+
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const results = await manager.search("hello", 3);
+    expect(results.length).toBeGreaterThan(0);
   });
 });

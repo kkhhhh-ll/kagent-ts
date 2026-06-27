@@ -54,6 +54,7 @@
     "openai": "^4.80.0"
   },
   "optionalDependencies": {
+    "chromadb": "^1.10.5",
     "tiktoken": "^1.0.22"
   },
   "devDependencies": {

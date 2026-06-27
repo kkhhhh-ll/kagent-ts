@@ -63,36 +63,36 @@ describe("InMemoryVectorStore", () => {
     expect(store.size).toBe(0);
   });
 
-  it("adds chunks and updates size", () => {
+  it("adds chunks and updates size", async () => {
     const chunks = [
       makeChunk("hello", [1, 0, 0]),
       makeChunk("world", [0, 1, 0]),
     ];
-    store.add(chunks);
+    await store.add(chunks);
     expect(store.size).toBe(2);
   });
 
-  it("clear() removes all chunks", () => {
-    store.add([makeChunk("x", [1, 0])]);
+  it("clear() removes all chunks", async () => {
+    await store.add([makeChunk("x", [1, 0])]);
     expect(store.size).toBe(1);
-    store.clear();
+    await store.clear();
     expect(store.size).toBe(0);
   });
 
-  it("search returns empty array when store is empty", () => {
-    const results = store.search([1, 0, 0], 5);
+  it("search returns empty array when store is empty", async () => {
+    const results = await store.search([1, 0, 0], 5);
     expect(results).toHaveLength(0);
   });
 
-  it("search returns top-K results sorted by similarity", () => {
+  it("search returns top-K results sorted by similarity", async () => {
     const chunks = [
       makeChunk("close to query", [1, 0.1, 0]),
       makeChunk("far from query", [0, 1, 0]),
       makeChunk("also close", [0.9, 0, 0.1]),
     ];
-    store.add(chunks);
+    await store.add(chunks);
 
-    const results = store.search([1, 0, 0], 2);
+    const results = await store.search([1, 0, 0], 2);
 
     expect(results).toHaveLength(2);
     // First result should be most similar
@@ -101,25 +101,25 @@ describe("InMemoryVectorStore", () => {
     expect(results[0].score).toBeGreaterThanOrEqual(results[1].score);
   });
 
-  it("search caps results at topK", () => {
+  it("search caps results at topK", async () => {
     const chunks = Array.from({ length: 10 }, (_, i) =>
       makeChunk(`chunk-${i}`, [i, 0, 0]),
     );
-    store.add(chunks);
+    await store.add(chunks);
 
-    const results = store.search([5, 0, 0], 3);
+    const results = await store.search([5, 0, 0], 3);
     expect(results).toHaveLength(3);
   });
 
-  it("excludes zero-scoring results", () => {
+  it("excludes zero-scoring results", async () => {
     // All-zeros embedding → dot product 0 → excluded
     const chunks = [
       makeChunk("zero embedding", [0, 0, 0]),
       makeChunk("positive embedding", [1, 0, 0]),
     ];
-    store.add(chunks);
+    await store.add(chunks);
 
-    const results = store.search([1, 0, 0], 5);
+    const results = await store.search([1, 0, 0], 5);
     // "zero embedding" should not appear (score = 0)
     expect(results.every((r) => r.score > 0)).toBe(true);
   });

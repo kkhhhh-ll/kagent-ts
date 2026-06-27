@@ -70,19 +70,39 @@ export interface RAGSearchResult {
  */
 export interface VectorStore {
   /** Add chunks with their embeddings to the store. */
-  add(chunks: RAGChunk[]): void;
+  add(chunks: RAGChunk[]): Promise<void>;
 
   /**
    * Search for the top-K most similar chunks to the query embedding.
    * Returns results sorted by similarity descending.
    */
-  search(queryEmbedding: number[], topK: number): RAGSearchResult[];
+  search(queryEmbedding: number[], topK: number): Promise<RAGSearchResult[]>;
 
   /** Number of chunks currently stored. */
   readonly size: number;
 
   /** Remove all chunks. */
-  clear(): void;
+  clear(): Promise<void>;
+}
+
+// ─── Re-ranker ────────────────────────────────────────────────────────────────
+
+/**
+ * Interface for re-ranking retrieved results.
+ *
+ * After vector search (and optionally BM25 + RRF), a re-ranker can
+ * re-score the candidates using a more expensive but accurate model
+ * (e.g., a Cross-Encoder or LLM).
+ */
+export interface ReRanker {
+  /**
+   * Re-rank a list of candidate results for a given query.
+   *
+   * @param query   The original search query.
+   * @param results The candidate results to re-rank (typically 2–3× topK).
+   * @returns       Re-ranked results with updated scores, sorted descending.
+   */
+  rerank(query: string, results: RAGSearchResult[]): Promise<RAGSearchResult[]>;
 }
 
 // ─── Manager Config ──────────────────────────────────────────────────────────
@@ -99,4 +119,49 @@ export interface RAGConfig {
   chunkOverlap?: number;
   /** Number of top results to return per search (default: 5). */
   topK?: number;
+  /**
+   * Custom vector store instance (default: InMemoryVectorStore).
+   *
+   * Use this to plug in a persistent or database-backed store:
+   * ```ts
+   * store: new ChromaVectorStore({ embeddingDimension: 1536 })
+   * ```
+   */
+  store?: VectorStore;
+
+  /**
+   * Enable hybrid retrieval (BM25 keyword + vector + RRF fusion).
+   *
+   * When true, each search runs both a vector similarity search and a BM25
+   * keyword search in parallel, then merges the results using Reciprocal
+   * Rank Fusion. This improves recall for queries with rare keywords or
+   * domain-specific terminology.
+   *
+   * Default: false (pure vector search).
+   */
+  hybridSearch?: boolean;
+
+  /**
+   * When hybridSearch is enabled, each retrieval system fetches
+   * `topK * hybridRetrievalFactor` candidates before RRF fusion.
+   *
+   * Higher values improve recall at a small latency cost.
+   * Default: 3.
+   */
+  hybridRetrievalFactor?: number;
+
+  /**
+   * Optional re-ranker for post-retrieval refinement.
+   *
+   * After retrieval (and optionally RRF fusion), the candidate results
+   * are passed to the re-ranker, which re-scores them using a more
+   * accurate model (e.g., a Cross-Encoder or an LLM).
+   *
+   * The re-ranker receives all pre-ranked candidates and returns a
+   * re-sorted list. The final top-K results are taken from the
+   * re-ranker's output.
+   *
+   * Without a re-ranker, results are returned as-is from retrieval/RRF.
+   */
+  reRanker?: ReRanker;
 }

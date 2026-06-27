@@ -16,7 +16,7 @@ import type { VectorStore, RAGChunk, RAGSearchResult } from "./rag-types";
 export class InMemoryVectorStore implements VectorStore {
   private chunks: RAGChunk[] = [];
 
-  add(chunks: RAGChunk[]): void {
+  async add(chunks: RAGChunk[]): Promise<void> {
     this.chunks.push(...chunks);
   }
 
@@ -24,7 +24,7 @@ export class InMemoryVectorStore implements VectorStore {
     return this.chunks.length;
   }
 
-  clear(): void {
+  async clear(): Promise<void> {
     this.chunks = [];
   }
 
@@ -34,7 +34,7 @@ export class InMemoryVectorStore implements VectorStore {
    * Returns results sorted by similarity score descending (best match first).
    * Chunks with near-zero-norm embeddings are excluded from results.
    */
-  search(queryEmbedding: number[], topK: number): RAGSearchResult[] {
+  async search(queryEmbedding: number[], topK: number): Promise<RAGSearchResult[]> {
     if (this.chunks.length === 0) return [];
 
     const results: RAGSearchResult[] = [];

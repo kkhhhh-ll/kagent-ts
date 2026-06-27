@@ -15,14 +15,19 @@ import type {
   RAGDocument,
   RAGSearchResult,
   VectorStore,
+  ReRanker,
 } from "./rag-types";
 import { loadDocuments } from "./document-loader";
 import { InMemoryVectorStore } from "./vector-store";
+import { InMemoryKeywordIndex } from "./keyword-index";
+import { rrfFusion, chunkKey, type RankedResult } from "./rrf";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
 export class RAGManager {
   private config: RAGConfig;
   private store: VectorStore;
+  private keywordIndex?: InMemoryKeywordIndex;
+  private reRanker?: ReRanker;
   private logger: Logger;
   private documents: RAGDocument[] = [];
   private _indexed = false;
@@ -34,7 +39,11 @@ export class RAGManager {
       topK: 5,
       ...config,
     };
-    this.store = new InMemoryVectorStore();
+    this.store = config.store ?? new InMemoryVectorStore();
+    if (this.config.hybridSearch) {
+      this.keywordIndex = new InMemoryKeywordIndex();
+    }
+    this.reRanker = config.reRanker;
     this.logger = logger ?? new ConsoleLogger();
   }
 
@@ -66,7 +75,7 @@ export class RAGManager {
    * Idempotent — if already indexed, calling again clears and rebuilds.
    */
   async index(): Promise<void> {
-    this.clear();
+    await this.clear();
 
     this.logger.info("RAG", `Loading documents from "${this.config.documentsDir}"...`);
     this.documents = loadDocuments(
@@ -109,13 +118,22 @@ export class RAGManager {
       allChunks[i].embedding = embeddings[i];
     }
 
-    this.store.add(allChunks);
-    this.logger.info("RAG", `Indexing complete — ${this.store.size} chunk(s) in vector store.`);
+    await this.store.add(allChunks);
+
+    // Build keyword index for hybrid search (BM25)
+    if (this.keywordIndex) {
+      this.keywordIndex.add(allChunks);
+    }
+
+    this.logger.info("RAG", `Indexing complete — ${this.store.size} chunk(s) in vector store${this.keywordIndex ? `, ${this.keywordIndex.size} in keyword index` : ""}.`);
     this._indexed = true;
   }
 
   /**
    * Search the knowledge base for chunks relevant to the query.
+   *
+   * In hybrid mode (hybridSearch: true), runs both vector similarity and
+   * BM25 keyword search in parallel, then merges results via RRF.
    *
    * @param query Natural-language search query.
    * @param topK  Number of results to return (overrides config default).
@@ -126,8 +144,51 @@ export class RAGManager {
     }
 
     const k = topK ?? this.config.topK ?? 5;
-    const [queryEmbedding] = await this.config.embeddingProvider.embed([query]);
-    return this.store.search(queryEmbedding, k);
+    // Fetch extra candidates when re-ranking so the re-ranker has more to work with
+    const fetchFactor = this.reRanker ? (this.config.hybridRetrievalFactor ?? 3) : 1;
+
+    let results: RAGSearchResult[];
+
+    // ── Hybrid mode: vector + BM25 → RRF fusion ──────────────────────
+    if (this.keywordIndex) {
+      const fetchK = k * fetchFactor;
+
+      const [queryEmbedding] = await this.config.embeddingProvider.embed([query]);
+
+      const [vectorResults, bm25Results] = await Promise.all([
+        this.store.search(queryEmbedding, fetchK),
+        this.keywordIndex.search(query, fetchK),
+      ]);
+
+      const vecRanking: RankedResult[] = vectorResults.map((r) => ({
+        chunk: r.chunk,
+        score: r.score,
+      }));
+      const bm25Ranking: RankedResult[] = bm25Results.map((r) => ({
+        chunk: r.chunk,
+        score: r.score,
+      }));
+
+      const fused = rrfFusion([vecRanking, bm25Ranking], 60, fetchK);
+
+      results = fused.map((f) => ({
+        chunk: f.chunk,
+        score: f.rrfScore,
+      }));
+    } else {
+      // ── Pure vector mode ─────────────────────────────────────────
+      const fetchK = k * fetchFactor;
+      const [queryEmbedding] = await this.config.embeddingProvider.embed([query]);
+      results = await this.store.search(queryEmbedding, fetchK);
+    }
+
+    // ── Re-rank (optional) ────────────────────────────────────────────
+    if (this.reRanker && results.length > 0) {
+      results = await this.reRanker.rerank(query, results);
+    }
+
+    // Take final top-K
+    return results.slice(0, k);
   }
 
   /**
@@ -152,8 +213,9 @@ export class RAGManager {
   }
 
   /** Clear all indexed data. */
-  clear(): void {
-    this.store.clear();
+  async clear(): Promise<void> {
+    await this.store.clear();
+    this.keywordIndex?.clear();
     this.documents = [];
     this._indexed = false;
   }
