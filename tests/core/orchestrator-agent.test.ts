@@ -579,6 +579,37 @@ describe("OrchestratorAgent", () => {
       // The orchestrator recovers: synthesize error → adapt → dispatch → synthesize succeeds
       expect(result).toContain("Recovered after network error.");
     });
+
+    it("fails early with clear error when no subAgentsDir is configured", async () => {
+      const agent = new OrchestratorAgent({
+        llm: mockAnswerLLM("should not be called"),
+        toolRegistry: createToolRegistry(),
+        logger: new SilentLogger(),
+        maxRounds: 3,
+        // No subAgentsDir — the orchestrator cannot function without sub-agents
+      });
+
+      const result = await agent.run("do something");
+      expect(result).toContain("OrchestratorAgent requires sub-agents to be configured");
+      expect(result).toContain("subAgentsDir");
+    });
+
+    it("fails early with clear error when subAgentsDir has no definitions", async () => {
+      const emptyDir = tempDir();
+      tempDirs.push(emptyDir);
+
+      const agent = new OrchestratorAgent({
+        llm: mockAnswerLLM("should not be called"),
+        toolRegistry: createToolRegistry(),
+        logger: new SilentLogger(),
+        subAgentsDir: emptyDir,
+        maxRounds: 3,
+      });
+
+      const result = await agent.run("do something");
+      expect(result).toContain("OrchestratorAgent requires at least one sub-agent definition");
+      expect(result).toContain("AGENT.md");
+    });
   });
 
   // ════════════════════════════════════════════════════════════════════════

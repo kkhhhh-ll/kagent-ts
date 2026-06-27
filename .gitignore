@@ -5,6 +5,7 @@ dist/
 .error-traces/
 *.tgz
 .npmrc
+interview.md
 .vscode/
 .memory/
 .claude/

@@ -4,7 +4,6 @@ import { Role } from "../messages/types";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse } from "../llm/interface";
 import { wrapUntrusted } from "../security/boundaries";
-import { SUB_AGENT_DELEGATION } from "../core/system-prompts";
 import { SessionState, SessionStatus } from "../session/session-types";
 
 import type {
@@ -33,8 +32,7 @@ You do NOT execute tasks yourself. Instead, you decompose complex requests into
 sub-tasks, delegate them to specialised sub-agents, synthesise their results,
 and adapt your plan when gaps are found.
 
-You have access to tools for discovering and spawning sub-agents.
-${SUB_AGENT_DELEGATION}`;
+You have access to tools for discovering and spawning sub-agents.`;
 
 // ─── Configuration ────────────────────────────────────────────────────────
 
@@ -134,6 +132,26 @@ export class OrchestratorAgent extends Agent {
     this.rebuildSystemPrompt();
   }
 
+  /**
+   * Return the SubAgentManager, throwing a clear error if sub-agents were
+   * not configured. The Orchestrator cannot function without sub-agents.
+   */
+  private getSubAgentManager(): import("../subagent/subagent-manager").SubAgentManager {
+    if (!this.subAgentManager) {
+      throw new Error(
+        "OrchestratorAgent requires sub-agents to be configured. " +
+        "Set `subAgentsDir` in OrchestratorAgentConfig with at least one AGENT.md definition.",
+      );
+    }
+    if (!this.subAgentManager.hasDefinitions()) {
+      throw new Error(
+        "OrchestratorAgent requires at least one sub-agent definition. " +
+        `No definitions found in "${this.subAgentsDir}". Add AGENT.md files to register sub-agents.`,
+      );
+    }
+    return this.subAgentManager;
+  }
+
   // ─── Main Entry Point ───────────────────────────────────────────────
 
   async run(input: string): Promise<string> {
@@ -149,6 +167,15 @@ export class OrchestratorAgent extends Agent {
     await this.init();
     await this.reloadDynamicResources();
     this.recoverOrphanedSubAgentResults();
+
+    // Validate that sub-agents are available — the Orchestrator cannot function without them.
+    try {
+      this.getSubAgentManager();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error("Orchestrator", message);
+      return message;
+    }
 
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());
@@ -295,7 +322,7 @@ export class OrchestratorAgent extends Agent {
    * LLM knows what it can delegate to.
    */
   private async decompose(input: string): Promise<OrchestrationPlan> {
-    const availableSubAgents = this.subAgentManager!.buildSubAgentList();
+    const availableSubAgents = this.getSubAgentManager().buildSubAgentList();
 
     const messages = [
       { role: Role.System, content: buildDecomposePrompt(availableSubAgents) },
@@ -393,7 +420,7 @@ export class OrchestratorAgent extends Agent {
         const resolvedInput = this.resolveInputTemplate(node);
 
         try {
-          const runId = this.subAgentManager!.spawn(node.subAgentName, resolvedInput);
+          const runId = this.getSubAgentManager().spawn(node.subAgentName, resolvedInput);
           this.logger.info("Orchestrator", `  Spawned [${node.id}] → ${node.subAgentName} (${runId})`);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
@@ -465,7 +492,7 @@ export class OrchestratorAgent extends Agent {
 
     while (true) {
       // Poll the sub-agent manager for any completed results
-      const results = await this.subAgentManager!.pollCompleted();
+      const results = await this.getSubAgentManager().pollCompleted();
 
       // Match results to our task nodes
       for (const result of results) {
@@ -612,7 +639,7 @@ export class OrchestratorAgent extends Agent {
    * during synthesis.
    */
   private async adapt(gaps: string[]): Promise<AdaptResult> {
-    const availableSubAgents = this.subAgentManager!.buildSubAgentList();
+    const availableSubAgents = this.getSubAgentManager().buildSubAgentList();
 
     const prompt = buildAdaptPrompt(gaps, availableSubAgents);
 

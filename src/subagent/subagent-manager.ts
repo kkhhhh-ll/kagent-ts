@@ -106,6 +106,16 @@ export class SubAgentManager {
   }
 
   /**
+   * Check whether any sub-agent definitions are registered.
+   *
+   * Used by the main agent to decide whether to include sub-agent delegation
+   * instructions in the system prompt.
+   */
+  hasDefinitions(): boolean {
+    return this.definitions.size > 0;
+  }
+
+  /**
    * Set shared resources from the main agent.
    * Called once during agent init.
    *

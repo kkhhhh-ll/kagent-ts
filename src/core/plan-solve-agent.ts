@@ -5,7 +5,7 @@ import {
   parsePlanSolveResponse,
   PLAN_SOLVE_INSTRUCTIONS,
 } from "./response-schema";
-import { TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { wrapUntrusted } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
@@ -32,8 +32,7 @@ Process:
 If no tools are needed, respond with the final answer directly.
 ${TOOL_ERROR_RECOVERY}
 5. If multiple tools fail in a round, consider whether your PLAN needs revision.
-   The approach may be fundamentally wrong — output a "revised_plan".${PLAN_SOLVE_INSTRUCTIONS}
-${SUB_AGENT_DELEGATION}`;
+   The approach may be fundamentally wrong — output a "revised_plan".${PLAN_SOLVE_INSTRUCTIONS}`;
 
 /**
  * Configuration specific to the Plan-and-Solve Agent.

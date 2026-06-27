@@ -2,7 +2,7 @@ import { LLMProvider, ToolCall } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
-import { SECURITY_GUIDANCE } from "./system-prompts";
+import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION } from "./system-prompts";
 import { wrapUntrusted } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
@@ -560,6 +560,7 @@ export abstract class Agent {
     const sections = [
       this.coreSystemPrompt,
       SECURITY_GUIDANCE,
+      this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.projectRules.buildPrompt(),
       PreferenceManager.toPrompt(this.preferences),
       this.toolRegistry.getErrorTracker()?.buildRulesPrompt(),
@@ -1330,6 +1331,17 @@ export abstract class Agent {
   }
 
   // ─── Sub-Agent ────────────────────────────────────────────────────────
+
+  /**
+   * Check whether sub-agents are available.
+   *
+   * Used by `buildSystemPrompt()` to decide whether to include sub-agent
+   * delegation instructions. Returns true only when a SubAgentManager is
+   * configured AND has at least one registered definition.
+   */
+  protected hasSubAgents(): boolean {
+    return this.subAgentManager?.hasDefinitions() === true;
+  }
 
   /**
    * Spawn a sub-agent by definition name.

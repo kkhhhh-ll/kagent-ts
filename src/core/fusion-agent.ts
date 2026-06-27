@@ -11,7 +11,6 @@ import {
 import {
   SECURITY_GUIDANCE,
   TOOL_ERROR_RECOVERY,
-  SUB_AGENT_DELEGATION,
 } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
@@ -31,8 +30,7 @@ For COMPLEX tasks: Plan → Execute → Reflect.
 
 You have access to a set of tools you can use to answer the user's question.
 ${SECURITY_GUIDANCE}
-${TOOL_ERROR_RECOVERY}${FUSION_EXECUTION_INSTRUCTIONS}
-${SUB_AGENT_DELEGATION}`;
+${TOOL_ERROR_RECOVERY}${FUSION_EXECUTION_INSTRUCTIONS}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────
 

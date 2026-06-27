@@ -334,6 +334,23 @@ describe("SubAgentManager", () => {
       expect(manager.getDefinitions()).toHaveLength(1);
     });
 
+    it("hasDefinitions returns false when no definitions are registered", () => {
+      const manager = new SubAgentManager();
+      expect(manager.hasDefinitions()).toBe(false);
+    });
+
+    it("hasDefinitions returns true after definitions are registered", () => {
+      const manager = new SubAgentManager();
+      manager.register({
+        name: "test",
+        description: "...",
+        systemPrompt: "...",
+        tools: [],
+        skills: [],
+      });
+      expect(manager.hasDefinitions()).toBe(true);
+    });
+
     it("hasRunning and getActiveCount reflect pending state", async () => {
       const manager = setupManager("worker");
       expect(manager.hasRunning()).toBe(false);

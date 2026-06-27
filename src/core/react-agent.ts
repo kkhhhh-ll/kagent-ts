@@ -6,7 +6,7 @@ import {
   STRUCTURED_OUTPUT_REMINDER,
   parseReActResponse,
 } from "./response-schema";
-import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapUntrusted } from "../security/boundaries";
@@ -30,8 +30,7 @@ Follow this process:
 If no tools are needed, respond with the final answer directly.
 Always think step by step before acting.
 ${SECURITY_GUIDANCE}
-${TOOL_ERROR_RECOVERY}${STRUCTURED_OUTPUT_INSTRUCTIONS}
-${SUB_AGENT_DELEGATION}`;
+${TOOL_ERROR_RECOVERY}${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
 
 /**
  * Configuration specific to the ReAct Agent.
