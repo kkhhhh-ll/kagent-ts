@@ -220,7 +220,7 @@ export class ToolRegistry {
 
       // Record the failure in the error tracker
       if (this.errorTracker) {
-        this.errorTracker.recordFailure(name, args, rawMessage, remaining);
+        this.errorTracker.recordFailure(name, args, rawMessage, remaining, breaker.state);
       }
 
       // Circuit just opened — no retries left
@@ -234,14 +234,20 @@ export class ToolRegistry {
         );
       }
 
-      // Retries still available
+      // Retries still available — circuit is HALF_OPEN (degraded)
       const attemptNum = breaker.currentFailureCount;
       const totalAllowed = breaker.effectiveThreshold;
+      const stateWarning =
+        remaining === 0
+          ? `\n⚠️  The circuit breaker for "${name}" is now in a degraded state (HALF_OPEN). ` +
+            `The NEXT failure will permanently disable this tool. Proceed with extreme caution.`
+          : `\n⚠️  The circuit breaker for "${name}" is now in a degraded state (HALF_OPEN). ` +
+            `After ${remaining} more failure(s), the tool will be permanently disabled.`;
       return toolError(
         ToolErrorCode.EXECUTION_FAILURE,
         `[RETRYABLE:EXECUTION_FAILURE] Tool "${name}" threw an exception: ${rawMessage}\n\n` +
         `This is attempt ${attemptNum} of ${totalAllowed}. ` +
-        `You have ${remaining} retry attempt${remaining > 1 ? "s" : ""} remaining.\n` +
+        `You have ${remaining} retry attempt${remaining > 1 ? "s" : ""} remaining.${stateWarning}\n` +
         `Analyze the error, correct the parameters, and retry. ` +
         `If the approach is fundamentally wrong, try a different method.`,
         "retryable",

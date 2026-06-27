@@ -109,8 +109,14 @@ export interface Tool {
  * Current state of a circuit breaker for a specific tool.
  */
 export enum BreakerState {
-  /** Normal operation — tool calls are allowed. */
+  /** Normal operation — no failures, tool calls are allowed. */
   CLOSED = "closed",
+  /**
+   * Degraded operation — failures have occurred but the circuit is not yet
+   * fully open. Tool calls are still allowed, but the caller should proceed
+   * with caution: one more failure may open the circuit.
+   */
+  HALF_OPEN = "half_open",
   /** Failure threshold reached — tool calls are blocked. */
   OPEN = "open",
 }
@@ -138,7 +144,7 @@ export interface BreakerStatus {
  */
 export interface TraceEvent {
   /** Event type. */
-  type: "failure" | "retry" | "recovery" | "circuit_open" | "analysis";
+  type: "failure" | "retry" | "recovery" | "circuit_half_open" | "circuit_open" | "analysis";
   /** When the event occurred. */
   timestamp: string;
   /** The error message (for failure/retry events). */

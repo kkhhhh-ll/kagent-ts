@@ -87,19 +87,22 @@ new CircuitBreaker(config: CircuitBreakerConfig)
 
 ```ts
 interface CircuitBreakerConfig {
-  threshold?: number          // 默认: 3
-  resetTimeoutMs?: number     // 默认: 60000
+  toolName: string             // 工具名称
+  retryCount?: number          // 首次失败后的重试次数 (默认: 2)
 }
 
 enum BreakerState {
-  CLOSED = "CLOSED"
-  OPEN = "OPEN"
+  CLOSED = "closed"            // 正常 — 无失败
+  HALF_OPEN = "half_open"      // 半熔断 — 已有失败但工具仍可用
+  OPEN = "open"                // 熔断 — 工具被阻止
 }
 
 interface BreakerStatus {
+  toolName: string
   state: BreakerState
-  consecutiveFailures: number
-  remainingRetries: number
+  failureCount: number
+  failureThreshold: number
+  available: boolean
 }
 ```
 

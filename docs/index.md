@@ -16,7 +16,7 @@ hero:
 features:
   - icon: 🧠
     title: 多种 Agent 范式
-    details: 支持 ReAct、Plan-Solve、Fusion（混合）和 Orchestrator（多代理编排）四种 Agent 循环范式，灵活应对不同复杂度的任务。
+    details: 支持 ReAct、Plan-Solve、Fusion（混合）和 Orchestrator（多agent编排）四种 Agent 循环范式，灵活应对不同复杂度的任务。
   - icon: 🔧
     title: 完善的工具系统
     details: 内置 15 种工具（文件读写、搜索、Shell 执行、网络抓取、知识检索等），支持 Circuit Breaker 熔断、JSON Schema 参数验证、工具输出截断和 HITL 审批。

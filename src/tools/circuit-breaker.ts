@@ -19,15 +19,18 @@ export interface CircuitBreakerConfig {
  * Circuit breaker that tracks consecutive failures for a single tool.
  *
  * States:
- * - CLOSED: Normal operation — executions are allowed.
- * - OPEN:   All retries exhausted — subsequent calls are blocked
- *           without attempting execution.
+ * - CLOSED:    Normal operation — no failures, executions are allowed.
+ * - HALF_OPEN: Degraded operation — failures have occurred but retries
+ *              remain. Tool calls are still allowed, but the caller
+ *              should proceed with caution.
+ * - OPEN:      All retries exhausted — subsequent calls are blocked
+ *              without attempting execution.
  *
- * Flow:
- *   1st failure → 2 retries remaining → LLM should analyze the error and retry
- *   2nd failure → 1 retry remaining
+ * Flow (with retryCount = 2):
+ *   1st failure → HALF_OPEN, 1 retry remaining → LLM should analyze and retry
+ *   2nd failure → HALF_OPEN, 0 retries remaining → last chance
  *   3rd failure → circuit OPENS → LLM must try a different approach
- *   Success → failure count resets to zero
+ *   Success     → circuit returns to CLOSED, failure count resets
  */
 export class CircuitBreaker {
   private toolName: string;
@@ -41,10 +44,12 @@ export class CircuitBreaker {
   }
 
   /**
-   * Whether the circuit is closed and the tool can be called.
+   * Whether the tool can be called.
+   * Returns true in CLOSED (normal) and HALF_OPEN (degraded) states.
+   * Only returns false when the circuit is fully OPEN.
    */
   get isAvailable(): boolean {
-    return this._state === BreakerState.CLOSED;
+    return this._state === BreakerState.CLOSED || this._state === BreakerState.HALF_OPEN;
   }
 
   /**
@@ -77,17 +82,32 @@ export class CircuitBreaker {
   }
 
   /**
-   * Record a successful tool execution — resets failure count
-   * and closes the circuit if it was open.
+   * Record a successful tool execution.
+   *
+   * - From CLOSED or HALF_OPEN: resets failure count and closes the circuit.
+   * - From OPEN: transitions to HALF_OPEN (recovery probe). The next call
+   *   will determine whether recovery is confirmed (→ CLOSED) or failed
+   *   (→ back to OPEN).
    */
   recordSuccess(): void {
-    this.failureCount = 0;
-    this._state = BreakerState.CLOSED;
+    if (this._state === BreakerState.OPEN) {
+      // Recovery probe — enter HALF_OPEN to give the tool one chance
+      this.failureCount = 0;
+      this._state = BreakerState.HALF_OPEN;
+    } else {
+      // CLOSED or HALF_OPEN — full recovery
+      this.failureCount = 0;
+      this._state = BreakerState.CLOSED;
+    }
   }
 
   /**
    * Record a failed tool execution.
-   * If all retries are exhausted, the circuit opens.
+   *
+   * State transitions:
+   * - CLOSED    → HALF_OPEN (first failure, retries remain)
+   * - HALF_OPEN → HALF_OPEN (still have retries) or OPEN (retries exhausted)
+   * - OPEN      → stays OPEN (should not normally be called in this state)
    *
    * @returns The updated number of retries remaining (0 means the circuit opened).
    */
@@ -97,6 +117,8 @@ export class CircuitBreaker {
       this._state = BreakerState.OPEN;
       return 0;
     }
+    // First failure or still within retry budget — enter/remain HALF_OPEN
+    this._state = BreakerState.HALF_OPEN;
     return this.retriesRemaining;
   }
 

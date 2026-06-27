@@ -165,7 +165,8 @@ export class ToolErrorTracker {
     toolName: string,
     args: Record<string, unknown>,
     error: string,
-    retriesRemaining: number
+    retriesRemaining: number,
+    breakerState?: string,
   ): string {
     const existingTraceId = this.activeTraceByTool.get(toolName);
     let trace: ToolErrorTrace;
@@ -187,8 +188,15 @@ export class ToolErrorTracker {
       (e) => e.type === "failure" || e.type === "retry"
     ).length + 1;
 
+    const eventType =
+      retriesRemaining > 0
+        ? "failure"
+        : breakerState === "half_open"
+          ? "circuit_half_open"
+          : "circuit_open";
+
     const event: TraceEvent = {
-      type: retriesRemaining > 0 ? "failure" : "circuit_open",
+      type: eventType,
       timestamp: nowISO(),
       error: truncateError(error),
       attemptNumber,
@@ -435,6 +443,8 @@ export class ToolErrorTracker {
           }
         } else if (event.type === "recovery") {
           detail = event.resolution ?? "Recovered";
+        } else if (event.type === "circuit_half_open") {
+          detail = `Circuit degraded (half-open) after ${event.attemptNumber} attempt(s) — next failure will open the circuit`;
         } else if (event.type === "circuit_open") {
           detail = `Circuit opened after ${event.attemptNumber} attempts`;
         } else if (event.type === "analysis") {
@@ -645,6 +655,8 @@ export class ToolErrorTracker {
         return "🟡 Retry";
       case "recovery":
         return "🟢 Recovery";
+      case "circuit_half_open":
+        return "⚠️ Circuit Half-Open";
       case "circuit_open":
         return "⛔ Circuit Open";
       case "analysis":
