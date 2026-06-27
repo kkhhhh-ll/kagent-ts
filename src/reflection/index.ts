@@ -10,4 +10,10 @@ export type {
   ReflectionInput,
   ReflectionFinding,
 } from "./reflection-agent";
+export { MemoryReflector } from "./memory-reflector";
+export type {
+  MemoryReflectorConfig,
+  MemoryReflectionInput,
+  ExtractedMemory,
+} from "./memory-reflector";
 export { createReflectionHook } from "./reflection-hook";

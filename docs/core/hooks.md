@@ -7,22 +7,22 @@
 ```ts
 interface AgentHooks {
   /** LLM 调用开始时触发 */
-  onLLMStart?: (messages: MessageData[]) => void
+  onLLMStart?: (messages: MessageData[], tools: Tool[]) => void
 
   /** LLM 调用成功返回时触发 */
   onLLMEnd?: (response: LLMResponse) => void
 
-  /** LLM 调用出错时触发 */
-  onLLMError?: (error: Error) => void
+  /** LLM 网络错误耗尽重试后触发 */
+  onLLMError?: (error: LLMNetworkError) => void
 
-  /** 工具调用开始时触发 */
-  onToolStart?: (toolName: string, args: Record<string, unknown>) => void
+  /** 工具调用开始时触发，toolCallId 为 LLM 分配的调用 ID */
+  onToolStart?: (toolName: string, args: Record<string, unknown>, toolCallId?: string) => void
 
-  /** 工具调用完成时触发 */
-  onToolEnd?: (toolName: string, result: ToolResult) => void
+  /** 工具调用完成时触发，result 为工具返回的字符串 */
+  onToolEnd?: (toolName: string, result: string, toolCallId?: string) => void
 
-  /** 工具调用出错时触发 */
-  onToolError?: (toolName: string, error: Error) => void
+  /** 工具调用出错时触发，error 为错误信息字符串 */
+  onToolError?: (toolName: string, error: string, toolCallId?: string) => void
 
   /** LLM 输出推理步骤时触发 (ReAct/Fusion) */
   onThought?: (thought: string) => void
@@ -34,7 +34,7 @@ interface AgentHooks {
   onPlanRevised?: (oldPlan: string[], newPlan: string[], reason: string) => void
 
   /** Agent 执行完成时触发 */
-  onFinish?: (answer: string, stats: AgentStats) => void
+  onFinish?: (answer: string) => void
 }
 ```
 
@@ -110,19 +110,31 @@ const agent = new ReActAgent({
 
 ### Reflection Hook
 
-`createReflectionHook()` 创建一个在 Agent 完成时自动触发反思的钩子：
+`createReflectionHook()` 创建钩子，在 Agent 完成时自动并行运行两个子 Agent：
+
+- **错题本 Fork**：分析执行错误 → 写入 ErrorNotebook
+- **记忆提取 Fork**：提取长期记忆 → 写入 MemoryManager（可选）
 
 ```ts
-import { createReflectionHook, ReflectionAgent, ErrorNotebook } from 'kagent-ts'
+import { createReflectionHook, ErrorNotebook, MemoryManager } from 'kagent-ts'
 
-const notebook = new ErrorNotebook('./error-notebook')
-const reflectionAgent = new ReflectionAgent({ provider, notebook })
+const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
+const memory = new MemoryManager('.memory')
 
-const reflectionHook = createReflectionHook(reflectionAgent)
+const hook = createReflectionHook({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  notebook,
+  memoryManager: memory,         // 可选，不传则只做错题本反思
+  maxErrorIterations: 4,         // 可选
+  maxMemoryIterations: 5,        // 可选
+  onReflectionComplete: (entryCount, memoryCount) => {
+    console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
+  },
+})
 
-const agent = new FusionAgent({
+const agent = new ReActAgent({
   // ...
-  hooks: [reflectionHook],
+  hooks: [hook],
 })
 ```
 

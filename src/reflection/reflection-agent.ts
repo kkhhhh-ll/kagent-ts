@@ -1,6 +1,10 @@
-import { LLMProvider, LLMResponse } from "../llm/interface";
+import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
-import { Message } from "../messages/message";
+import { ReActAgent } from "../core/react-agent";
+import { ToolRegistry } from "../tools/tool-registry";
+import { ReadFileTool } from "../tools/builtin/read-file";
+import { GrepSearchTool } from "../tools/builtin/grep-search";
+import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { ErrorNotebook, ErrorNotebookEntry, ReflectionErrorCategory } from "./error-notebook";
 import type { ToolErrorTrace } from "../tools/types";
 
@@ -39,25 +43,20 @@ export interface ReflectionFinding {
 }
 
 /**
- * Structured JSON output expected from the LLM during reflection.
+ * Structured JSON output expected from the fork sub-agent's final answer.
  */
 interface ReflectionResponse {
   analysis: string;
-  score: number; // 0–100 self-rating
+  score: number;
   findings: ReflectionFinding[];
-  improvements: string[];
 }
 
-// ─── Reflection System Prompt ────────────────────────────────────────────────
+// ─── System Prompt ───────────────────────────────────────────────────────────
 
-const REFLECTION_SYSTEM_PROMPT = `You are a reflective quality-assurance agent. Your job is to review a completed
+const ERROR_REFLECTION_SYSTEM_PROMPT = `You are a reflective quality-assurance agent. Your job is to review a completed
 agent session and identify mistakes, missed opportunities, and improvement suggestions.
 
-You will receive:
-1. The user's original query.
-2. The agent's final answer.
-3. The full conversation (user, assistant, tool calls, tool results).
-4. Any tool error traces recorded during execution.
+You have access to read_file and grep_search tools to verify your findings against the actual codebase.
 
 Analyze the session across these dimensions:
 - **Reasoning**: Was the agent's logic sound? Any flawed deductions?
@@ -66,7 +65,7 @@ Analyze the session across these dimensions:
 - **Completeness**: Does the answer fully address the user's query? Any missing information?
 - **Context**: Was the context window managed well? Any irrelevant noise?
 
-Output a JSON object with this structure:
+In your final answer, output a JSON object with this structure:
 {
   "analysis": "overall assessment (2-4 sentences)",
   "score": 85,
@@ -78,10 +77,6 @@ Output a JSON object with this structure:
       "suggestion": "how to avoid this next time",
       "relatedTraceIds": ["trace_abc123"]
     }
-  ],
-  "improvements": [
-    "specific, actionable improvement suggestion 1",
-    "specific, actionable improvement suggestion 2"
   ]
 }
 
@@ -90,7 +85,9 @@ Rules:
 - Only include findings for actual issues — do NOT fabricate problems.
 - If the session was perfect, return an empty findings array and score 100.
 - Group related findings; don't duplicate.
-- Be specific: cite exact tool names, file paths, reasoning steps where applicable.`;
+- Be specific: cite exact tool names, file paths, reasoning steps where applicable.
+- Use your tools to verify findings against the actual codebase before reporting them.
+${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
 
 // ─── ReflectionAgent ─────────────────────────────────────────────────────────
 
@@ -103,32 +100,26 @@ export interface ReflectionAgentConfig {
   /** ErrorNotebook for persisting findings. */
   notebook: ErrorNotebook;
   /**
-   * Maximum reflection iterations (default: 3).
-   * Each iteration refines the previous analysis.
+   * Maximum ReAct iterations for the sub-agent (default: 4).
    */
   maxIterations?: number;
 }
 
 /**
- * ReflectionAgent — post-execution self-reflection with a limited iteration loop.
+ * ReflectionAgent — post-execution self-reflection via a forked sub-agent.
  *
- * After the main agent finishes, the ReflectionAgent reviews the full session
- * trace and identifies mistakes or missed opportunities. Findings are persisted
- * to an ErrorNotebook (错题本) for future learning.
+ * After the main agent finishes, the ReflectionAgent forks a lightweight
+ * ReActAgent to review the full session trace. The fork runs in its own
+ * context with read-only tools (read_file, grep_search) so it can verify
+ * findings against the codebase.
  *
- * The agent runs a loop of self-reflection followed by refinement. In each
- * iteration it:
- * 1. Asks the LLM to analyze the session and rate itself (0-100).
- * 2. Extracts structured findings.
- * 3. Feeds previous findings back for a second pass (refinement).
- *
- * After all iterations, findings are written to the ErrorNotebook.
+ * Findings are persisted to an ErrorNotebook (错题本) for future learning.
  *
  * Usage:
  * ```ts
  * const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
- * const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
- * const findings = await reflector.reflect({
+ * const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 4 });
+ * const entries = await reflector.reflect({
  *   userQuery: input,
  *   finalAnswer: answer,
  *   conversation: contextMessages,
@@ -144,56 +135,35 @@ export class ReflectionAgent {
   constructor(config: ReflectionAgentConfig) {
     this.llm = config.llm;
     this.notebook = config.notebook;
-    this.maxIterations = config.maxIterations ?? 3;
+    this.maxIterations = config.maxIterations ?? 4;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
 
   /**
-   * Run the reflection loop and persist findings.
+   * Fork a sub-agent to review the session and persist findings.
    *
    * @returns The final list of findings written to the notebook.
    */
   async reflect(input: ReflectionInput): Promise<ErrorNotebookEntry[]> {
-    const allFindings: ReflectionFinding[] = [];
-    let lastResponse: ReflectionResponse | null = null;
+    const taskPrompt = this.buildTaskPrompt(input);
+    const answer = await this.forkAndRun(taskPrompt);
+    const findings = this.parseFindings(answer);
 
-    // ── Iterative refinement loop ──────────────────────────────────────
-    for (let i = 0; i < this.maxIterations; i++) {
-      const isFirstPass = i === 0;
-      const messages = this.buildReflectionMessages(input, allFindings, lastResponse, isFirstPass);
-
-      const response = await this.llm.chat(messages);
-      const parsed = this.parseReflectionResponse(response);
-
-      if (!parsed) {
-        // Couldn't parse — skip this iteration
-        continue;
-      }
-
-      lastResponse = parsed;
-
-      // Merge findings (deduplicate by description)
-      for (const f of parsed.findings) {
-        const isDuplicate = allFindings.some(
-          (existing) =>
-            existing.category === f.category &&
-            existing.description.toLowerCase() === f.description.toLowerCase(),
-        );
-        if (!isDuplicate) {
-          allFindings.push(f);
-        }
-      }
-
-      // Early exit: if score is high (95+) and no new findings, we're done
-      if (parsed.score >= 95 && parsed.findings.length === 0) {
-        break;
+    // Deduplicate by category + description before persisting
+    const seen = new Set<string>();
+    const unique: ReflectionFinding[] = [];
+    for (const f of findings) {
+      const key = `${f.category}::${f.description.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(f);
       }
     }
 
-    // ── Persist to ErrorNotebook ───────────────────────────────────────
+    // Persist to ErrorNotebook
     const entries: ErrorNotebookEntry[] = [];
-    for (const f of allFindings) {
+    for (const f of unique) {
       const entry = this.notebook.add({
         sessionId: input.sessionId,
         category: f.category,
@@ -209,67 +179,52 @@ export class ReflectionAgent {
     return entries;
   }
 
-  // ─── Private Helpers ──────────────────────────────────────────────────
+  // ─── Private: Fork ─────────────────────────────────────────────────────
 
   /**
-   * Build the message array for a reflection iteration.
-   *
-   * First pass: full session context + instructions.
-   * Subsequent passes: previous findings + refinement request.
+   * Fork a minimal ReActAgent and run it to completion.
+   * Returns the agent's final answer string.
    */
-  private buildReflectionMessages(
-    input: ReflectionInput,
-    previousFindings: ReflectionFinding[],
-    lastResponse: ReflectionResponse | null,
-    isFirstPass: boolean,
-  ): MessageData[] {
-    const messages: MessageData[] = [];
+  private async forkAndRun(userPrompt: string): Promise<string> {
+    const tools = new ToolRegistry();
+    tools.register(ReadFileTool);
+    tools.register(GrepSearchTool);
 
-    // System
-    messages.push({ role: Role.System, content: REFLECTION_SYSTEM_PROMPT });
+    const agent = new ReActAgent({
+      llm: this.llm,
+      systemPrompt: ERROR_REFLECTION_SYSTEM_PROMPT,
+      toolRegistry: tools,
+      maxIterations: this.maxIterations,
+    });
 
-    if (isFirstPass) {
-      // Full session dump for first pass
-      const context = [
-        "=== User Query ===",
-        input.userQuery,
-        "",
-        "=== Final Answer ===",
-        input.finalAnswer,
-        "",
-        "=== Conversation === ",
-        ...this.formatConversation(input.conversation),
-        "",
-        "=== Tool Error Traces ===",
-        ...this.formatErrorTraces(input.errorTraces),
-      ].join("\n");
+    return agent.run(userPrompt);
+  }
 
-      messages.push({
-        role: Role.User,
-        content: `Please review this agent session and identify any issues:\n\n${context}`,
-      });
-    } else {
-      // Refinement pass: show previous findings and ask for more
-      const prevSummary = [
-        `Previous score: ${lastResponse?.score ?? "?"}/100`,
-        `Previous analysis: ${lastResponse?.analysis ?? "N/A"}`,
-        `Previous findings (${previousFindings.length}):`,
-        ...previousFindings.map(
-          (f) => `- [${f.category}] ${f.description} → ${f.suggestion}`,
-        ),
-      ].join("\n");
+  // ─── Private: Prompt Building ──────────────────────────────────────────
 
-      messages.push({
-        role: Role.User,
-        content:
-          `Refinement pass — re-examine the session with fresh eyes. ` +
-          `Here is what you found previously:\n\n${prevSummary}\n\n` +
-          `Are there any additional issues you missed? Any findings that should be ` +
-          `removed (false positives)? Output the FULL updated JSON (not just deltas).`,
-      });
-    }
+  /**
+   * Build the task prompt for the sub-agent from the reflection input.
+   */
+  private buildTaskPrompt(input: ReflectionInput): string {
+    const context = [
+      "Please review this agent session and identify any issues.",
+      "",
+      "=== User Query ===",
+      input.userQuery,
+      "",
+      "=== Final Answer ===",
+      input.finalAnswer,
+      "",
+      "=== Conversation ===",
+      ...this.formatConversation(input.conversation),
+      "",
+      "=== Tool Error Traces ===",
+      ...this.formatErrorTraces(input.errorTraces),
+      "",
+      "Analyze the session and output your findings as JSON in your final answer.",
+    ].join("\n");
 
-    return messages;
+    return context;
   }
 
   /**
@@ -310,28 +265,23 @@ export class ReflectionAgent {
     return lines;
   }
 
+  // ─── Private: Parsing ──────────────────────────────────────────────────
+
   /**
-   * Parse the LLM's structured JSON response into a ReflectionResponse.
-   * Returns null if parsing fails.
+   * Parse the sub-agent's final answer into a list of ReflectionFindings.
+   * Returns an empty array if parsing fails (best-effort).
    */
-  private parseReflectionResponse(
-    response: LLMResponse,
-  ): ReflectionResponse | null {
+  private parseFindings(answer: string): ReflectionFinding[] {
     try {
-      // Extract JSON from the response (may be wrapped in ```json fences)
-      let raw = response.content.trim();
+      // Extract JSON from the answer (may be wrapped in ```json fences)
+      let raw = answer.trim();
       const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (fenceMatch) raw = fenceMatch[1];
 
       const parsed = JSON.parse(raw) as Record<string, unknown>;
 
-      // Validate required fields
-      if (typeof parsed.analysis !== "string") return null;
-      if (typeof parsed.score !== "number") return null;
-      if (!Array.isArray(parsed.findings)) return null;
-      if (!Array.isArray(parsed.improvements)) return null;
+      if (!Array.isArray(parsed.findings)) return [];
 
-      // Validate each finding
       const validCategories = new Set<string>([
         "reasoning_error", "tool_misuse", "missed_optimization",
         "incomplete_answer", "hallucination", "context_mismanagement", "other",
@@ -346,7 +296,7 @@ export class ReflectionAgent {
           typeof f.cause !== "string" ||
           typeof f.suggestion !== "string"
         ) {
-          continue; // skip invalid finding
+          continue;
         }
         findings.push({
           category: f.category as ReflectionErrorCategory,
@@ -359,16 +309,9 @@ export class ReflectionAgent {
         });
       }
 
-      return {
-        analysis: parsed.analysis,
-        score: parsed.score,
-        findings,
-        improvements: parsed.improvements.filter(
-          (i): i is string => typeof i === "string",
-        ),
-      };
+      return findings;
     } catch {
-      return null;
+      return [];
     }
   }
 }

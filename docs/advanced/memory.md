@@ -77,6 +77,44 @@ const all = await memory.list()
 await memory.forget('api-base-url')
 ```
 
+## 自动记忆提取
+
+除了让 LLM 手动调用 `remember` 工具，你还可以使用 `MemoryReflector`，在每次 Agent 执行完后自动分析对话并提取长期记忆：
+
+```ts
+import { MemoryReflector, MemoryManager } from 'kagent-ts'
+
+const memory = new MemoryManager('.memory')
+
+const reflector = new MemoryReflector({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  memoryManager: memory,
+  maxIterations: 5,           // Fork 子 Agent 的最大 ReAct 迭代 (默认: 5)
+})
+
+// 在 Agent 执行完成后调用
+const newMemories = await reflector.reflect({
+  userQuery: '用户原始问题',
+  finalAnswer: agentAnswer,
+  conversation: messages,
+  sessionId: 'session-123',
+})
+// 新记忆已自动写入 MemoryManager
+
+// 或者通过 createReflectionHook 自动集成
+import { createReflectionHook, ErrorNotebook } from 'kagent-ts'
+
+const hook = createReflectionHook({
+  llm,
+  notebook: new ErrorNotebook(),
+  memoryManager: memory,      // 同时提取错题本和记忆
+})
+```
+
+`MemoryReflector` Fork 一个独立的子 Agent，拥有只读工具（`read_file`、`grep_search`），会审查对话历史并提取值得跨 session 保留的规则和项目事实。已有的同名记忆会自动跳过。
+
+详见 [Reflection 反思](/advanced/reflection)。
+
 ## 记忆类型
 
 ```ts
@@ -154,6 +192,7 @@ const agent = new ReActAgent({
 
 ## 下一步
 
+- [Reflection 反思](/advanced/reflection) — 自动记忆提取和错题本机制
 - [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
 - [Skill 渐进式技能](/advanced/skills) — 另一个知识注入机制
 - [Project Rules](/advanced/security) — 项目规则管理

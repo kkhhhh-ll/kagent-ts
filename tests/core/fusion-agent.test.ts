@@ -1192,26 +1192,29 @@ describe("FusionAgent", () => {
             }
             return { content: answerJSON("A possibly incomplete answer.") };
           }
-          // ReflectionAgent call — return findings
+          // ReflectionAgent fork call — must return ReAct format
           return {
             content: JSON.stringify({
-              analysis: "The answer missed a key detail.",
-              score: 60,
-              findings: [
-                {
-                  category: "incomplete_answer",
-                  description: "The agent forgot to mention the backup step.",
-                  cause: "Plan was too coarse-grained.",
-                  suggestion: "Add a backup verification step to the plan.",
-                },
-                {
-                  category: "missed_optimization",
-                  description: "Could have used a single compound tool call.",
-                  cause: "Agent made 3 separate calls instead of 1 batch.",
-                  suggestion: "Batch independent tool calls together.",
-                },
-              ],
-              improvements: ["Be more thorough.", "Batch tool calls."],
+              thought: "Analysis complete.",
+              answer: JSON.stringify({
+                analysis: "The answer missed a key detail.",
+                score: 60,
+                findings: [
+                  {
+                    category: "incomplete_answer",
+                    description: "The agent forgot to mention the backup step.",
+                    cause: "Plan was too coarse-grained.",
+                    suggestion: "Add a backup verification step to the plan.",
+                  },
+                  {
+                    category: "missed_optimization",
+                    description: "Could have used a single compound tool call.",
+                    cause: "Agent made 3 separate calls instead of 1 batch.",
+                    suggestion: "Batch independent tool calls together.",
+                  },
+                ],
+                improvements: ["Be more thorough.", "Batch tool calls."],
+              }),
             }),
           };
         },
@@ -1310,20 +1313,23 @@ describe("FusionAgent", () => {
             // Final answer
             return { content: answerJSON("Both mode complete.") };
           }
-          // callCount >= 5: post-hoc reflection calls
+          // callCount >= 5: post-hoc reflection calls (fork ReActAgent)
           return {
             content: JSON.stringify({
-              analysis: "Both-mode reflection analysis.",
-              score: 90,
-              findings: [
-                {
-                  category: "other",
-                  description: "Minor formatting issue in output.",
-                  cause: "LLM didn't apply markdown formatting.",
-                  suggestion: "Add formatting instructions to the system prompt.",
-                },
-              ],
-              improvements: ["Use consistent formatting."],
+              thought: "Analysis done.",
+              answer: JSON.stringify({
+                analysis: "Both-mode reflection analysis.",
+                score: 90,
+                findings: [
+                  {
+                    category: "other",
+                    description: "Minor formatting issue in output.",
+                    cause: "LLM didn't apply markdown formatting.",
+                    suggestion: "Add formatting instructions to the system prompt.",
+                  },
+                ],
+                improvements: ["Use consistent formatting."],
+              }),
             }),
           };
         },

@@ -1309,8 +1309,7 @@ export abstract class Agent {
     if (this._mcpInitialized) return;
     this._mcpInitialized = true;
 
-    // ── Error rules (load before MCP / sub-agents) ──────────────────
-    this.toolRegistry.getErrorTracker()?.loadRules();
+    // ── Error tracking tool ──────────────────────────────────────────
     try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { /* skip */ }
 
     // ── MCP connections ──────────────────────────────────────────────

@@ -30,17 +30,28 @@ function makeReflectionInput(overrides: Partial<ReflectionInput> = {}): Reflecti
   };
 }
 
+/**
+ * Create a mock LLM that returns a single ReAct-formatted response.
+ * The fork sub-agent expects: {"thought": "...", "answer": "..."}
+ */
 function mockReflectionLLM(response: object): LLMProvider {
   return {
     model: "mock-reflection",
     chat: async (): Promise<LLMResponse> => ({
-      content: JSON.stringify(response),
+      content: JSON.stringify({
+        thought: "Analysis complete.",
+        answer: JSON.stringify(response),
+      }),
     }),
     chatStream: async function* () { yield { type: "done" as const }; },
     getTokenCount: () => 10,
   };
 }
 
+/**
+ * Create a mock LLM that returns multiple ReAct responses in sequence.
+ * The fork sub-agent's internal ReAct loop will iterate and call chat().
+ */
 function mockSequenceReflectionLLM(responses: Array<object | string>): LLMProvider {
   let callCount = 0;
   return {
@@ -49,8 +60,19 @@ function mockSequenceReflectionLLM(responses: Array<object | string>): LLMProvid
       const idx = Math.min(callCount, responses.length - 1);
       const raw = responses[idx];
       callCount++;
-      const content = typeof raw === "string" ? raw : JSON.stringify(raw);
-      return { content };
+
+      if (typeof raw === "string") {
+        // Garbage response — the agent will try to parse it
+        return { content: raw };
+      }
+
+      // Wrap in ReAct format
+      return {
+        content: JSON.stringify({
+          thought: `Analysis pass ${idx + 1}.`,
+          answer: JSON.stringify(raw),
+        }),
+      };
     },
     chatStream: async function* () { yield { type: "done" as const }; },
     getTokenCount: () => 10,
@@ -77,7 +99,7 @@ describe("ReflectionAgent", () => {
   // ════════════════════════════════════════════════════════════════════
 
   describe("basic reflect", () => {
-    it("returns findings after a single reflection pass", async () => {
+    it("forks a sub-agent and returns findings", async () => {
       const llm = mockReflectionLLM({
         analysis: "The agent answered correctly but could elaborate.",
         score: 70,
@@ -149,52 +171,10 @@ describe("ReflectionAgent", () => {
   });
 
   // ════════════════════════════════════════════════════════════════════
-  // Multi-iteration refinement
+  // Sub-agent multi-turn (fork handles its own ReAct loop)
   // ════════════════════════════════════════════════════════════════════
 
-  describe("multi-iteration refinement", () => {
-    it("runs multiple iterations when maxIterations > 1", async () => {
-      const llm = mockSequenceReflectionLLM([
-        // Iteration 1: first finding
-        {
-          analysis: "First pass — found one issue.",
-          score: 70,
-          findings: [
-            {
-              category: "reasoning_error",
-              description: "Flawed deduction in step 2.",
-              cause: "Incorrect assumption about data format.",
-              suggestion: "Validate data format before processing.",
-            },
-          ],
-          improvements: ["Check assumptions."],
-        },
-        // Iteration 2: finds another issue
-        {
-          analysis: "Second pass — found another issue.",
-          score: 65,
-          findings: [
-            {
-              category: "missed_optimization",
-              description: "Could have batched two calls.",
-              cause: "Agent made sequential calls unnecessarily.",
-              suggestion: "Batch independent tool calls together.",
-            },
-          ],
-          improvements: ["Batch calls."],
-        },
-      ]);
-
-      const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
-      const entries = await reflector.reflect(makeReflectionInput());
-
-      // Both iterations' findings should be present (dedup'd by description)
-      expect(entries.length).toBe(2);
-      const categories = entries.map((e) => e.category);
-      expect(categories).toContain("reasoning_error");
-      expect(categories).toContain("missed_optimization");
-    });
-
+  describe("fork sub-agent multi-turn", () => {
     it("deduplicates findings with the same category and description", async () => {
       const llm = mockSequenceReflectionLLM([
         {
@@ -210,86 +190,43 @@ describe("ReflectionAgent", () => {
           ],
           improvements: ["Be thorough."],
         },
-        // Iteration 2: same finding again (should be deduplicated)
-        {
-          analysis: "Same issue again.",
-          score: 70,
-          findings: [
-            {
-              category: "incomplete_answer",
-              description: "Missing details.",
-              cause: "Same cause.",
-              suggestion: "Same suggestion.",
-            },
-          ],
-          improvements: ["Still be thorough."],
-        },
       ]);
 
-      const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
+      const reflector = new ReflectionAgent({ llm, notebook });
       const entries = await reflector.reflect(makeReflectionInput());
 
+      // The sub-agent returned a single response with one finding
       expect(entries).toHaveLength(1);
+      expect(entries[0].category).toBe("incomplete_answer");
     });
 
-    it("exits early when score >= 95 and no new findings", async () => {
-      let callCount = 0;
-      const llm: LLMProvider = {
-        model: "mock",
-        chat: async (): Promise<LLMResponse> => {
-          callCount++;
-          return {
-            content: JSON.stringify({
-              analysis: "Almost perfect.",
-              score: 96,
-              findings: [],
-              improvements: [],
-            }),
-          };
-        },
-        chatStream: async function* () { yield { type: "done" as const }; },
-        getTokenCount: () => 10,
-      };
+    it("deduplicates repeated findings from the same reflection response", async () => {
+      // Same category + description twice in one response
+      const llm = mockReflectionLLM({
+        analysis: "Two similar items.",
+        score: 60,
+        findings: [
+          {
+            category: "tool_misuse",
+            description: "Wrong arguments passed.",
+            cause: "Parameter confusion.",
+            suggestion: "Check docs.",
+          },
+          {
+            category: "tool_misuse",
+            description: "Wrong arguments passed.",  // duplicate
+            cause: "Same cause.",
+            suggestion: "Same suggestion.",
+          },
+        ],
+        improvements: [],
+      });
 
-      const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 5 });
+      const reflector = new ReflectionAgent({ llm, notebook });
       const entries = await reflector.reflect(makeReflectionInput());
 
-      expect(entries).toHaveLength(0);
-      // Should exit after the first iteration (score 96 >= 95, no findings)
-      expect(callCount).toBe(1);
-    });
-
-    it("continues refining when score is high but findings exist", async () => {
-      const llm = mockSequenceReflectionLLM([
-        {
-          analysis: "Good, but one small issue.",
-          score: 96,
-          findings: [
-            {
-              category: "other",
-              description: "Minor formatting inconsistency.",
-              cause: "No formatting rules in prompt.",
-              suggestion: "Add formatting guidelines.",
-            },
-          ],
-          improvements: ["Format consistently."],
-        },
-        // Iteration 2: now perfect
-        {
-          analysis: "All resolved.",
-          score: 100,
-          findings: [],
-          improvements: [],
-        },
-      ]);
-
-      const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
-      const entries = await reflector.reflect(makeReflectionInput());
-
-      // First iteration had a finding → should be recorded
-      // Second iteration is perfect → exits early
+      // Deduplicated to 1
       expect(entries).toHaveLength(1);
-      expect(entries[0].category).toBe("other");
     });
   });
 
@@ -298,12 +235,14 @@ describe("ReflectionAgent", () => {
   // ════════════════════════════════════════════════════════════════════
 
   describe("JSON parsing", () => {
-    it("parses responses wrapped in ```json fences", async () => {
+    it("parses findings JSON extracted from the sub-agent's answer", async () => {
       const llm: LLMProvider = {
         model: "mock",
         chat: async (): Promise<LLMResponse> => ({
-          content:
-            '```json\n{"analysis": "ok", "score": 80, "findings": [], "improvements": []}\n```',
+          content: JSON.stringify({
+            thought: "Analysis done.",
+            answer: '```json\n{"analysis": "ok", "score": 80, "findings": [], "improvements": []}\n```',
+          }),
         }),
         chatStream: async function* () { yield { type: "done" as const }; },
         getTokenCount: () => 10,
@@ -314,12 +253,26 @@ describe("ReflectionAgent", () => {
       expect(entries).toHaveLength(0);
     });
 
-    it("parses raw JSON without markdown fences", async () => {
+    it("parses raw JSON from the answer without markdown fences", async () => {
+      const findings = {
+        analysis: "Found issues.",
+        score: 50,
+        findings: [{
+          category: "other",
+          description: "Weird bug.",
+          cause: "Unknown.",
+          suggestion: "Investigate further.",
+        }],
+        improvements: ["Debug more."],
+      };
+
       const llm: LLMProvider = {
         model: "mock",
         chat: async (): Promise<LLMResponse> => ({
-          content:
-            '{"analysis": "Found issues.", "score": 50, "findings": [{"category": "other", "description": "Weird bug.", "cause": "Unknown.", "suggestion": "Investigate further."}], "improvements": ["Debug more."]}',
+          content: JSON.stringify({
+            thought: "Done.",
+            answer: JSON.stringify(findings),
+          }),
         }),
         chatStream: async function* () { yield { type: "done" as const }; },
         getTokenCount: () => 10,
@@ -331,60 +284,25 @@ describe("ReflectionAgent", () => {
       expect(entries[0].description).toBe("Weird bug.");
     });
 
-    it("skips malformed JSON responses gracefully (iteration continues)", async () => {
-      const llm = mockSequenceReflectionLLM([
-        // Iteration 1: garbage
-        "not valid json at all {{{",
-        // Iteration 2: valid
-        {
-          analysis: "Recovered.",
-          score: 80,
-          findings: [
-            {
-              category: "context_mismanagement",
-              description: "Context grew too large.",
-              cause: "No compression step.",
-              suggestion: "Compress after each iteration.",
-            },
-          ],
-          improvements: ["Compress context."],
-        },
-      ]);
-
-      const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 3 });
-      const entries = await reflector.reflect(makeReflectionInput());
-      expect(entries).toHaveLength(1);
-      expect(entries[0].category).toBe("context_mismanagement");
-    });
-
     it("skips findings with invalid/missing fields", async () => {
       const llm: LLMProvider = {
         model: "mock",
         chat: async (): Promise<LLMResponse> => ({
           content: JSON.stringify({
-            analysis: "Mixed findings.",
-            score: 50,
-            findings: [
-              // Valid finding
-              {
-                category: "other",
-                description: "Valid finding.",
-                cause: "Known.",
-                suggestion: "Fix it.",
-              },
-              // Missing required fields — should be skipped
-              { category: "other" },
-              // Wrong category — should be skipped
-              {
-                category: "nonexistent_category",
-                description: "Bad category.",
-                cause: "?",
-                suggestion: "?",
-              },
-              // Not an object
-              "just a string",
-            ],
-            improvements: ["Better validation."],
+            thought: "Done.",
+            answer: JSON.stringify({
+              analysis: "Mixed findings.",
+              score: 50,
+              findings: [
+                // Valid finding
+                { category: "other", description: "Valid.", cause: "Known.", suggestion: "Fix." },
+                // Missing required fields — should be skipped
+                { category: "other" },
+                // Wrong category — should be skipped
+                { category: "nonexistent_category", description: "Bad.", cause: "?", suggestion: "?" },
+              ],
+              improvements: [],
+            }),
           }),
         }),
         chatStream: async function* () { yield { type: "done" as const }; },
@@ -393,16 +311,19 @@ describe("ReflectionAgent", () => {
 
       const reflector = new ReflectionAgent({ llm, notebook });
       const entries = await reflector.reflect(makeReflectionInput());
-      // Only the first (valid) finding should be accepted
       expect(entries).toHaveLength(1);
-      expect(entries[0].description).toBe("Valid finding.");
+      expect(entries[0].description).toBe("Valid.");
     });
 
-    it("returns empty findings for completely unparseable responses", async () => {
+    it("returns empty findings when the answer is completely unparseable", async () => {
       const llm: LLMProvider = {
         model: "mock",
         chat: async (): Promise<LLMResponse> => ({
-          content: "I cannot analyze this session. It is too complex.",
+          content: JSON.stringify({
+            thought: "No answer here.",
+            // No "answer" field — the ReActAgent will loop, but since maxIterations=1
+            // it hits the limit and returns the timeout message
+          }),
         }),
         chatStream: async function* () { yield { type: "done" as const }; },
         getTokenCount: () => 10,
@@ -410,6 +331,26 @@ describe("ReflectionAgent", () => {
 
       const reflector = new ReflectionAgent({ llm, notebook, maxIterations: 1 });
       const entries = await reflector.reflect(makeReflectionInput());
+      // The sub-agent hit max iterations without an answer — returns empty
+      expect(entries).toHaveLength(0);
+    });
+
+    it("returns empty when the sub-agent returns a non-JSON answer", async () => {
+      const llm: LLMProvider = {
+        model: "mock",
+        chat: async (): Promise<LLMResponse> => ({
+          content: JSON.stringify({
+            thought: "Analysis done.",
+            answer: "I cannot analyze this session. It is too complex.",
+          }),
+        }),
+        chatStream: async function* () { yield { type: "done" as const }; },
+        getTokenCount: () => 10,
+      };
+
+      const reflector = new ReflectionAgent({ llm, notebook });
+      const entries = await reflector.reflect(makeReflectionInput());
+      // Non-JSON answer → empty findings (best-effort)
       expect(entries).toHaveLength(0);
     });
   });
@@ -579,7 +520,6 @@ describe("ErrorNotebook", () => {
     it("getRecent returns most recent entries first", () => {
       const recent = notebook.getRecent(3);
       expect(recent).toHaveLength(3);
-      // Timestamps should be in descending order
       for (let i = 1; i < recent.length; i++) {
         expect(recent[i - 1].timestamp >= recent[i].timestamp).toBe(true);
       }
@@ -631,7 +571,6 @@ describe("ErrorNotebook", () => {
     });
 
     it("groups repeated entries with a count marker", () => {
-      // Add the same error three times
       for (let i = 0; i < 3; i++) {
         notebook.add({
           sessionId: `sess-${i}`,
@@ -647,27 +586,22 @@ describe("ErrorNotebook", () => {
     });
 
     it("filters out entries below minRepetitions threshold", () => {
-      // Add one entry once, another entry twice
-      // Use different descriptions so they don't get grouped together
       notebook.add({ sessionId: "s1", category: "other", description: "Rare bug happened once.", cause: "C", suggestion: "Handle rare bug." });
       notebook.add({ sessionId: "s2", category: "tool_misuse", description: "Same wrong tool used again.", cause: "C", suggestion: "Check tool name before calling." });
       notebook.add({ sessionId: "s3", category: "tool_misuse", description: "Same wrong tool used again.", cause: "C", suggestion: "Check tool name before calling." });
 
-      const prompt = notebook.buildRulesPrompt(10, 2); // minRepetitions = 2
-      // The prompt shows suggestion text, and the (×2) repetition marker
+      const prompt = notebook.buildRulesPrompt(10, 2);
       expect(prompt).toContain("(×2)");
       expect(prompt).toContain("Check tool name before calling.");
       expect(prompt).not.toContain("Rare bug");
     });
 
     it("respects maxEntries limit", () => {
-      // Add 5 different entries
       for (let i = 0; i < 5; i++) {
         notebook.add({ sessionId: "s", category: "other", description: `Issue ${i}`, cause: "C", suggestion: "S" });
       }
 
       const prompt = notebook.buildRulesPrompt(2, 1);
-      // Should only contain 2 entries
       const matches = prompt.match(/❓ Other/g);
       expect(matches?.length ?? 0).toBeLessThanOrEqual(2);
     });
@@ -688,7 +622,6 @@ describe("ErrorNotebook", () => {
       expect(smallBook.count).toBe(3);
       const all = smallBook.getAll();
       const descriptions = all.map((e) => e.description);
-      // Oldest entries (Issue 0, Issue 1) should be pruned
       expect(descriptions).not.toContain("Issue 0");
       expect(descriptions).not.toContain("Issue 1");
       expect(descriptions).toContain("Issue 2");
@@ -739,7 +672,6 @@ describe("ErrorNotebook", () => {
         suggestion: "Verify with docs first.",
       });
 
-      // Create a new notebook with the same directory — it should load the index
       const reloaded = new ErrorNotebook({ storageDir: notebookDir });
       expect(reloaded.count).toBe(1);
 
@@ -751,7 +683,6 @@ describe("ErrorNotebook", () => {
     });
 
     it("handles empty/corrupt index gracefully (starts fresh)", () => {
-      // Write garbage to the index file
       const indexFile = path.join(notebookDir, "index.json");
       fs.writeFileSync(indexFile, "garbage{{{not json", "utf-8");
 
@@ -760,7 +691,6 @@ describe("ErrorNotebook", () => {
     });
 
     it("handles missing entry files gracefully", () => {
-      // Add an entry, then manually delete the entry file
       const entry = notebook.add({
         sessionId: "ghost",
         category: "other",
@@ -772,7 +702,6 @@ describe("ErrorNotebook", () => {
       const entryFile = path.join(notebookDir, "entries", `${entry.id}.json`);
       fs.unlinkSync(entryFile);
 
-      // getBySession should skip the missing file
       const results = notebook.getBySession("ghost");
       expect(results).toHaveLength(0);
     });

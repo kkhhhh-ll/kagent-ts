@@ -234,6 +234,12 @@ export type {
   ReflectionInput,
   ReflectionFinding,
 } from "./reflection/reflection-agent";
+export { MemoryReflector } from "./reflection/memory-reflector";
+export type {
+  MemoryReflectorConfig,
+  MemoryReflectionInput,
+  ExtractedMemory,
+} from "./reflection/memory-reflector";
 export { createReflectionHook } from "./reflection/reflection-hook";
 export type { ReflectionHookConfig } from "./reflection/reflection-hook";
 

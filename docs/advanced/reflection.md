@@ -1,122 +1,143 @@
 # Reflection 反思
 
-Reflection 系统让 Agent 在执行完成后**自我反思**，识别问题、提取经验教训，并将发现记录到持久化的 **Error Notebook** 中。
+Reflection 系统让 Agent 在执行完成后**自动启动两个子 Agent 并行反思**：
+- **错题本**（Error Reflection）— 分析执行过程，识别错误和优化机会
+- **记忆提取**（Memory Extraction）— 提取用户偏好、项目决策、约束条件等长期记忆
+
+两者都以 **Fork 子 Agent** 的形式运行——拥有独立的上下文和只读工具（`read_file`、`grep_search`），不污染主 Agent 的上下文。
 
 ## 架构
 
 ```text
 Agent 执行完成
   ↓
-ReflectionAgent (反思代理)
-  ├── 分析执行全过程
-  ├── 评分 (0-100)
-  ├── 分类问题 (7 个维度)
-  └── 生成改进建议
-  ↓
-ErrorNotebook (错误笔记本)
-  ├── 持久化存储
-  ├── 按 Session 关联
-  └── 提取规则/模式
+ReflectionHook.onFinish()
+  ├── Fork ErrorReflector (ReAct, max 4 turns)
+  │     ├── 审查完整对话历史
+  │     ├── 用 read_file / grep_search 验证发现
+  │     ├── 评分 (0-100) + 分类问题 (7 个维度)
+  │     └── 持久化 → ErrorNotebook
+  │
+  └── Fork MemoryReflector (ReAct, max 5 turns)
+        ├── 审查完整对话历史
+        ├── 用 read_file / grep_search 理解项目背景
+        ├── 提取规则 / 项目事实
+        └── 持久化 → MemoryManager
 ```
 
-## 配置反思
+两个 Fork 通过 `Promise.all` 并行运行，一侧失败不影响另一侧。
 
-### 在 Fusion Agent 中使用
+## 通过 Hook 使用
 
-Fusion Agent 内置了反思支持：
-
-```ts
-const agent = new FusionAgent({
-  // ...
-  reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
-  inlineReflectionInterval: 5, // 每 5 轮触发内省
-})
-```
-
-详见 [Fusion Agent](/core/fusion-agent)。
-
-### 通过 Hook 使用
-
-任何 Agent 类型都可以通过 `createReflectionHook` 添加反思：
+推荐方式——任何 Agent 类型都可以通过 `createReflectionHook` 添加反思：
 
 ```ts
 import {
   ReActAgent,
   OpenAIProvider,
   ErrorNotebook,
+  MemoryManager,
   createReflectionHook,
 } from 'kagent-ts'
 
-// 创建错题本
 const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
+const memory = new MemoryManager('.memory')
 
-// 创建反思 Hook（内部自动创建 ReflectionAgent）
-const reflectionHook = createReflectionHook({
+const hook = createReflectionHook({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   notebook,
+  memoryManager: memory,         // 可选：不传则只做错题本反思
+  maxErrorIterations: 4,         // 可选，默认 4
+  maxMemoryIterations: 5,        // 可选，默认 5
+  onReflectionComplete: (entryCount, memoryCount) => {
+    console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
+  },
 })
 
 const agent = new ReActAgent({
+  llm: mainProvider,
   systemPrompt: '...',
-  provider: mainProvider,
   tools: BUILTIN_TOOLS,
-  hooks: [reflectionHook],  // 执行完成后自动反思
+  hooks: [hook],
 })
+
+// 执行完成后，hook 自动并行运行两个 Fork
+const answer = await agent.run('用 kebab-case 命名所有文件')
+// → 用户看到 answer
+// → 后台 Fork 1: 找错 → notebook
+// → 后台 Fork 2: 提取 "用户偏好 kebab-case" → memory
 ```
 
-## ReflectionAgent
+## ReflectionAgent (错题本 Fork)
 
 ```ts
-const reflectionAgent = new ReflectionAgent({
-  llm: reflectionProvider,      // LLM Provider (推荐使用高性能模型)
+const reflector = new ReflectionAgent({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   notebook: errorNotebook,
-  maxIterations: 3,             // 最大精炼迭代 (默认: 3)
+  maxIterations: 4,  // Fork 子 Agent 的最大 ReAct 迭代次数 (默认: 4)
 })
 
-// 反思一个会话
-const entries = await reflectionAgent.reflect({
+const entries = await reflector.reflect({
   userQuery: '用户的原始问题',
   finalAnswer: agentAnswer,
   conversation: contextMessages,
+  errorTraces?: toolErrorTraces,  // 可选，工具错误 trace
   sessionId: 'session-123',
 })
 // entries 为 ErrorNotebookEntry[]，已自动写入 notebook
 ```
 
-### 反思输入与输出
+### 工作原理
+
+`ReflectionAgent.reflect()` 内部不再直接调 `llm.chat()`，而是 Fork 一个最小的 `ReActAgent`：
+
+- **独立上下文**：主对话历史以文本 dump 形式灌入一条 user message
+- **只读工具**：`read_file` + `grep_search`，用于验证代码/文件
+- **ReAct 循环**：子 Agent 自己走 Thought → Action → Observation 链
+- **结构化输出**：最终 answer 是 JSON，宿主解析后持久化
+
+### 反思维度
+
+| 维度 | 说明 |
+|------|------|
+| `reasoning_error` | 推理逻辑错误 |
+| `tool_misuse` | 用错工具或参数 |
+| `missed_optimization` | 遗漏的优化机会 |
+| `incomplete_answer` | 答案不完整 |
+| `hallucination` | 编造事实或 API |
+| `context_mismanagement` | 上下文管理失误 |
+| `other` | 其他 |
+
+## MemoryReflector (记忆提取 Fork)
 
 ```ts
-// reflect() 的输入
-interface ReflectionInput {
-  userQuery: string              // 用户原始问题
-  finalAnswer: string            // Agent 最终回答
-  conversation: MessageData[]    // 完整对话消息
-  errorTraces?: ToolErrorTrace[] // 工具错误追踪（可选）
-  sessionId: string              // 会话 ID
-}
+const reflector = new MemoryReflector({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  memoryManager,
+  maxIterations: 5,  // Fork 子 Agent 的最大 ReAct 迭代次数 (默认: 5)
+})
 
-// reflect() 返回 ErrorNotebookEntry[]，已自动写入 notebook
-
-// 单条发现
-interface ReflectionFinding {
-  category: ReflectionErrorCategory  // 错误类别
-  description: string                // 问题描述
-  cause: string                      // 根因分析
-  suggestion: string                 // 改进建议
-  relatedTraceIds?: string[]         // 关联的工具错误 trace
-}
-
-type ReflectionErrorCategory =
-  | 'reasoning_error'       // 推理错误
-  | 'tool_misuse'           // 工具误用
-  | 'missed_optimization'   // 遗漏的优化
-  | 'incomplete_answer'     // 不完整的答案
-  | 'hallucination'         // 幻觉
-  | 'context_mismanagement' // 上下文管理失误
-  | 'other'                 // 其他
+const memories = await reflector.reflect({
+  userQuery: '用户的原始问题',
+  finalAnswer: agentAnswer,
+  conversation: contextMessages,
+  sessionId: 'session-123',
+})
+// memories 为 Memory[]，已自动写入 MemoryManager
 ```
 
-## ErrorNotebook
+### 提取什么
+
+| 记忆类型 | 说明 | 示例 |
+|----------|------|------|
+| `rule` | 用户设定的约束 | "始终用 kebab-case 命名文件" |
+| `project` | 项目事实或决策 | "从 MySQL 迁移到了 PostgreSQL，因为 JSONB 支持" |
+
+### 去重
+
+`MemoryReflector` 在 Fork 前会查询已有记忆的 `name + description` 列表，注入到子 Agent 的 prompt 中，告诉它**不要重复创建同名记忆**。宿主侧还有防御性检查（`memoryManager.has(name)` 兜底）。
+
+## ErrorNotebook (错题本)
 
 ```ts
 const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
@@ -148,51 +169,63 @@ const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 ```text
 .error-notebook/
 ├── index.json              # 索引文件 (所有条目的元数据)
-├── entry_001.json          # 独立条目文件
-├── entry_002.json
-└── ...
+├── entries/
+│   ├── nb_xxx001.json      # 独立条目文件
+│   ├── nb_xxx002.json
+│   └── ...
 ```
 
-## 迭代式精炼
+## 在 Fusion Agent 中使用
 
-`ReflectionAgent` 支持多轮迭代精炼：
+Fusion Agent 内置了反思支持：
 
-```text
-第 1 轮: 初步分析 → score: 65
-  ↓
-第 2 轮: 针对问题区域深入 → score: 72
-  ↓
-第 3 轮: 最终精炼 → score: 78
-  ↓
-最终结果
+```ts
+const agent = new FusionAgent({
+  llm: mainProvider,
+  // ...
+  reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
+  inlineReflectionInterval: 5, // 每 5 轮触发内省
+  notebook,                    // ErrorNotebook 实例
+})
 ```
 
-每轮迭代都会让 LLM 重新审视之前的分析，以提高反思质量。
+详见 [Fusion Agent](/core/fusion-agent)。
+
+## 和 Fusion Agent 的协同
+
+当 `ReflectionHook` 和 Fusion Agent 的 `reflection` 配置**同时存在**时：
+- Fusion Agent 自己处理 inline reflection
+- `ReflectionHook` 的 `onFinish` 处理 post-hoc reflection + 记忆提取
+- 两者互不干扰，各写各的
 
 ## 完整示例
 
 ```ts
 import {
-  FusionAgent,
-  ModelRouter,
-  AnthropicProvider,
+  ReActAgent,
   OpenAIProvider,
   ErrorNotebook,
+  MemoryManager,
+  createReflectionHook,
 } from 'kagent-ts'
 
 const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
+const memory = new MemoryManager('.memory')
 
-const agent = new FusionAgent({
+const agent = new ReActAgent({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   systemPrompt: '你是一个经验丰富的软件工程师。',
-  provider: new ModelRouter({
-    routes: {
-      main: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
-      reflection: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-    },
-  }),
   tools: BUILTIN_TOOLS,
-  reflection: 'both',
-  inlineReflectionInterval: 5,
+  hooks: [
+    createReflectionHook({
+      llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+      notebook,
+      memoryManager: memory,
+      onReflectionComplete: (e, m) => {
+        console.log(`错题本 +${e}, 记忆 +${m}`)
+      },
+    }),
+  ],
 })
 
 // 执行任务
@@ -206,20 +239,27 @@ for (const entry of entries) {
   console.log(`  → ${entry.suggestion}`)
 }
 
+// 查看新提取的记忆
+const recentMemories = memory.getAll()
+for (const m of recentMemories) {
+  console.log(`[${m.type}] ${m.name}: ${m.description}`)
+}
+
 // 生成经验规则（可注入到后续会话的 system prompt）
 const rulesPrompt = notebook.buildRulesPrompt(10, 1)
-console.log(rulesPrompt)
 ```
 
 ## 最佳实践
 
-1. **反思使用高性能模型**: 推荐 GPT-4o 或 Claude Sonnet 用于反思
-2. **定期审查 ErrorNotebook**: 积累的经验对长期改进有价值
-3. **结合 Eval**: 反思结果可以作为 Eval 评估的输入
-4. **不要太频繁**: Post-hoc 反思每任务一次，Inline 反思间隔不要太短
+1. **反思使用高性能模型**：推荐 GPT-4o 或 Claude Sonnet
+2. **合理设置 maxIterations**：错题本 3-4 足够，记忆提取可稍多（4-5）
+3. **定期审查**：错题本和记忆都是跨 session 积累的，定期清理过时内容
+4. **结合 Eval**：反思结果可以作为 Eval 评估的输入
+5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，不会影响用户看到的结果
 
 ## 下一步
 
+- [Memory 记忆](/advanced/memory) — MemoryManager 和长期记忆
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量
 - [Fusion Agent](/core/fusion-agent) — 内置反思的 Agent 范式
 - [Trace 追踪](/advanced/trace) — 执行追踪提供反思的素材

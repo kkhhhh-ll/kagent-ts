@@ -3,6 +3,8 @@ import { MessageData } from "../messages/types";
 import { LLMProvider } from "../llm/interface";
 import { ReflectionAgent } from "./reflection-agent";
 import { ErrorNotebook } from "./error-notebook";
+import { MemoryReflector } from "./memory-reflector";
+import { MemoryManager } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
@@ -11,52 +13,64 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 export interface ReflectionHookConfig {
   /** LLM provider (shared with the main agent). */
   llm: LLMProvider;
-  /** ErrorNotebook for persisting findings. */
+  /** ErrorNotebook for persisting error reflection findings. */
   notebook: ErrorNotebook;
-  /** Max reflection iterations (default: 3). */
-  maxIterations?: number;
+  /** MemoryManager for persisting extracted memories. */
+  memoryManager?: MemoryManager;
+  /** Max ReAct iterations for the error reflector sub-agent (default: 4). */
+  maxErrorIterations?: number;
+  /** Max ReAct iterations for the memory reflector sub-agent (default: 5). */
+  maxMemoryIterations?: number;
   /**
-   * Callback invoked with the final reflection findings.
-   * Use this to log, alert, or post-process.
+   * Callback invoked when reflection completes.
+   * Receives counts for both error entries and new memories.
    */
-  onReflectionComplete?: (entryCount: number, score?: number) => void;
+  onReflectionComplete?: (entryCount: number, memoryCount: number) => void;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
 }
 
 /**
  * Create an AgentHooks implementation that runs post-execution
- * self-reflection via a ReflectionAgent.
+ * self-reflection and memory extraction via two forked sub-agents.
  *
- * Attach this hook to any agent to automatically review each session:
+ * Both forks run in parallel with their own isolated contexts —
+ * neither blocks the main agent's response to the user.
  *
  * ```ts
  * const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
- * const hook = createReflectionHook({ llm, notebook });
+ * const memory = new MemoryManager({ storageDir: ".memory" });
+ * const hook = createReflectionHook({ llm, notebook, memoryManager: memory });
  * const agent = new ReActAgent({ llm, hooks: hook });
  * const answer = await agent.run("...");
- * // Reflection runs automatically after onFinish
+ * // After answer is returned, two forks run in parallel:
+ * //   1. Error reflector → finds mistakes → persists to notebook
+ * //   2. Memory extractor → extracts memories → persists to .memory/
  * ```
- *
- * How it works:
- * - Captures the full conversation from the last LLM call's message array.
- * - On `onFinish`, spawns a ReflectionAgent that analyses the session's
- *   conversation + answer against the user's original query.
- * - Findings are persisted to the ErrorNotebook (错题本).
- * - The notebook can later be queried: `hook.notebook.buildRulesPrompt()`
- *   to inject learned rules into future sessions' system prompts.
  */
 export function createReflectionHook(
   config: ReflectionHookConfig,
-): AgentHooks & { readonly notebook: ErrorNotebook } {
-  const { llm, notebook, maxIterations } = config;
+): AgentHooks & { readonly notebook: ErrorNotebook; readonly memoryManager: MemoryManager | null } {
+  const { llm, notebook, memoryManager } = config;
   const logger = config.logger ?? new ConsoleLogger();
 
   // Accumulate state across hook calls
   let userQuery: string | null = null;
   let lastConversation: MessageData[] = [];
 
-  const reflector = new ReflectionAgent({ llm, notebook, maxIterations });
+  const errorReflector = new ReflectionAgent({
+    llm,
+    notebook,
+    maxIterations: config.maxErrorIterations,
+  });
+
+  const memoryReflector = memoryManager
+    ? new MemoryReflector({
+        llm,
+        memoryManager,
+        maxIterations: config.maxMemoryIterations,
+      })
+    : null;
 
   const hook: AgentHooks = {
     // ── Capture the full conversation from each LLM call ──────────────
@@ -69,36 +83,67 @@ export function createReflectionHook(
         if (firstUser) userQuery = firstUser.content;
       }
 
-      // Keep the latest full conversation snapshot.
-      // By the time onFinish fires, this will hold the messages
-      // sent in the last LLM call (full history up to that point).
+      // Keep the latest full conversation snapshot
       lastConversation = messages;
     },
 
-    // ── Run reflection after the agent finishes ──────────────────────
+    // ── Run reflection & memory extraction after the agent finishes ──
     onFinish: async (finalAnswer: string) => {
-      try {
-        const entries = await reflector.reflect({
-          userQuery: userQuery ?? "(unknown)",
-          finalAnswer,
-          conversation: lastConversation,
-          sessionId: `session_${Date.now()}`,
-        });
+      const sessionId = `session_${Date.now()}`;
+      const query = userQuery ?? "(unknown)";
 
-        if (entries.length > 0) {
-          logger.info(
-            "Reflection",
-            `Recorded ${entries.length} finding(s) to the error notebook.`,
-          );
-        }
+      // Run error reflector and memory reflector in parallel.
+      // Both are best-effort — failures in one don't affect the other.
+      const [errorEntries, memoryEntries] = await Promise.all([
+        // Error reflection
+        (async () => {
+          try {
+            const entries = await errorReflector.reflect({
+              userQuery: query,
+              finalAnswer,
+              conversation: lastConversation,
+              sessionId,
+            });
+            if (entries.length > 0) {
+              logger.info(
+                "Reflection",
+                `Recorded ${entries.length} finding(s) to the error notebook.`,
+              );
+            }
+            return entries;
+          } catch (err) {
+            logger.warn("Reflection", `Error reflector failed: ${err}`);
+            return [];
+          }
+        })(),
 
-        config.onReflectionComplete?.(entries.length);
-      } catch (err) {
-        // Reflection is best-effort — never crash the main agent.
-        logger.warn("Reflection", `Reflection agent failed: ${err}`);
-      }
+        // Memory extraction
+        (async () => {
+          if (!memoryReflector) return [];
+          try {
+            const memories = await memoryReflector.reflect({
+              userQuery: query,
+              finalAnswer,
+              conversation: lastConversation,
+              sessionId,
+            });
+            if (memories.length > 0) {
+              logger.info(
+                "Reflection",
+                `Extracted ${memories.length} new memor${memories.length === 1 ? "y" : "ies"}.`,
+              );
+            }
+            return memories;
+          } catch (err) {
+            logger.warn("Reflection", `Memory reflector failed: ${err}`);
+            return [];
+          }
+        })(),
+      ]);
+
+      config.onReflectionComplete?.(errorEntries.length, memoryEntries.length);
     },
   };
 
-  return { ...hook, notebook };
+  return { ...hook, notebook, memoryManager: memoryManager ?? null };
 }
