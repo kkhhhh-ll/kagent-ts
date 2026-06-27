@@ -83,6 +83,7 @@ export default defineConfig({
             { text: 'Skill 渐进式技能', link: '/advanced/skills' },
             { text: 'Sub-Agent 子代理', link: '/advanced/subagents' },
             { text: 'MCP 协议', link: '/advanced/mcp' },
+            { text: 'RAG 知识库', link: '/advanced/rag' },
             { text: 'Reflection 反思', link: '/advanced/reflection' },
             { text: 'Memory 记忆', link: '/advanced/memory' },
             { text: '安全防护', link: '/advanced/security' },

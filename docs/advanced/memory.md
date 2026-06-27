@@ -154,6 +154,7 @@ const agent = new ReActAgent({
 
 ## 下一步
 
+- [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
 - [Skill 渐进式技能](/advanced/skills) — 另一个知识注入机制
 - [Project Rules](/advanced/security) — 项目规则管理
 - [Preferences](/guide/configuration) — 用户偏好配置

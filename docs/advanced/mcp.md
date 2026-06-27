@@ -200,4 +200,5 @@ tools:
 
 - [Tool Registry](/tools/tool-registry) — 理解工具注册机制
 - [Sub-Agent 子代理](/advanced/subagents) — 子代理配置与 MCP 工具共享
+- [RAG 知识库](/advanced/rag) — 语义检索本地文档
 - [Session 持久化](/advanced/session) — MCP 状态不持久化，恢复后需重连

@@ -185,6 +185,18 @@ export type { AgentTraceEvent, AgentTraceEventType } from "./trace/types";
 export { SubAgentManager, SubAgentLoader } from "./subagent/index";
 export type { SubAgentDefinition, SubAgentResult } from "./subagent/index";
 
+// RAG — retrieval-augmented generation
+export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore } from "./rag/index";
+export type {
+  EmbeddingProvider,
+  VectorStore,
+  RAGDocument,
+  RAGChunk,
+  RAGSearchResult,
+  RAGConfig,
+  OpenAIEmbeddingConfig,
+} from "./rag/index";
+
 // MCP (Model Context Protocol) — dynamic tool discovery
 export { McpClientManager } from "./mcp/mcp-client-manager";
 export { McpConnectionError } from "./mcp/mcp-types";

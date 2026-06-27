@@ -282,4 +282,5 @@ const report = await agent.run(
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理编排
 - [MCP 协议](/advanced/mcp) — 连接外部 MCP Server，与子代理共享工具
+- [RAG 知识库](/advanced/rag) — 语义检索文档，子代理按需共享
 - [工具过滤器](/tools/filters) — 为子代理限制工具访问

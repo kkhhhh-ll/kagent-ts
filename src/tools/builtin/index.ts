@@ -39,6 +39,8 @@ export const BUILTIN_TOOL_NAMES = new Set([
   "remember",
   "recall",
   "list_errors",
+  "search_knowledge",
+  "list_knowledge_documents",
 ]);
 
 // Re-export individual tools
@@ -55,6 +57,7 @@ export { createListErrorsTool } from "./list-errors";
 export { createSkillTool } from "./skill";
 export { createRememberTool } from "./remember";
 export { createRecallTool } from "./recall";
+export { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../../rag/search-knowledge";
 
 /**
  * Register all built-in tools into the given registry.

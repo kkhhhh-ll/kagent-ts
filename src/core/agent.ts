@@ -24,6 +24,9 @@ import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
 import { SubAgentManager } from "../subagent/subagent-manager";
 import type { SubAgentResult } from "../subagent/subagent-types";
+import { RAGManager } from "../rag/rag-manager";
+import type { RAGConfig } from "../rag/rag-types";
+import { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../rag/search-knowledge";
 import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 import { createListErrorsTool } from "../tools/builtin/list-errors";
@@ -268,6 +271,24 @@ export interface AgentConfig {
   subAgentLLM?: LLMProvider;
 
   /**
+   * RAG (Retrieval-Augmented Generation) configuration.
+   *
+   * When set, documents from `documentsDir` are indexed at startup and the
+   * `search_knowledge` tool is registered so the LLM can retrieve relevant
+   * context before answering.
+   *
+   * @example
+   * ```ts
+   * rag: {
+   *   documentsDir: "./docs",
+   *   embeddingProvider: new OpenAIEmbeddingProvider({ apiKey: "..." }),
+   *   topK: 5,
+   * }
+   * ```
+   */
+  rag?: RAGConfig;
+
+  /**
    * Token budget configuration for session-level cost control.
    * When set, the agent stops making LLM calls when cumulative token
    * consumption exceeds `maxTotalTokens`. The budget resets on
@@ -363,6 +384,14 @@ export abstract class Agent {
   /** Guards async init() from running more than once per instance. */
   private _mcpInitialized = false;
 
+  // ─── RAG ────────────────────────────────────────────────────────────────
+
+  /** RAG manager (lazily initialized in init()). */
+  protected ragManager?: RAGManager;
+
+  /** RAG configuration (from AgentConfig). */
+  protected ragConfig?: RAGConfig;
+
   // ─── Sub-Agent ────────────────────────────────────────────────────────
 
   /** Sub-agent manager (lazily initialized in init()). */
@@ -437,6 +466,7 @@ export abstract class Agent {
     this.mcpServerConfigs = config.mcpServers;
     this.subAgentsDir = config.subAgentsDir;
     this.skillsDir = config.skillsDir;
+    this.ragConfig = config.rag;
 
     // Resolve sub-agent LLM:
     // 1. Explicit `subAgentLLM` → use it directly
@@ -1307,6 +1337,14 @@ export abstract class Agent {
       // Register sub-agent tools into the tool registry
       try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
       try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
+    }
+
+    // ── RAG knowledge base ─────────────────────────────────────────────
+    if (this.ragConfig) {
+      this.ragManager = new RAGManager(this.ragConfig, this.logger);
+      await this.ragManager.index();
+      try { this.toolRegistry.register(createSearchKnowledgeTool(this.ragManager)); } catch { /* skip */ }
+      try { this.toolRegistry.register(createListKnowledgeDocumentsTool(this.ragManager)); } catch { /* skip */ }
     }
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────

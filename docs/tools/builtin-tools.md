@@ -1,6 +1,6 @@
 # 内置工具
 
-kagent-ts 提供了 13 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、记忆管理等场景。
+kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、知识检索、记忆管理等场景。
 
 ## 工具列表总览
 
@@ -14,6 +14,8 @@ kagent-ts 提供了 13 个内置工具，覆盖文件操作、搜索、Shell 执
 | `BashTool` | 执行 Shell 命令 | ⚠️ |
 | `WebFetchTool` | 抓取 URL 内容 | |
 | `SkillTool` | 激活渐进式 Skill | |
+| `SearchKnowledgeTool` | 语义搜索 RAG 知识库 | |
+| `ListKnowledgeDocumentsTool` | 列出已索引的文档 | |
 | `RememberTool` | 写入长期记忆 | |
 | `RecallTool` | 检索长期记忆 | |
 | `ListSubagentsTool` | 列出可用子代理 | |
@@ -132,6 +134,26 @@ console.log(BUILTIN_TOOL_NAMES)
   "prompt": "提取文档的主要内容"
 }
 ```
+
+## 知识检索
+
+### SearchKnowledgeTool
+
+语义搜索 RAG 知识库，返回最相关的文档片段。
+
+```json
+{
+  "query": "MCP 配置方法"
+}
+```
+
+需要配置 `rag` 选项，详见 [RAG 知识库](/advanced/rag)。
+
+### ListKnowledgeDocumentsTool
+
+列出知识库中已索引的所有文档。
+
+仅当配置了 `rag` 时可用。
 
 ## 知识与记忆
 
