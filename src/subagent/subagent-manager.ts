@@ -8,6 +8,23 @@ import { ToolFilter } from "../tools/tool-filter";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a simple glob pattern (only `*` wildcards) to a RegExp.
+ *
+ * `*` matches any sequence of characters (like shell glob, not regex `.*`).
+ * All other regex-special characters are escaped so they match literally.
+ *
+ * @example
+ *   globToRegex("filesystem_*")  → /^filesystem_.*$/
+ *   globToRegex("*_read")        → /^.*_read$/
+ */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
 /**
  * Manages sub-agent definitions, spawning, and result collection.
  *
@@ -397,25 +414,58 @@ export class SubAgentManager {
 
   /**
    * Build a ReActAgent instance from a sub-agent definition, with:
-   * - Filtered tool set (name allowlist → defaultFilter → definition.toolFilter)
+   * - Filtered tool set (name allowlist + wildcard patterns → defaultFilter → definition.toolFilter)
    * - Pre-activated skills (copied from main agent's SkillManager)
    * - No spawn tool
    * - Auto-detect disabled (skills are pre-activated)
+   *
+   * Tool name patterns support `*` as a wildcard. For example,
+   * `filesystem_*` matches all tools whose names start with `filesystem_`
+   * (e.g. MCP tools from the "filesystem" server).
    */
   private buildSubAgent(definition: SubAgentDefinition): ReActAgent {
-    // Look up declared tools from the main agent's registry
-    const tools: Tool[] = [];
-    for (const toolName of definition.tools) {
-      const tool = this.toolRegistry!.getTool(toolName);
-      if (tool) {
-        tools.push(tool);
+    // Look up declared tools from the main agent's registry.
+    // Supports wildcard patterns (e.g. "filesystem_*" matches all tools
+    // from the "filesystem" MCP server). Uses a Map for deduplication.
+    const toolMap = new Map<string, Tool>();
+    const allToolNames = this.toolRegistry!.toolNames;
+    const allTools = this.toolRegistry!.getTools();
+
+    for (const toolPattern of definition.tools) {
+      if (toolPattern.includes("*")) {
+        // Wildcard pattern — match against all tool names in the registry
+        const regex = globToRegex(toolPattern);
+        let matched = 0;
+        for (const toolName of allToolNames) {
+          if (regex.test(toolName)) {
+            const tool = allTools.find((t) => t.name === toolName);
+            if (tool && !toolMap.has(toolName)) {
+              toolMap.set(toolName, tool);
+              matched++;
+            }
+          }
+        }
+        if (matched === 0) {
+          this.logger.warn(
+            "SubAgent",
+            `Pattern "${toolPattern}" requested by "${definition.name}" matched no tools.`,
+          );
+        }
       } else {
-        this.logger.warn(
-          "SubAgent",
-          `Tool "${toolName}" requested by "${definition.name}" not found in registry.`,
-        );
+        // Exact match (existing behavior)
+        const tool = this.toolRegistry!.getTool(toolPattern);
+        if (tool) {
+          toolMap.set(toolPattern, tool);
+        } else {
+          this.logger.warn(
+            "SubAgent",
+            `Tool "${toolPattern}" requested by "${definition.name}" not found in registry.`,
+          );
+        }
       }
     }
+
+    const tools = Array.from(toolMap.values());
 
     // Build a dedicated ToolRegistry for this sub-agent
     const toolRegistry = new ToolRegistry();

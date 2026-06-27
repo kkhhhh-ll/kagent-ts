@@ -56,6 +56,31 @@ tools:
 请输出结构化的审查报告：每个问题标注严重程度、文件位置和改进建议。
 ```
 
+### 工具名通配符
+
+`tools` 字段支持 `*` 通配符，可以一次性匹配多个工具名。这对 MCP Server 特别有用——一个 Server 常常暴露十几个工具，逐个列出很繁琐：
+
+```markdown
+---
+name: file-worker
+description: 处理所有文件系统操作
+tools:
+  - filesystem_*       # 匹配 filesystem_read_file, filesystem_write_file, ...
+  - echo               # 精确匹配单个工具
+---
+```
+
+匹配规则：
+
+| Pattern | 匹配 |
+| ------- | ---- |
+| `filesystem_*` | 所有以 `filesystem_` 开头的工具 |
+| `*_read` | 所有以 `_read` 结尾的工具 |
+| `*` | 主 ToolRegistry 中的全部工具 |
+| `echo` | 精确匹配（无 `*` 时保持原有行为） |
+
+多个 pattern 匹配到同名工具时会**自动去重**；未匹配到任何工具的 pattern 会输出警告日志。
+
 ## 加载和管理子代理
 
 ```ts
@@ -135,11 +160,16 @@ interface SubAgentDefinition {
   /** 系统提示词 */
   systemPrompt: string
 
-  /** 可用工具 (工具名称数组) */
-  tools?: string[]
+  /**
+   * 工具名匹配模式，支持两种形式：
+   * - 精确名: "echo", "ReadFileTool"
+   * - 通配符: "filesystem_*" 匹配所有以 filesystem_ 开头的工具
+   * 多个 pattern 匹配到同名工具时自动去重。
+   */
+  tools: string[]
 
   /** 可用 Skill 名称 */
-  skills?: string[]
+  skills: string[]
 }
 
 interface SubAgentResult {
@@ -161,7 +191,7 @@ enum SubAgentStatus {
 
 ## 工具过滤
 
-框架使用 [工具过滤器](/tools/filters) 为每个子代理自动创建受限的工具注册表：
+框架使用 [工具过滤器](/tools/filters) 为每个子代理自动创建受限的工具注册表。工具的来源是主 Agent 的 `ToolRegistry`（包括内置工具、自定义工具、MCP 工具等）：
 
 ```ts
 // 子代理只能使用 ReadFileTool 和 GrepSearchTool
@@ -169,7 +199,34 @@ enum SubAgentStatus {
   name: 'code-reviewer',
   tools: ['ReadFileTool', 'GrepSearchTool'],
 }
-// 框架内部: registry.forSubAgent(allowlist('ReadFileTool', 'GrepSearchTool'))
+
+// 使用通配符，引入整个 MCP Server 的工具
+{
+  name: 'file-worker',
+  tools: ['filesystem_*'],
+}
+```
+
+## 与 MCP 共享工具
+
+子代理**不需要自己连接 MCP Server**。MCP 工具的 `execute` 函数通过闭包持有主 Agent 的连接引用，子代理从主 Agent 的 `ToolRegistry` 获取的是**同一个 tool 对象**。这意味着：
+
+- 主 Agent 连 MCP → 工具自动注册到 ToolRegistry
+- 子代理的 `AGENT.md` 中声明 `filesystem_*` → 匹配所有 filesystem 工具
+- 子代理调用这些工具 → 走的是主 Agent 的同一条 MCP 连接
+- 不需要额外配置，也不需要子代理自己起 MCP 进程
+
+完整示例：主 Agent 连接了 filesystem 和 database 两个 MCP Server，子代理按需引入：
+
+```markdown
+---
+name: fullstack-worker
+description: 可以操作文件系统和数据库的全栈子代理
+tools:
+  - filesystem_*       # filesystem Server 的全部工具
+  - pg_query           # database Server 的特定工具
+  - WriteFileTool      # 内置工具
+---
 ```
 
 ## 完整示例
@@ -224,5 +281,5 @@ const report = await agent.run(
 ## 下一步
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理编排
-- [MCP 协议](/advanced/mcp) — 连接外部 MCP Server
+- [MCP 协议](/advanced/mcp) — 连接外部 MCP Server，与子代理共享工具
 - [工具过滤器](/tools/filters) — 为子代理限制工具访问

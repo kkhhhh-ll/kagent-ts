@@ -20,7 +20,15 @@ export interface SubAgentDefinition {
   /** System prompt content (body of the AGENT.md file). */
   systemPrompt: string;
   /**
-   * Tool names from the main agent's ToolRegistry that this sub-agent can use.
+   * Tool name patterns from the main agent's ToolRegistry that this sub-agent
+   * can use.
+   *
+   * Supports two forms:
+   * - **Exact names**: `"echo"`, `"bash"` — matches a single tool by name.
+   * - **Wildcard patterns**: `"filesystem_*"` — matches all tools whose names
+   *   match the glob (e.g. all MCP tools from the "filesystem" server).
+   *   Only `*` is supported (matches any sequence of characters).
+   *
    * When `toolFilter` is also provided, the filter is applied on top of this
    * allowlist (both must pass).
    */

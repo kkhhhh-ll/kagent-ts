@@ -427,5 +427,158 @@ describe("SubAgentManager", () => {
       expect(results).toHaveLength(1);
       expect(results[0].success).toBe(true);
     });
+
+    // ── Wildcard tool patterns ──────────────────────────────────────────
+
+    it("wildcard pattern matches multiple tools by prefix", async () => {
+      const mcpToolA: Tool = {
+        name: "filesystem_read_file",
+        description: "Read a file",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "file content",
+      };
+      const mcpToolB: Tool = {
+        name: "filesystem_write_file",
+        description: "Write a file",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "ok",
+      };
+      const otherTool: Tool = {
+        name: "other_tool",
+        description: "Unrelated",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "other",
+      };
+
+      const manager = createBoundManager("Wildcard result.", [
+        mcpToolA,
+        mcpToolB,
+        otherTool,
+      ]);
+
+      manager.register({
+        name: "file-worker",
+        description: "Works with files.",
+        systemPrompt: "You handle files.",
+        tools: ["filesystem_*"], // wildcard
+        skills: [],
+      });
+
+      manager.spawn("file-worker", "do file work");
+
+      await new Promise((r) => setTimeout(r, 100));
+      const results = await manager.pollCompleted();
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+    });
+
+    it("wildcard pattern matching zero tools still allows spawn", async () => {
+      const manager = createBoundManager("No-match result.", [dummyTool]);
+
+      manager.register({
+        name: "no-match",
+        description: "Has a pattern that matches nothing.",
+        systemPrompt: "You have no matching tools.",
+        tools: ["nonexistent_*"],
+        skills: [],
+      });
+
+      manager.spawn("no-match", "task");
+
+      await new Promise((r) => setTimeout(r, 100));
+      const results = await manager.pollCompleted();
+
+      expect(results).toHaveLength(1);
+      // Should still succeed — just with 0 tools
+      expect(results[0].success).toBe(true);
+    });
+
+    it("mixed wildcard and exact tool names", async () => {
+      const mcpTool: Tool = {
+        name: "pg_query",
+        description: "Query DB",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "rows",
+      };
+
+      const manager = createBoundManager("Mixed result.", [dummyTool, mcpTool]);
+
+      manager.register({
+        name: "mixed",
+        description: "Has both wildcard and exact.",
+        systemPrompt: "You have mixed tools.",
+        tools: ["pg_*", "echo"], // wildcard + exact
+        skills: [],
+      });
+
+      manager.spawn("mixed", "task");
+
+      await new Promise((r) => setTimeout(r, 100));
+      const results = await manager.pollCompleted();
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+    });
+
+    it("overlapping wildcard patterns deduplicate tools", async () => {
+      const mcpTool: Tool = {
+        name: "db_query",
+        description: "Query DB",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "data",
+      };
+
+      const manager = createBoundManager("Dedup result.", [mcpTool]);
+
+      manager.register({
+        name: "dedup",
+        description: "Overlapping patterns.",
+        systemPrompt: "You have dedup tools.",
+        tools: ["db_*", "db_*", "db_query"], // overlapping wildcards + exact
+        skills: [],
+      });
+
+      manager.spawn("dedup", "task");
+
+      await new Promise((r) => setTimeout(r, 100));
+      const results = await manager.pollCompleted();
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+    });
+
+    it("bare * wildcard matches all tools", async () => {
+      const toolA: Tool = {
+        name: "alpha",
+        description: "Alpha tool",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "alpha",
+      };
+      const toolB: Tool = {
+        name: "beta",
+        description: "Beta tool",
+        parameters: { type: "object", properties: {} },
+        execute: async () => "beta",
+      };
+
+      const manager = createBoundManager("All tools result.", [toolA, toolB]);
+
+      manager.register({
+        name: "all-tools",
+        description: "Has access to everything.",
+        systemPrompt: "You have all tools.",
+        tools: ["*"],
+        skills: [],
+      });
+
+      manager.spawn("all-tools", "task");
+
+      await new Promise((r) => setTimeout(r, 100));
+      const results = await manager.pollCompleted();
+
+      expect(results).toHaveLength(1);
+      expect(results[0].success).toBe(true);
+    });
   });
 });

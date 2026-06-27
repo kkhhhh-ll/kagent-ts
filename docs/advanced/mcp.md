@@ -176,8 +176,28 @@ await agent.shutdown()
 // 自动调用 mcpManager.disconnectAll()
 ```
 
+## 与 Sub-Agent 共享工具
+
+MCP 工具通过 `ToolRegistry` 与 [子代理](/advanced/subagents) 共享——子代理**不需要自己连接 MCP Server**。
+
+MCP 工具的 `execute` 函数通过闭包持有主 Agent 的连接引用，子代理拿到的是同一个 tool 对象，调用时直接走主 Agent 的 MCP 连接。
+
+在 `AGENT.md` 中使用通配符即可引入整个 MCP Server 的工具：
+
+```markdown
+---
+name: file-worker
+description: 处理所有文件操作
+tools:
+  - filesystem_*       # 匹配 filesystem Server 的全部工具
+  - pg_query           # 精确匹配 database Server 的特定工具
+---
+```
+
+这样主 Agent 连接一次 MCP，所有子代理按需共享工具，不会重复启动 MCP 进程。
+
 ## 下一步
 
 - [Tool Registry](/tools/tool-registry) — 理解工具注册机制
-- [Sub-Agent 子代理](/advanced/subagents) — 子代理配置
+- [Sub-Agent 子代理](/advanced/subagents) — 子代理配置与 MCP 工具共享
 - [Session 持久化](/advanced/session) — MCP 状态不持久化，恢复后需重连
