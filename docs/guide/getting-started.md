@@ -65,3 +65,4 @@ npx tsx demo.ts
 - 探索 [核心概念](/core/overview) 理解 Agent 的运作方式
 - 查看 [LLM 后端](/llm/overview) 了解如何切换和配置不同的 LLM Provider
 - 浏览 [工具系统](/tools/overview) 学习如何使用和自定义工具
+- 配置 [RAG 知识库](/advanced/rag) 让 Agent 基于本地文档进行语义检索

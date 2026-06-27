@@ -14,7 +14,7 @@ ToolRegistry (注册中心)
   ↓
 ToolErrorTracker (错误追踪)
   ↓
-BUILTIN_TOOLS (13 个内置工具)
+BUILTIN_TOOLS (15 个内置工具)
 ```
 
 ## Tool 接口
@@ -90,4 +90,4 @@ const agent = new ReActAgent({
 - [Tool Registry](/tools/tool-registry) — 注册和查找工具
 - [Circuit Breaker](/tools/circuit-breaker) — 熔断保护机制
 - [参数验证](/tools/validation) — JSON Schema 参数校验
-- [内置工具](/tools/builtin-tools) — 13 个内置工具详解
+- [内置工具](/tools/builtin-tools) — 15 个内置工具详解

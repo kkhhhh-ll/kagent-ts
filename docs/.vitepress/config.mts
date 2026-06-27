@@ -17,6 +17,9 @@ export default defineConfig({
     nav: [
       { text: '指南', link: '/guide/getting-started' },
       { text: '核心概念', link: '/core/overview' },
+      { text: 'LLM 后端', link: '/llm/overview' },
+      { text: '工具系统', link: '/tools/overview' },
+      { text: '高级功能', link: '/advanced/session' },
       { text: 'API 参考', link: '/api/' },
       { text: 'GitHub', link: 'https://github.com/kkhhhh-ll/kagent-ts' },
     ],

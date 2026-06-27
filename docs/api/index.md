@@ -22,6 +22,8 @@ import {
   SkillManager, FileSkillLoader,
   // MCP
   McpClientManager,
+  // RAG
+  RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore,
   // SubAgent
   SubAgentManager, SubAgentLoader,
   // Memory
@@ -52,6 +54,7 @@ import {
 | **Skills** | SkillManager / FileSkillLoader / Skill | [指南 - Skills](/advanced/skills) |
 | **SubAgent** | SubAgentManager / SubAgentLoader | [指南 - SubAgent](/advanced/subagents) |
 | **MCP** | McpClientManager / McpServerConfig | [指南 - MCP](/advanced/mcp) |
+| **RAG** | RAGManager / OpenAIEmbeddingProvider / InMemoryVectorStore | [指南 - RAG](/advanced/rag) |
 | **Memory** | MemoryManager / Memory | [指南 - Memory](/advanced/memory) |
 | **Reflection** | ReflectionAgent / ErrorNotebook | [指南 - Reflection](/advanced/reflection) |
 | **Security** | wrapUntrusted / detectInjectionSignatures | [指南 - Security](/advanced/security) |
@@ -75,6 +78,14 @@ type OpenAIConfig
 type AnthropicConfig
 type ModelRouterConfig
 type TokenBudgetConfig
+
+// RAG
+type RAGConfig
+type RAGDocument
+type RAGChunk
+type EmbeddingProvider
+type VectorStore
+type RAGSearchResult
 
 // 工具系统
 type Tool

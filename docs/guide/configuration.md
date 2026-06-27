@@ -39,6 +39,9 @@ interface AgentConfig {
   /** MCP Server 配置 */
   mcpServers?: McpServerConfig[]
 
+  /** RAG 知识检索配置 */
+  rag?: RAGConfig
+
   /** 子代理定义 */
   subAgents?: SubAgentDefinition[]
 
@@ -113,6 +116,39 @@ const contextConfig = {
 }
 ```
 
+## RAG 知识库配置
+
+启用 RAG 后，Agent 启动时会自动索引 `documentsDir` 目录下的文档，并注册 `search_knowledge` 和 `list_knowledge_documents` 两个工具。
+
+```ts
+import { OpenAIEmbeddingProvider } from 'kagent-ts'
+
+const agent = new ReActAgent({
+  // ... 其他配置
+  rag: {
+    /** 文档目录路径 — 递归扫描 .md / .txt / .json 文件 */
+    documentsDir: './docs',
+
+    /** 向量化 Provider — 内置 OpenAI，也支持自定义实现 */
+    embeddingProvider: new OpenAIEmbeddingProvider({
+      apiKey: process.env.OPENAI_API_KEY!,
+      model: 'text-embedding-3-small',  // 默认，也可用 text-embedding-3-large
+    }),
+
+    /** 检索时返回的 top-K 数量（默认: 5） */
+    topK?: number
+
+    /** chunk 最大字符数（默认: 1000） */
+    chunkSize?: number
+
+    /** 相邻 chunk 重叠字符数（默认: 200） */
+    chunkOverlap?: number
+  },
+})
+```
+
+详细说明请参考 [RAG 知识库](/advanced/rag)。
+
 ## 环境变量
 
 | 变量名 | 说明 |
@@ -127,3 +163,4 @@ const contextConfig = {
 - [核心概念](/core/overview) — 理解 Agent 的架构和运作机制
 - [LLM 后端](/llm/overview) — 深入了解各类 Provider 配置
 - [工具系统](/tools/overview) — 学习注册和使用自定义工具
+- [RAG 知识库](/advanced/rag) — 配置语义检索，让 Agent 基于本地文档回答

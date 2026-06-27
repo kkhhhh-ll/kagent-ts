@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "kagent-ts"
   text: "TypeScript AI Agent 框架"
-  tagline: ReAct / Plan-Solve / Fusion / Orchestrator — 多模式 LLM Agent 框架，内置完善的工具管理、会话持久化、反思与安全机制
+  tagline: ReAct / Plan-Solve / Fusion / Orchestrator — 多模式 LLM Agent 框架，内置完善的工具管理、会话持久化、RAG 知识检索、反思与安全机制
   actions:
     - theme: brand
       text: 快速开始
@@ -19,7 +19,7 @@ features:
     details: 支持 ReAct、Plan-Solve、Fusion（混合）和 Orchestrator（多代理编排）四种 Agent 循环范式，灵活应对不同复杂度的任务。
   - icon: 🔧
     title: 完善的工具系统
-    details: 内置 13 种工具（文件读写、搜索、Shell 执行、网络抓取等），支持 Circuit Breaker 熔断、JSON Schema 参数验证、工具输出截断和 HITL 审批。
+    details: 内置 15 种工具（文件读写、搜索、Shell 执行、网络抓取、知识检索等），支持 Circuit Breaker 熔断、JSON Schema 参数验证、工具输出截断和 HITL 审批。
   - icon: 🔌
     title: 多 LLM 后端
     details: 同时支持 OpenAI 和 Anthropic，内置 Fallback 降级、Rate Limiter 限流、Model Router 路由和 Token Budget 预算控制。
@@ -38,6 +38,9 @@ features:
   - icon: 🌐
     title: MCP 协议支持
     details: 支持 Model Context Protocol，可连接外部 MCP Server（stdio/SSE），自动发现工具并注册到 Tool Registry。
+  - icon: 📚
+    title: RAG 知识检索
+    details: 开箱即用的 RAG 模块，自动加载本地文档、递归文本切分、向量语义检索。Agent 自动调用 search_knowledge 工具检索相关知识。
 ---
 
 ## 快速体验
@@ -75,13 +78,14 @@ kagent-ts
 ├── orchestrator/   # Orchestrator Agent (DAG 任务分解 + 并行调度)
 ├── llm/            # LLM Provider (OpenAI, Anthropic, Fallback, Router)
 ├── tools/          # 工具系统 (Registry, Circuit Breaker, Validator)
-│   └── builtin/    # 13 个内置工具
+│   └── builtin/    # 15 个内置工具
 ├── session/        # 会话持久化与恢复
 ├── context/        # 上下文窗口管理
 ├── compression/    # 4 步渐进式上下文压缩
 ├── skills/         # 渐进式 Skill 系统 (SKILL.md)
 ├── subagent/       # 子代理定义与调度
 ├── mcp/            # MCP 协议客户端管理
+├── rag/            # RAG 知识检索（文档加载、文本切分、向量搜索）
 ├── reflection/     # 反思代理 + 错误笔记本
 ├── security/       # Prompt Injection 防御
 ├── memory/         # 长期记忆 (MEMORY.md)

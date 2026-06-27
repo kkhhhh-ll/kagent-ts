@@ -123,8 +123,34 @@ const agent = new ReActAgent({
 })
 ```
 
+## RAG 知识检索
+
+配置 `rag` 选项后，Agent 启动时会自动索引本地文档并注册 `search_knowledge` 工具：
+
+```ts
+import { OpenAIEmbeddingProvider } from 'kagent-ts'
+
+const agent = new ReActAgent({
+  // ...
+  rag: {
+    documentsDir: './docs',
+    embeddingProvider: new OpenAIEmbeddingProvider({
+      apiKey: process.env.OPENAI_API_KEY!,
+      model: 'text-embedding-3-small',
+    }),
+    topK: 5,
+  },
+})
+
+// Agent 在回答前会自动调用 search_knowledge 检索相关文档
+await agent.run('怎么配置 MCP？')
+```
+
+详见 [RAG 知识库](/advanced/rag)。
+
 ## 下一步
 
 - [生命周期钩子](/core/hooks) — 详细的钩子使用指南
 - [LLM 后端](/llm/overview) — 配置 LLM Provider
 - [工具系统](/tools/overview) — 注册和自定义工具
+- [RAG 知识库](/advanced/rag) — 让 Agent 基于本地文档进行语义检索
