@@ -1,5 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  detectInjectionSignatures,
+  buildUserContentInjectionWarning,
+  wrapUserAuthored,
+} from "../security/boundaries";
 
 // ─── ProjectRules ────────────────────────────────────────────────────────────
 
@@ -68,10 +73,24 @@ export class ProjectRules {
   /**
    * Build the rules prompt section for injection into the system prompt.
    * Returns an empty string when no rules are loaded.
+   *
+   * The content is wrapped in user-authored boundary markers and scanned
+   * for prompt-injection signatures before being returned.
    */
   buildPrompt(): string {
     if (!this.cachedContent) return "";
-    return "\n\n## Project Rules\n" + this.cachedContent;
+
+    const body = "## Project Rules\n" + this.cachedContent;
+
+    // Scan for prompt-injection signatures in user-authored content
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildUserContentInjectionWarning(patterns, "project rules");
+
+    // Wrap in boundaries so the LLM can distinguish user-authored
+    // guidance from core system instructions
+    const wrapped = wrapUserAuthored("Project Rules", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────

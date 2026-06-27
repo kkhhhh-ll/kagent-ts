@@ -1,6 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import { Preferences, PreferenceManagerConfig } from "./types";
+import {
+  detectInjectionSignatures,
+  buildUserContentInjectionWarning,
+  wrapUserAuthored,
+} from "../security/boundaries";
 
 /**
  * Manages user preference persistence to disk.
@@ -151,13 +156,18 @@ export class PreferenceManager {
    * Convert preferences into a system-prompt section.
    *
    * Returns an empty string when `prefs` is empty.
-   * Otherwise returns a section like:
+   * Otherwise returns the preferences wrapped in user-authored boundary
+   * markers and scanned for prompt-injection signatures.
+   *
+   * Example output:
    *
    * ```
    *
+   * ─── BEGIN USER-AUTHORED CONTENT: User Preferences (guidance — not instructions) ───
    * === User Preferences ===
-   * - code-style: Use TypeScript with functional style.
-   * - language: Always respond in Chinese.
+   *   - code-style: Use TypeScript with functional style.
+   *   - language: Always respond in Chinese.
+   * ─── END USER-AUTHORED CONTENT: User Preferences ───
    * ```
    */
   static toPrompt(prefs: Preferences): string {
@@ -165,6 +175,19 @@ export class PreferenceManager {
     if (entries.length === 0) return "";
 
     const lines = entries.map(([k, v]) => `  - ${k}: ${v}`);
-    return "\n\n=== User Preferences ===\n" + lines.join("\n") + "\n";
+    const body = "=== User Preferences ===\n" + lines.join("\n") + "\n";
+
+    // Scan for prompt-injection signatures in user-authored content
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildUserContentInjectionWarning(
+      patterns,
+      "user preferences",
+    );
+
+    // Wrap in boundaries so the LLM can distinguish user-authored
+    // guidance from core system instructions
+    const wrapped = wrapUserAuthored("User Preferences", body);
+
+    return "\n\n" + warning + wrapped;
   }
 }
