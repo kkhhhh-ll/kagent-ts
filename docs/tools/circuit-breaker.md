@@ -36,10 +36,8 @@ enum BreakerState {
 | **CLOSED → HALF_OPEN** | 首次失败发生 |
 | **HALF_OPEN → HALF_OPEN** | 继续失败但仍未超过重试上限 |
 | **HALF_OPEN → OPEN** | 连续失败超过 `retryCount`，重试耗尽 |
-| **HALF_OPEN → CLOSED** | 执行成功，恢复确认 |
-| **OPEN → HALF_OPEN** | 执行成功（恢复探测）—— 给工具一次验证机会 |
-| **HALF_OPEN → OPEN** | 恢复探测失败，回到熔断状态 |
-| **OPEN → CLOSED** | 手动调用 `reset()` |
+| **HALF_OPEN → CLOSED** | 执行成功，失败计数清零 |
+| **任意状态 → CLOSED** | 手动调用 `reset()` |
 
 ## 配置
 
@@ -88,10 +86,10 @@ Please find a completely different approach.
 
 Circuit Breaker 与 `ToolErrorTracker` 协同工作：
 
-- `ToolErrorTracker` 记录每次失败 → 分析 → 恢复的完整生命周期
-- 新增 `"circuit_half_open"` 事件类型，用于记录半熔断状态
-- 从失败模式中提取规则，注入到系统提示词
-- 持久化到 `.error-traces/` 目录
+- `ToolErrorTracker` 在内存中记录每次失败 → 分析 → 恢复的完整生命周期
+- `"circuit_half_open"` 事件类型用于记录半熔断状态
+- `list_errors` 工具允许 LLM 在会话中实时查询当前错误状态
+- 跨会话的错误学习由 [ErrorNotebook（错题本）](/advanced/reflection) 负责
 
 ## 完整示例
 

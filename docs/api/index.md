@@ -92,7 +92,6 @@ type Tool
 type ToolResult
 type ToolFilter
 type ToolErrorTrace
-type ErrorRule
 ```
 
 ## 下一步

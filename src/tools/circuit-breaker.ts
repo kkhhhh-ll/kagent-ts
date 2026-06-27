@@ -82,23 +82,12 @@ export class CircuitBreaker {
   }
 
   /**
-   * Record a successful tool execution.
-   *
-   * - From CLOSED or HALF_OPEN: resets failure count and closes the circuit.
-   * - From OPEN: transitions to HALF_OPEN (recovery probe). The next call
-   *   will determine whether recovery is confirmed (→ CLOSED) or failed
-   *   (→ back to OPEN).
+   * Record a successful tool execution — resets failure count
+   * and closes the circuit.
    */
   recordSuccess(): void {
-    if (this._state === BreakerState.OPEN) {
-      // Recovery probe — enter HALF_OPEN to give the tool one chance
-      this.failureCount = 0;
-      this._state = BreakerState.HALF_OPEN;
-    } else {
-      // CLOSED or HALF_OPEN — full recovery
-      this.failureCount = 0;
-      this._state = BreakerState.CLOSED;
-    }
+    this.failureCount = 0;
+    this._state = BreakerState.CLOSED;
   }
 
   /**

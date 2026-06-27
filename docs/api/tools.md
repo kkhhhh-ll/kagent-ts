@@ -157,32 +157,25 @@ class ToolOutputTruncator {
 
 ## ToolErrorTracker
 
+会话内的工具失败链追踪（纯内存，无持久化）。用于支撑 `list_errors` 工具的实时查询。
+
+> **注意**：跨会话的错误学习和规则注入请使用 [ErrorNotebook（错题本）](/advanced/reflection)，它通过 LLM 反思提供更高质量的错误诊断。
+
 ```ts
 import { ToolErrorTracker, categorizeError } from 'kagent-ts'
 
+const tracker = new ToolErrorTracker()
+
 class ToolErrorTracker {
-  constructor(config: ErrorTrackerConfig)
-  recordFailure(toolName: string, error: ToolResult): void
-  recordAnalysis(thought: string): void
-  recordRecovery(success: boolean): void
-  extractRuleFromTrace(): ErrorRule | null
-  buildRulesPrompt(): string
-}
-
-interface ErrorTrackerConfig {
-  maxTracesPerTool?: number   // 默认: 10
-  storageDir?: string          // 默认: ".error-traces"
-}
-
-interface ErrorRule {
-  pattern: string
-  suggestion: string
-  toolName: string
-}
-
-interface ToolErrorTrace {
-  toolName: string
-  events: TraceEvent[]
+  constructor()
+  recordFailure(toolName: string, args: object, error: string, retriesRemaining: number, breakerState?: string): string
+  recordRecovery(toolName: string, traceId: string, resolution?: string): void
+  recordAnalysis(traceId: string, analysis: string): void
+  getActiveTraceId(toolName: string): string | undefined
+  getActiveTraces(): Array<{ toolName: string; traceId: string }>
+  getAllSummaries(): ErrorTraceSummary[]
+  generateMarkdownReport(): string
+  clear(): void
 }
 ```
 

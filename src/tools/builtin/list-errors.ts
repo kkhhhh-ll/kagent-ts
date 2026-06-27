@@ -60,15 +60,6 @@ export function createListErrorsTool(registry: ToolRegistry): Tool {
         lines.push(`  Attempts: ${s.errorCount}`);
         if (s.resolution) lines.push(`  Resolution: ${s.resolution}`);
         lines.push("");
-
-        // Also include rules for this tool if available
-        const rules = tracker.getRules(s.toolName);
-        if (rules.length > 0) {
-          for (const r of rules) {
-            lines.push(`  💡 Rule: ${r.pattern} → ${r.fix}`);
-          }
-          lines.push("");
-        }
       }
 
       return lines.join("\n");

@@ -1,37 +1,20 @@
 /**
- * ToolErrorTracker — records the complete lifecycle of tool failures
- * and persists them as structured documents for developer review.
+ * ToolErrorTracker — in-memory tracker for tool failure chains within a session.
  *
- * Each "trace" captures one error chain: first failure → retries →
- * LLM analysis → resolution or circuit-open. Traces are stored as
- * individual JSON files in a designated directory (.error-traces/)
- * so developers can inspect, aggregate, and learn from them.
+ * Provides real-time visibility into which tools are failing and why,
+ * so the LLM can query error state via `list_errors` and the agent can
+ * attach LLM analysis to active traces.
+ *
+ * This is NOT a persistence layer. For cross-session learning and
+ * structured error diagnosis, use the ErrorNotebook (错题本) via
+ * ReflectionHook — it runs a post-execution LLM reflection that
+ * categorises mistakes and injects lessons into future sessions.
  */
-import * as fs from "fs";
-import * as path from "path";
 import {
   ToolErrorTrace,
   TraceEvent,
   ErrorTraceSummary,
-  ErrorRule,
 } from "./types";
-
-/**
- * Configuration for the ToolErrorTracker.
- */
-export interface ErrorTrackerConfig {
-  /**
-   * Directory where trace files are stored.
-   * Defaults to `.error-traces` relative to the working directory.
-   */
-  storageDir?: string;
-
-  /**
-   * Whether to persist traces to disk immediately.
-   * Defaults to true.
-   */
-  persistImmediately?: boolean;
-}
 
 /**
  * Generates a short unique trace ID.
@@ -76,7 +59,7 @@ function sanitizeArgs(
 }
 
 /**
- * Limit error message length to avoid huge trace files.
+ * Limit error message length to avoid huge trace objects.
  */
 function truncateError(error: string, maxLen = 500): string {
   if (error.length <= maxLen) return error;
@@ -119,12 +102,13 @@ export function categorizeError(error: string): string {
 }
 
 /**
- * ToolErrorTracker records the complete lifecycle of tool failures.
+ * ToolErrorTracker records the lifecycle of tool failures in memory
+ * for the duration of a session.
  *
  * Usage:
  * ```ts
- * const tracker = new ToolErrorTracker({ storageDir: ".error-traces" });
- * const registry = new ToolRegistry({ errorTracker: tracker });
+ * const tracker = new ToolErrorTracker();
+ * const registry = new ToolRegistry(2, tracker);
  * ```
  *
  * Lifecycle of a trace:
@@ -134,20 +118,12 @@ export function categorizeError(error: string): string {
  * 4. Recovery       → `recordRecovery()` marks the trace as resolved
  * 5. Circuit open   → `recordFailure()` marks the trace as unresolved
  *
- * All traces are persisted as individual JSON files in the storage
- * directory, plus an index file for quick browsing.
+ * For cross-session persistence and LLM-powered error diagnosis,
+ * use {@link import('../reflection/error-notebook').ErrorNotebook}.
  */
 export class ToolErrorTracker {
   private traces: Map<string, ToolErrorTrace> = new Map();
   private activeTraceByTool: Map<string, string> = new Map();
-  private rules: ErrorRule[] = [];
-  private storageDir: string;
-  private persistImmediately: boolean;
-
-  constructor(config?: ErrorTrackerConfig) {
-    this.storageDir = config?.storageDir ?? ".error-traces";
-    this.persistImmediately = config?.persistImmediately ?? true;
-  }
 
   // ─── Event Recording ────────────────────────────────────────────────────
 
@@ -172,12 +148,10 @@ export class ToolErrorTracker {
     let trace: ToolErrorTrace;
 
     if (existingTraceId) {
-      // Append to existing trace
       const existing = this.traces.get(existingTraceId);
       if (existing && !existing.resolved) {
         trace = existing;
       } else {
-        // Existing trace is resolved/closed — start a new one
         trace = this.createTrace(toolName, args);
       }
     } else {
@@ -207,24 +181,21 @@ export class ToolErrorTracker {
     trace.events.push(event);
     trace.updatedAt = nowISO();
 
-    if (retriesRemaining === 0) {
-      // Circuit just opened — trace is done, unresolved
+    // Only close the trace when the circuit is fully OPEN, not when
+    // retriesRemaining === 0 but the breaker is still HALF_OPEN (recovery
+    // is still possible in that state).
+    if (breakerState === "open") {
       trace.resolved = false;
       this.activeTraceByTool.delete(toolName);
     }
 
     this.traces.set(trace.traceId, trace);
-    this.persistTrace(trace.traceId);
 
     return trace.traceId;
   }
 
   /**
    * Record a tool recovery (successful execution after previous failures).
-   *
-   * @param toolName The tool that recovered.
-   * @param traceId  The trace ID for this failure chain.
-   * @param resolution Optional description of how it was resolved.
    */
   recordRecovery(
     toolName: string,
@@ -248,17 +219,10 @@ export class ToolErrorTracker {
     trace.updatedAt = nowISO();
     this.traces.set(traceId, trace);
     this.activeTraceByTool.delete(toolName);
-
-    this.persistTrace(traceId);
-
-    // Auto-extract a rule from any LLM analysis in the resolved trace
-    this.extractRuleFromTrace(traceId);
   }
 
   /**
    * Attach LLM analysis to the latest failure/retry event in a trace.
-   *
-   * Called by the agent after the LLM has reasoned about a tool error.
    */
   recordAnalysis(traceId: string, analysis: string): void {
     const trace = this.traces.get(traceId);
@@ -283,7 +247,6 @@ export class ToolErrorTracker {
     trace.updatedAt = nowISO();
 
     this.traces.set(traceId, trace);
-    this.persistTrace(traceId);
   }
 
   // ─── Query ───────────────────────────────────────────────────────────────
@@ -332,12 +295,9 @@ export class ToolErrorTracker {
 
   /**
    * Get all currently active (unresolved) traces.
-   *
-   * Returns an array of {toolName, traceId} pairs so callers can iterate
-   * over all tools that have an open failure chain and attach LLM analysis.
    */
-  getActiveTraces(): Array<{toolName: string; traceId: string}> {
-    const result: Array<{toolName: string; traceId: string}> = [];
+  getActiveTraces(): Array<{ toolName: string; traceId: string }> {
+    const result: Array<{ toolName: string; traceId: string }> = [];
     for (const [toolName, traceId] of this.activeTraceByTool) {
       const trace = this.traces.get(traceId);
       if (trace && !trace.resolved) {
@@ -348,55 +308,16 @@ export class ToolErrorTracker {
   }
 
   /**
-   * Get the total number of traces recorded.
+   * Get the total number of traces recorded in this session.
    */
   get traceCount(): number {
     return this.traces.size;
   }
 
-  // ─── Persistence ─────────────────────────────────────────────────────────
+  // ─── Report ──────────────────────────────────────────────────────────────
 
   /**
-   * Persist all traces to disk immediately.
-   */
-  persistAll(): void {
-    this.ensureStorageDir();
-    for (const traceId of this.traces.keys()) {
-      this.writeTraceFile(traceId);
-    }
-    this.writeIndexFile();
-  }
-
-  /**
-   * Load traces from disk (e.g., on startup to resume monitoring).
-   */
-  loadFromDisk(): void {
-    this.ensureStorageDir();
-    const dir = this.storageDir;
-
-    if (!fs.existsSync(dir)) return;
-
-    const files = fs.readdirSync(dir);
-    for (const file of files) {
-      if (!file.startsWith("trace_") || !file.endsWith(".json")) continue;
-      if (file === "traces.json") continue; // skip index
-
-      try {
-        const content = fs.readFileSync(path.join(dir, file), "utf-8");
-        const trace: ToolErrorTrace = JSON.parse(content);
-        this.traces.set(trace.traceId, trace);
-
-        if (!trace.resolved) {
-          this.activeTraceByTool.set(trace.toolName, trace.traceId);
-        }
-      } catch {
-        // Skip corrupted files
-      }
-    }
-  }
-
-  /**
-   * Generate a human-readable markdown report of all traces.
+   * Generate an in-memory markdown report of all traces for the current session.
    */
   generateMarkdownReport(): string {
     const summaries = this.getAllSummaries();
@@ -425,7 +346,6 @@ export class ToolErrorTracker {
       report += `- **Status:** ${summary.resolved ? "✅ Resolved" : "❌ Unresolved"}\n`;
       report += `- **Attempts:** ${summary.errorCount}\n\n`;
 
-      // Events table
       report += `| # | Type | Timestamp | Error / Analysis |\n`;
       report += `|---|------|-----------|------------------|\n`;
 
@@ -460,127 +380,12 @@ export class ToolErrorTracker {
     return report;
   }
 
-  // ─── Error Rules ──────────────────────────────────────────────────────────
-
   /**
-   * Extract a rule from a resolved trace's LLM analysis and upsert it.
-   * Called automatically after recordRecovery when analysis exists.
+   * Clear all in-memory traces.
    */
-  extractRuleFromTrace(traceId: string, llmSummary?: string): ErrorRule | null {
-    const trace = this.traces.get(traceId);
-    if (!trace || !trace.resolved) return null;
-
-    // Gather LLM analysis across all events
-    const analyses: string[] = [];
-    for (const e of trace.events) {
-      if (e.analysis) analyses.push(e.analysis);
-    }
-    const combined = llmSummary ?? analyses.join("; ");
-    if (!combined.trim()) return null;
-
-    // Simple heuristic extraction: split into pattern / cause / fix
-    const lines = combined.split(/\n|\.\s+/).map((l) => l.trim()).filter(Boolean);
-    const pattern = lines.slice(0, Math.ceil(lines.length / 3)).join(". ");
-    const cause = lines.slice(Math.ceil(lines.length / 3), Math.ceil(2 * lines.length / 3)).join(". ");
-    const fix = lines.slice(Math.ceil(2 * lines.length / 3)).join(". ");
-
-    const rule: ErrorRule = {
-      toolName: trace.toolName,
-      pattern,
-      cause,
-      fix,
-      createdAt: new Date().toISOString(),
-      version: 1,
-    };
-
-    return this.upsertRule(rule);
-  }
-
-  /**
-   * Upsert a rule: merge with existing if same pattern, else add new.
-   */
-  upsertRule(rule: ErrorRule): ErrorRule {
-    const existing = this.rules.find(
-      (r) => r.toolName === rule.toolName && r.pattern === rule.pattern,
-    );
-    if (existing) {
-      existing.cause = rule.cause;
-      existing.fix = rule.fix;
-      existing.version++;
-      this.persistRules();
-      return existing;
-    }
-    this.rules.push(rule);
-    this.persistRules();
-    return rule;
-  }
-
-  /**
-   * Get all rules, optionally filtered by tool name.
-   */
-  getRules(toolName?: string): ErrorRule[] {
-    if (toolName) return this.rules.filter((r) => r.toolName === toolName);
-    return [...this.rules];
-  }
-
-  /**
-   * Build a prompt section from all rules for injection into the system message.
-   */
-  buildRulesPrompt(): string {
-    if (this.rules.length === 0) return "";
-    const lines = [
-      "\n\n=== Error Prevention Rules ===",
-      "These rules were learned from previous tool errors. Follow them to avoid repeating mistakes.",
-      "",
-    ];
-    for (const r of this.rules) {
-      lines.push(`**${r.toolName}** (v${r.version}):`);
-      lines.push(`- Pattern: ${r.pattern}`);
-      lines.push(`- Fix: ${r.fix}`);
-      lines.push("");
-    }
-    return lines.join("\n");
-  }
-
-  /**
-   * Load rules from disk.
-   */
-  loadRules(): void {
-    const filePath = path.join(this.storageDir, "rules.json");
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      this.rules = JSON.parse(raw);
-    } catch {
-      this.rules = [];
-    }
-  }
-
-  private persistRules(): void {
-    if (!this.persistImmediately) return;
-    this.ensureStorageDir();
-    const filePath = path.join(this.storageDir, "rules.json");
-    fs.writeFileSync(filePath, JSON.stringify(this.rules, null, 2), "utf-8");
-  }
-
-  /**
-   * Delete all stored traces.
-   */
-  clearAll(): void {
+  clear(): void {
     this.traces.clear();
     this.activeTraceByTool.clear();
-    const dir = this.storageDir;
-    if (fs.existsSync(dir)) {
-      const files = fs.readdirSync(dir);
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          try {
-            fs.unlinkSync(path.join(dir, file));
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────
@@ -603,46 +408,6 @@ export class ToolErrorTracker {
     this.traces.set(traceId, trace);
     this.activeTraceByTool.set(toolName, traceId);
     return trace;
-  }
-
-  private persistTrace(traceId: string): void {
-    if (!this.persistImmediately) return;
-    this.ensureStorageDir();
-    this.writeTraceFile(traceId);
-    this.writeIndexFile();
-  }
-
-  private ensureStorageDir(): void {
-    if (!fs.existsSync(this.storageDir)) {
-      fs.mkdirSync(this.storageDir, { recursive: true });
-    }
-  }
-
-  private writeTraceFile(traceId: string): void {
-    const trace = this.traces.get(traceId);
-    if (!trace) return;
-    const filePath = path.join(this.storageDir, `${traceId}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(trace, null, 2), "utf-8");
-  }
-
-  private writeIndexFile(): void {
-    const summaries = this.getAllSummaries();
-    const filePath = path.join(this.storageDir, "traces.json");
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify(
-        {
-          totalTraces: summaries.length,
-          resolvedCount: summaries.filter((s) => s.resolved).length,
-          openCount: summaries.filter((s) => !s.resolved).length,
-          updatedAt: nowISO(),
-          traces: summaries,
-        },
-        null,
-        2
-      ),
-      "utf-8"
-    );
   }
 
   private formatEventType(

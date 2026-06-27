@@ -40,34 +40,6 @@ describe("CircuitBreaker", () => {
     expect(cb.currentFailureCount).toBe(0);
   });
 
-  it("recordSuccess from OPEN enters HALF_OPEN (recovery probe), then second success closes", () => {
-    const cb = new CircuitBreaker({ toolName: "test_tool", retryCount: 0 });
-    cb.recordFailure(); // fails immediately → OPEN (threshold = 1)
-    expect(cb.state).toBe(BreakerState.OPEN);
-
-    // First success → HALF_OPEN (recovery probe)
-    cb.recordSuccess();
-    expect(cb.state).toBe(BreakerState.HALF_OPEN);
-    expect(cb.isAvailable).toBe(true);
-    expect(cb.currentFailureCount).toBe(0);
-
-    // Second success → CLOSED (recovery confirmed)
-    cb.recordSuccess();
-    expect(cb.state).toBe(BreakerState.CLOSED);
-    expect(cb.retriesRemaining).toBe(0); // retryCount=0
-  });
-
-  it("recordFailure from HALF_OPEN (recovery probe) goes back to OPEN", () => {
-    const cb = new CircuitBreaker({ toolName: "test_tool", retryCount: 0 });
-    cb.recordFailure(); // OPEN
-    cb.recordSuccess(); // HALF_OPEN (recovery probe)
-    expect(cb.state).toBe(BreakerState.HALF_OPEN);
-
-    cb.recordFailure(); // recovery failed → back to OPEN
-    expect(cb.state).toBe(BreakerState.OPEN);
-    expect(cb.isAvailable).toBe(false);
-  });
-
   it("recordSuccess from CLOSED state stays CLOSED", () => {
     const cb = new CircuitBreaker({ toolName: "test_tool", retryCount: 2 });
     cb.recordSuccess();

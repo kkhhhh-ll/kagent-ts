@@ -593,7 +593,6 @@ export abstract class Agent {
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.projectRules.buildPrompt(),
       PreferenceManager.toPrompt(this.preferences),
-      this.toolRegistry.getErrorTracker()?.buildRulesPrompt(),
       this.memoryManager.buildPromptHint(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
@@ -1434,11 +1433,12 @@ export abstract class Agent {
    * have an open failure chain (active trace), the thought is recorded as the
    * LLM's analysis of what went wrong and how to proceed.
    *
-   * This feeds the error→analysis→rule→prevention pipeline:
+   * This feeds the error→analysis pipeline:
    *  1. Tool fails     → recordFailure() creates an active trace
    *  2. LLM sees error → its next thought IS the analysis
-   *  3. Tool recovers  → recordRecovery() auto-extracts a rule from the analysis
-   *  4. Rules injected → buildRulesPrompt() includes them in the system prompt
+   *  3. Analysis       → recordAnalysis() attaches the LLM's reasoning to the trace
+   *
+   * For cross-session learning, use ErrorNotebook (错题本) via ReflectionHook.
    *
    * @param thought The LLM's reasoning (from parsed.thought).
    */
