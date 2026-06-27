@@ -3,7 +3,7 @@ import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
 import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION } from "./system-prompts";
-import { wrapUntrusted } from "../security/boundaries";
+import { wrapAndScan } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
@@ -915,10 +915,12 @@ export abstract class Agent {
     let hadFailure = false;
     for (const slot of slots) {
       const result = slot.result!;
+      const toolName = slot.toolCall.function.name;
+
       const toolMessage = Message.tool(
-        wrapUntrusted(slot.toolCall.function.name, result.content),
+        wrapAndScan(`tool:${toolName}`, result.content),
         slot.toolCall.id,
-        slot.toolCall.function.name,
+        toolName,
       );
       this.contextManager.addMessage(toolMessage.toDict());
 

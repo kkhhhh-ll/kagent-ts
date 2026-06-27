@@ -1,5 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  wrapUntrusted,
+  detectInjectionSignatures,
+  buildInjectionWarning,
+} from "../security/boundaries";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -211,6 +216,11 @@ export class ErrorNotebook {
 
   /**
    * Build a compact prompt section from recent entries.
+   *
+   * The content is LLM-generated (via ReflectionAgent), so it is wrapped
+   * with {@link wrapUntrusted} boundary markers and scanned for prompt-
+   * injection signatures before being returned. This prevents the LLM
+   * from accidentally poisoning its own system prompt via the notebook.
    */
   buildRulesPrompt(maxEntries: number = 10, minRepetitions: number = 1): string {
     // Group by (category, description) to count repetitions — uses index only
@@ -233,7 +243,7 @@ export class ErrorNotebook {
     if (filtered.length === 0) return "";
 
     const lines = [
-      "\n\n=== Error Notebook (错题本) ===",
+      "=== Error Notebook (错题本) ===",
       "These mistakes were discovered during previous sessions. Learn from them.",
       "",
     ];
@@ -246,7 +256,18 @@ export class ErrorNotebook {
       lines.push(`**${cat}${rep}**: ${full?.suggestion ?? entry.description}`);
     }
 
-    return lines.join("\n");
+    const body = lines.join("\n");
+
+    // Scan for prompt-injection signatures in LLM-generated content.
+    // The notebook is authored by the LLM itself — it could accidentally
+    // (or adversarially) produce injection text that poisons future runs.
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildInjectionWarning(patterns, "error notebook");
+
+    // Wrap as untrusted data (LLM-authored, not user-authored)
+    const wrapped = wrapUntrusted("error-notebook", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   // ─── Persistence ────────────────────────────────────────────────────────

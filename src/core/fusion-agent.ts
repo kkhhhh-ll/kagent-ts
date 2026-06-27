@@ -14,7 +14,7 @@ import {
 } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
-import { wrapUntrusted } from "../security/boundaries";
+import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
 import { ReflectionAgent } from "../reflection/reflection-agent";
@@ -546,7 +546,7 @@ export class FusionAgent extends Agent {
       const subResults = await this.pollSubAgentResults();
       for (const r of subResults) {
         const source = `subagent:${r.name}`;
-        const msg = new Message(Role.User, wrapUntrusted(source, r.output), {
+        const msg = new Message(Role.User, wrapAndScan(source, r.output), {
           name: source,
         });
         this.contextManager.addMessage(msg.toDict());

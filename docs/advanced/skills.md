@@ -69,15 +69,21 @@ const skillManager = new SkillManager({
 await skillManager.scan()
 
 // 将 Skill 摘要注入系统提示词
-const skillPrompt = skillManager.toPrompt()
+const skillPrompt = skillManager.buildAvailableSkillsHint()
 ```
+
+> **安全提示：** 框架自动对 Skills 内容进行安全防护（与 Project Rules / Preferences 一致）：
+> - `buildSkillsPrompt()`（活跃 Skill 的完整内容）→ 自动包裹 `wrapUserAuthored` + 注入签名扫描
+> - `buildAvailableSkillsHint()`（Skill 名称/描述摘要）→ 同上
+>
+> Skill 文件是用户编写的，存在被篡改或意外包含注入文本的风险。
 
 ## Agent 集成
 
 ```ts
 const agent = new ReActAgent({
   systemPrompt: `你是一个多才多艺的 AI 助手。
-${skillManager.toPrompt()}`,
+${skillManager.buildAvailableSkillsHint()}`,
   provider,
   tools: [
     ...BUILTIN_TOOLS,
@@ -119,7 +125,7 @@ enum SkillStatus {
 
 ```
 1. SkillManager.scan()  → 扫描 skillDirs，注册所有 Skill 元数据
-2. skillManager.toPrompt() → 生成 Skill 摘要列表注入系统提示词
+2. skillManager.buildAvailableSkillsHint() → 生成 Skill 摘要列表注入系统提示词
 3. LLM 判断需要某个 Skill → 调用 SkillTool
 4. SkillManager.activate(name) → 加载 Skill 完整内容
 5. Skill 内容注入系统提示词 → LLM 获得领域专业知识
@@ -143,7 +149,7 @@ await skillManager.scan()
 
 const agent = new ReActAgent({
   systemPrompt: `你是一个 AI 编程助手。以下是你可以使用的高级技能:
-${skillManager.toPrompt()}
+${skillManager.buildAvailableSkillsHint()}
 
 当你需要使用某个技能时，调用 activate_skill 工具激活它。`,
   provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),

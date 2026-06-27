@@ -4,4 +4,5 @@ export {
   buildInjectionWarning,
   wrapUserAuthored,
   buildUserContentInjectionWarning,
+  wrapAndScan,
 } from "./boundaries";

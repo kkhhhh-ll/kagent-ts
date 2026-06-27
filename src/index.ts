@@ -214,6 +214,7 @@ export {
   buildInjectionWarning,
   wrapUserAuthored,
   buildUserContentInjectionWarning,
+  wrapAndScan,
 } from "./security/index";
 
 // Logging — structured logger interface

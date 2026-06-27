@@ -1,6 +1,11 @@
 import { Skill, SkillStatus } from "./types";
 import { FileSkillLoader } from "./file-skill-loader";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import {
+  wrapUserAuthored,
+  detectInjectionSignatures,
+  buildUserContentInjectionWarning,
+} from "../security/boundaries";
 
 /**
  * Manages skill registration, activation, and progressive disclosure.
@@ -242,7 +247,17 @@ export class SkillManager {
     for (const skill of active) {
       sections.push(`[Skill: ${skill.name}]\n${skill.systemPrompt ?? ""}`);
     }
-    return "\n\n" + sections.join("\n\n");
+    const body = sections.join("\n\n");
+
+    // Scan for prompt-injection signatures in user-authored skill content
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildUserContentInjectionWarning(patterns, "skills");
+
+    // Wrap with user-authored boundary markers (skills are user-authored files,
+    // same risk profile as project rules)
+    const wrapped = wrapUserAuthored("Active Skills", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   /**
@@ -260,10 +275,18 @@ export class SkillManager {
       }
     }
     if (available.length === 0) return "";
-    return (
-      "\n\nAvailable skills (use the `skill` tool to activate them when needed):\n" +
-      available.map((line) => `  - ${line}`).join("\n")
-    );
+    const body =
+      "Available skills (use the `skill` tool to activate them when needed):\n" +
+      available.map((line) => `  - ${line}`).join("\n");
+
+    // Scan for prompt-injection signatures in skill names/descriptions
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildUserContentInjectionWarning(patterns, "skill descriptions");
+
+    // Wrap with user-authored boundary markers
+    const wrapped = wrapUserAuthored("Available Skills", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   // ─── Query ───────────────────────────────────────────────────────────

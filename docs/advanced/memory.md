@@ -77,6 +77,12 @@ const all = await memory.list()
 await memory.forget('api-base-url')
 ```
 
+> **安全提示：** `MemoryManager.buildPromptHint()`（注入 system prompt 的记忆索引）和 `recall` 工具返回的内容均由框架自动进行安全防护：
+> - **记忆索引** — 自动包裹 `wrapUntrusted` + 注入签名扫描
+> - **`recall` 工具** — 自动使用 `wrapAndScan`（注入扫描 + 边界包裹）
+>
+> 因为记忆是 LLM 写的，可能留下注入文本，下次运行时污染 system prompt。这些防护防止了自我污染。
+
 ## 自动记忆提取
 
 除了让 LLM 手动调用 `remember` 工具，你还可以使用 `MemoryReflector`，在每次 Agent 执行完后自动分析对话并提取长期记忆：

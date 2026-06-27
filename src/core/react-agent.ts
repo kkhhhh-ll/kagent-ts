@@ -9,7 +9,7 @@ import {
 import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
-import { wrapUntrusted } from "../security/boundaries";
+import { wrapAndScan } from "../security/boundaries";
 
 /**
  * Default system prompt for ReAct-style reasoning with structured JSON output.
@@ -123,7 +123,7 @@ export class ReActAgent extends Agent {
         const source = `subagent:${r.name}`;
         const msg = new Message(
           Role.User,
-          wrapUntrusted(source, r.output),
+          wrapAndScan(source, r.output),
           { name: source },
         );
         this.contextManager.addMessage(msg.toDict());

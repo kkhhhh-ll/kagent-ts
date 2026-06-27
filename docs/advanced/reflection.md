@@ -161,6 +161,7 @@ const misuseEntries = notebook.getByCategory('tool_misuse')
 const recent = notebook.getRecent(10)
 
 // 生成规则提示词（可注入到 system prompt）
+// 注意：输出已自动包裹 untrusted-data 边界标记 + 注入签名扫描
 const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 ```
 

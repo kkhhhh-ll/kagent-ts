@@ -140,3 +140,25 @@ export function buildUserContentInjectionWarning(
     "",
   ].join("\n");
 }
+
+/**
+ * Scan content for injection signatures and wrap it as untrusted data.
+ *
+ * This is a convenience that combines {@link detectInjectionSignatures},
+ * {@link buildInjectionWarning}, and {@link wrapUntrusted} into a single
+ * call. Use this for tool outputs, sub-agent results, and other untrusted
+ * data that should be both scanned AND wrapped.
+ *
+ * @param source  Human-readable source identifier (e.g. "tool:bash").
+ * @param content The untrusted content to scan and wrap.
+ * @returns The wrapped content, with a warning prefix if injection patterns were found.
+ */
+export function wrapAndScan(source: string, content: string): string {
+  const patterns = detectInjectionSignatures(content);
+  let out = "";
+  if (patterns.length > 0) {
+    out += buildInjectionWarning(patterns, source);
+  }
+  out += wrapUntrusted(source, content);
+  return out;
+}

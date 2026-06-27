@@ -6,7 +6,7 @@ import {
   PLAN_SOLVE_INSTRUCTIONS,
 } from "./response-schema";
 import { TOOL_ERROR_RECOVERY } from "./system-prompts";
-import { wrapUntrusted } from "../security/boundaries";
+import { wrapAndScan } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { SessionState, SessionStatus } from "../session/session-types";
@@ -176,7 +176,7 @@ export class PlanSolveAgent extends Agent {
         const source = `subagent:${r.name}`;
         const msg = new Message(
           Role.User,
-          wrapUntrusted(source, r.output),
+          wrapAndScan(source, r.output),
           { name: source },
         );
         this.contextManager.addMessage(msg.toDict());

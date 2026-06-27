@@ -3,7 +3,7 @@ import { Message } from "../messages/message";
 import { Role } from "../messages/types";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse } from "../llm/interface";
-import { wrapUntrusted } from "../security/boundaries";
+import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
 
 import type {
@@ -446,7 +446,7 @@ export class OrchestratorAgent extends Agent {
           const source = `subagent:${node.subAgentName}:${node.id}`;
           const msg = new Message(
             Role.User,
-            wrapUntrusted(source, node.result.output),
+            wrapAndScan(source, node.result.output),
             { name: source },
           );
           this.contextManager.addMessage(msg.toDict());

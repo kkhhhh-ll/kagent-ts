@@ -1,6 +1,6 @@
 import { Tool } from "../types";
 import type { MemoryManager } from "../../memory/memory-manager";
-import { wrapUntrusted } from "../../security/boundaries";
+import { wrapAndScan } from "../../security/boundaries";
 
 /**
  * Create a `recall` tool so the LLM can load full memory content on demand.
@@ -61,5 +61,5 @@ function formatMemory(m: { name: string; type: string; description: string; cont
     "",
     m.content,
   ].join("\n");
-  return wrapUntrusted(source, body);
+  return wrapAndScan(source, body);
 }

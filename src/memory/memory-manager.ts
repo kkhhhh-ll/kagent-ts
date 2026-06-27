@@ -1,5 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  wrapUntrusted,
+  detectInjectionSignatures,
+  buildInjectionWarning,
+} from "../security/boundaries";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -172,17 +177,34 @@ export class MemoryManager {
    * Full content is loaded on demand via the `recall` tool, keeping the
    * system prompt lean. Each line is ~50 chars so the full index of 200
    * entries stays under ~2500 tokens.
+   *
+   * The content is LLM-generated (via the `remember` tool), so it is
+   * wrapped with {@link wrapUntrusted} boundary markers and scanned for
+   * prompt-injection signatures before being returned. This prevents
+   * the LLM from accidentally poisoning its own system prompt via
+   * memory names.
    */
   buildPromptHint(): string {
     if (this.index.length === 0) return "";
 
     const names = this.index.map((e) => `- ${e.name} (\`${e.type}\`)`);
-    return (
-      "\n\n## Long-Term Memories (" +
+    const body =
+      "## Long-Term Memories (" +
       this.index.length +
       " entries — use the `recall` tool to load full content)\n" +
-      names.join("\n")
-    );
+      names.join("\n");
+
+    // Scan for prompt-injection signatures in LLM-generated content.
+    // Memory names and descriptions are authored by the LLM via the
+    // `remember` tool — they could contain injection text that would
+    // poison future runs when re-injected into the system prompt.
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildInjectionWarning(patterns, "memory index");
+
+    // Wrap as untrusted data (LLM-authored, not user-authored)
+    const wrapped = wrapUntrusted("memory-index", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   /**
