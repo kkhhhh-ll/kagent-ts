@@ -1312,7 +1312,7 @@ export abstract class Agent {
     this._mcpInitialized = true;
 
     // ── Error tracking tool ──────────────────────────────────────────
-    try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { /* skip */ }
+    try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { this.logger.debug("Init", `"list_errors" already registered — keeping existing.`); }
 
     // ── MCP connections ──────────────────────────────────────────────
     if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {
@@ -1335,24 +1335,24 @@ export abstract class Agent {
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 
       // Register sub-agent tools into the tool registry
-      try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { /* skip */ }
-      try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { /* skip */ }
+      try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"list_subagents" already registered — keeping existing.`); }
+      try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"spawn_subagent" already registered — keeping existing.`); }
     }
 
     // ── RAG knowledge base ─────────────────────────────────────────────
     if (this.ragConfig) {
       this.ragManager = new RAGManager(this.ragConfig, this.logger);
       await this.ragManager.index();
-      try { this.toolRegistry.register(createSearchKnowledgeTool(this.ragManager)); } catch { /* skip */ }
-      try { this.toolRegistry.register(createListKnowledgeDocumentsTool(this.ragManager)); } catch { /* skip */ }
+      try { this.toolRegistry.register(createSearchKnowledgeTool(this.ragManager)); } catch { this.logger.debug("Init", `"search_knowledge" already registered — keeping existing.`); }
+      try { this.toolRegistry.register(createListKnowledgeDocumentsTool(this.ragManager)); } catch { this.logger.debug("Init", `"list_knowledge_documents" already registered — keeping existing.`); }
     }
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────
-    try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { /* skip */ }
+    try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { this.logger.debug("Init", `"skill" already registered — keeping existing.`); }
 
     // ── Remember / Recall tools (long-term memory) ────────────────────
-    try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { /* skip */ }
-    try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { /* skip */ }
+    try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { this.logger.debug("Init", `"remember" already registered — keeping existing.`); }
+    try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { this.logger.debug("Init", `"recall" already registered — keeping existing.`); }
   }
 
   /**
