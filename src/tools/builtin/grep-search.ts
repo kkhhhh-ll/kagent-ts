@@ -187,24 +187,18 @@ function listFilesRecursive(rootPath: string): string[] {
  * Build a glob filter function from a simple glob pattern.
  * Supports: *.ts, *.{ts,js}, **/
 function buildGlobFilter(pattern: string): (filePath: string) => boolean {
-  // Normalize separators
   const normalized = pattern.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
 
-  // Simple single-level pattern (e.g., "*.ts")
+  // Simple single-level pattern (e.g., "*.ts") — match against basename only
   if (parts.length === 1 && !parts[0].includes("**")) {
     const regex = globToRegex(parts[0]);
     return (filePath: string) => regex.test(path.basename(filePath));
   }
 
-  // Multi-level pattern with **
-  const regexStr = "^" + normalized
-    .replace(/\*\*/g, "___DOUBLESTAR___")
-    .replace(/\*/g, "[^/]*")
-    .replace(/___DOUBLESTAR___/g, ".*")
-    .replace(/\?/g, ".") + "$";
-
-  const regex = new RegExp(regexStr);
+  // Multi-level pattern (e.g., "src/**/*.ts") — match against full path.
+  // matchSlash=false: * matches within one segment, ** matches across directories.
+  const regex = globToRegex(normalized, false);
   return (filePath: string) => {
     const normalizedPath = filePath.replace(/\\/g, "/");
     return regex.test(normalizedPath);
@@ -212,24 +206,40 @@ function buildGlobFilter(pattern: string): (filePath: string) => boolean {
 }
 
 /**
- * Convert a simple glob to regex.
+ * Convert a glob pattern to a case-insensitive RegExp.
+ *
+ * When `matchSlash` is true (default), `*` matches any character including `/`.
+ * When false, `*` matches `[^/]*` (within one path segment) and `**` matches `.*`
+ * (across segments). Also supports `?`, brace expansion `{a,b}`, and escapes `.`
+ * so it matches a literal dot.
  */
-function globToRegex(glob: string): RegExp {
+function globToRegex(glob: string, matchSlash = true): RegExp {
+  const anyChar = matchSlash ? "." : "[^/]";
   let str = "^";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
     if (c === "*") {
-      str += ".*";
+      if (glob[i + 1] === "*") {
+        // ** always matches across path separators
+        str += ".*";
+        i++;
+      } else {
+        str += anyChar + "*";
+      }
     } else if (c === "?") {
-      str += ".";
+      str += anyChar;
     } else if (c === ".") {
       str += "\\.";
     } else if (c === "{") {
-      // Simple {a,b} support
       const end = glob.indexOf("}", i);
       if (end > i) {
         const items = glob.substring(i + 1, end).split(",");
-        str += "(" + items.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")";
+        str +=
+          "(" +
+          items
+            .map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|") +
+          ")";
         i = end;
       } else {
         str += "\\{";
