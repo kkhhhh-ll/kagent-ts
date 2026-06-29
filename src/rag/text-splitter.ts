@@ -141,7 +141,7 @@ function findOverlapStart(
     for (const sep of separators) {
       // Search forward from target
       let pos = text.indexOf(sep, target);
-      if (pos >= target && pos < splitAt && (bestPos === -1 || pos < bestPos)) {
+      if (pos >= target && pos < splitAt && (bestPos === -1 || Math.abs(pos - target) < Math.abs(bestPos - target))) {
         bestPos = pos;
       }
       // Also try backward from target

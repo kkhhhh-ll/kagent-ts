@@ -220,9 +220,15 @@ function globToRegex(glob: string, matchSlash = true): RegExp {
     const c = glob[i];
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        // ** always matches across path separators
-        str += ".*";
-        i++;
+        if (glob[i + 2] === "/") {
+          // **/ matches zero or more directory levels
+          str += "(.*/)?";
+          i += 2;
+        } else {
+          // ** at end or followed by non-slash
+          str += ".*";
+          i++;
+        }
       } else {
         str += anyChar + "*";
       }

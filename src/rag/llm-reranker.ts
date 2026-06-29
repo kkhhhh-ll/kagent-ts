@@ -117,7 +117,7 @@ export class LLMReRanker implements ReRanker {
 
     try {
       const arr = JSON.parse(match[0]) as number[];
-      if (!Array.isArray(arr) || arr.length === 0) return null;
+      if (!Array.isArray(arr) || arr.length !== expectedCount) return null;
 
       // Normalize to [0, 1]
       const normalized = arr.map((n) => Math.max(0, Math.min(1, Number(n) / 10)));

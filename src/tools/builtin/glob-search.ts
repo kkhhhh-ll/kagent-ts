@@ -23,7 +23,7 @@ export const GlobSearchTool: Tool = {
         type: "string",
         description:
           "Glob pattern to match file paths against. " +
-          "Examples: '** / *.ts', 'src/** / *.json', '*.{ts,js}'.",
+          "Examples: '**/*.ts', 'src/**/*.json', '*.{ts,js}'.",
       },
       path: {
         type: "string",

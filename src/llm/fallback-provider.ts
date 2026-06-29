@@ -97,6 +97,8 @@ export class FallbackProvider implements LLMProvider {
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i];
+      let yieldedItems = false;
+
       try {
         const stream = provider.chatStream(messages, tools, signal);
         if (i > 0) {
@@ -105,11 +107,28 @@ export class FallbackProvider implements LLMProvider {
             `Stream recovered via fallback provider "${provider.model}".`,
           );
         }
-        yield* stream;
+
+        for await (const event of stream) {
+          yieldedItems = true;
+          yield event;
+        }
         return;
       } catch (err: unknown) {
         if (!(err instanceof LLMNetworkError)) throw err;
+
+        // If the stream already yielded partial data, don't fall back —
+        // the consumer has already received incomplete output and retrying
+        // from scratch would produce duplicate / semantically broken results.
+        if (yieldedItems) throw err;
+
         lastError = err;
+        this.logger.warn(
+          "Fallback",
+          `Stream from "${provider.model}" failed before yielding data: ${err.message}. ` +
+          (i < this.providers.length - 1
+            ? `Trying next provider...`
+            : `All providers exhausted.`),
+        );
       }
     }
 

@@ -226,8 +226,8 @@ export class ToolRegistry {
       // Circuit just opened — no retries left
       if (!breaker.isAvailable) {
         return toolError(
-          ToolErrorCode.EXECUTION_FAILURE,
-          `[FATAL:EXECUTION_FAILURE] Tool "${name}" threw an exception: ${rawMessage}\n\n` +
+          ToolErrorCode.CIRCUIT_OPEN,
+          `[FATAL:CIRCUIT_OPEN] Tool "${name}" threw an exception: ${rawMessage}\n\n` +
           `This was the final attempt. The tool is now disabled after ${breaker.currentFailureCount} consecutive failures. ` +
           `Do NOT retry "${name}". Find a different approach or tool.`,
           "fatal",

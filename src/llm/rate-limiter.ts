@@ -13,6 +13,11 @@ class SlidingWindowLimiter {
   private maxPerMinute: number;
 
   constructor(maxPerMinute: number) {
+    if (maxPerMinute <= 0 || !Number.isFinite(maxPerMinute)) {
+      throw new Error(
+        `SlidingWindowLimiter: maxPerMinute must be a positive number, got ${maxPerMinute}.`,
+      );
+    }
     this.maxPerMinute = maxPerMinute;
   }
 

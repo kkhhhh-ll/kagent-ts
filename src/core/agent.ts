@@ -127,6 +127,11 @@ export interface AgentConfig {
    */
   rulesPath?: string;
 
+  /**
+   * Optional system prompt string appended to the default system prompt.
+   * Provides a base instruction layer that is always injected into the
+   * system prompt for every run.
+   */
   systemPrompt?: string;
 
   /**

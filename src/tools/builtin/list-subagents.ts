@@ -13,9 +13,9 @@ export function createListSubagentsTool(manager: SubAgentManager): Tool {
     parameters: { type: "object", properties: {} },
 
     async execute(): Promise<string> {
-      const list = manager.buildSubAgentList();
-      if (list === "No sub-agents registered.") return list;
+      if (!manager.hasDefinitions()) return "No sub-agents registered.";
 
+      const list = manager.buildSubAgentList();
       return "Available sub-agents:\n\n" + list;
     },
   };
