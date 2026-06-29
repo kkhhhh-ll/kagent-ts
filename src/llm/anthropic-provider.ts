@@ -476,26 +476,45 @@ export class AnthropicProvider implements LLMProvider {
       // An empty result means the message was skipped (e.g. empty content).
       if (!converted) continue;
 
-      // Merge consecutive tool-result messages into a single user message.
-      // Anthropic requires ALL tool_result blocks for a given assistant
-      // message's tool_use blocks to appear in the IMMEDIATELY next message.
-      // If we emit separate user messages for each tool result, the
-      // alternation logic below would insert synthetic "(continued)"
-      // messages between them, breaking the tool_use/tool_result pairing.
+      // Merge tool-result messages into the immediately-preceding user
+      // message.  Anthropic requires ALL tool_result blocks for a given
+      // assistant message's tool_use blocks to appear in the IMMEDIATELY
+      // next message after that assistant.  Without merging, two things
+      // can break this pairing:
+      //
+      // 1. Consecutive Role.Tool messages → separate "user" messages →
+      //    the alternation logic inserts synthetic "(continued)" messages
+      //    between them, pushing later tool_results further away.
+      //
+      // 2. A non-tool user message (e.g. a "Continue…" truncation hint)
+      //    that sits between the assistant and its tool_results — again
+      //    the tool_results end up in a later message.
+      //
+      // By always merging a Role.Tool message into the last user message
+      // we guarantee the tool_result blocks are in the first user message
+      // after the assistant.
       if (msg.role === Role.Tool && formattedMessages.length > 0) {
         const last = formattedMessages[formattedMessages.length - 1];
-        if (
-          last.role === "user" &&
-          Array.isArray(last.content) &&
-          (last.content as Array<{ type: string }>).some(
-            (b) => b.type === "tool_result",
-          )
-        ) {
-          // Merge tool_result blocks into the previous user message.
-          const lastBlocks = last.content as Anthropic.ToolResultBlockParam[];
+        if (last.role === "user") {
           const newBlocks =
             converted.content as Anthropic.ToolResultBlockParam[];
-          last.content = [...lastBlocks, ...newBlocks] as unknown as Anthropic.MessageParam["content"];
+
+          if (typeof last.content === "string") {
+            // Convert plain-text user message to a content-block array
+            // so we can append tool_result blocks alongside the text.
+            last.content = [
+              { type: "text", text: last.content },
+              ...newBlocks,
+            ] as unknown as Anthropic.MessageParam["content"];
+          } else if (Array.isArray(last.content)) {
+            // Append tool_result blocks to the existing content array.
+            const lastBlocks =
+              last.content as Anthropic.ToolResultBlockParam[];
+            last.content = [
+              ...lastBlocks,
+              ...newBlocks,
+            ] as unknown as Anthropic.MessageParam["content"];
+          }
           continue;
         }
       }

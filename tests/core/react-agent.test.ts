@@ -481,6 +481,146 @@ describe("ReActAgent", () => {
       // continue and eventually get the final answer.
       expect(result).toContain("42");
     });
+
+    it("injects 'Continue...' AFTER tool results when truncation has tool_calls", async () => {
+      // When a truncated response contains tool_calls, the continuation
+      // instruction MUST be injected after tool execution so it does not
+      // sit between the assistant's tool_use blocks and their tool_result
+      // blocks (Anthropic API requires tool_results in the immediately
+      // next message after tool_use).
+      const toolRegistry = new ToolRegistry();
+      toolRegistry.register(echoTool);
+
+      let callCount = 0;
+      const llm = {
+        model: "mock",
+        chat: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              content: JSON.stringify({ thought: "I'll echo it." }),
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: {
+                    name: "echo",
+                    arguments: '{"message": "hello"}',
+                  },
+                },
+              ],
+              responseError: {
+                code: "max_tokens" as any,
+                message: "Output truncated.",
+              },
+            };
+          }
+          return {
+            content: answerContent("Done after tool."),
+            tool_calls: undefined,
+          };
+        },
+        chatStream: async function* () { yield { type: "done" as const }; },
+        getTokenCount: () => 10,
+      };
+
+      const captureOrder: string[] = [];
+      const ctxMgr = new ContextManager();
+      const origAdd = ctxMgr.addMessage.bind(ctxMgr);
+      ctxMgr.addMessage = (msg: any) => {
+        if (msg.role === "assistant" && msg.tool_calls?.length > 0) {
+          captureOrder.push("assistant(tool_calls)");
+        } else if (msg.role === "tool") {
+          captureOrder.push(`tool_result(${msg.name})`);
+        } else if (
+          msg.role === "user" &&
+          typeof msg.content === "string" &&
+          msg.content.includes("cut off")
+        ) {
+          captureOrder.push("continue_msg");
+        } else {
+          captureOrder.push(`${msg.role}(${typeof msg.content === "string" ? msg.content.slice(0, 20) : "..."})`);
+        }
+        return origAdd(msg);
+      };
+
+      const agent = new ReActAgent({
+        llm,
+        toolRegistry,
+        logger: new SilentLogger(),
+        maxIterations: 5,
+        contextManager: ctxMgr,
+      });
+
+      await agent.run("echo test");
+
+      // Verify ordering: assistant(tool_calls) → tool_result → continue_msg
+      const asstIdx = captureOrder.indexOf("assistant(tool_calls)");
+      const toolIdx = captureOrder.indexOf("tool_result(echo)");
+      const contIdx = captureOrder.indexOf("continue_msg");
+
+      expect(asstIdx).toBeGreaterThan(-1);
+      expect(toolIdx).toBeGreaterThan(-1);
+      expect(contIdx).toBeGreaterThan(-1);
+      expect(asstIdx).toBeLessThan(toolIdx);
+      expect(toolIdx).toBeLessThan(contIdx);
+    });
+
+    it("injects 'Continue...' in answer path for truncated no-tool response", async () => {
+      // When a truncated response has NO tool_calls, the continuation
+      // instruction is injected in the answer path so the LLM continues.
+      let callCount = 0;
+      const llm = {
+        model: "mock",
+        chat: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              content: JSON.stringify({
+                thought: "Almost there...",
+                answer: "The result is 100",
+              }),
+              tool_calls: undefined,
+              responseError: {
+                code: "max_tokens" as any,
+                message: "Output truncated.",
+              },
+            };
+          }
+          return {
+            content: answerContent("The complete result is 100."),
+            tool_calls: undefined,
+          };
+        },
+        chatStream: async function* () { yield { type: "done" as const }; },
+        getTokenCount: () => 10,
+      };
+
+      const ctxMgr = new ContextManager();
+      const addedMessages: string[] = [];
+      const origAdd = ctxMgr.addMessage.bind(ctxMgr);
+      ctxMgr.addMessage = (msg: any) => {
+        if (msg.role === "user" && typeof msg.content === "string") {
+          addedMessages.push(msg.content);
+        }
+        return origAdd(msg);
+      };
+
+      const agent = new ReActAgent({
+        llm,
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        maxIterations: 5,
+        contextManager: ctxMgr,
+      });
+
+      const result = await agent.run("compute something");
+      expect(result).toContain("100");
+
+      // A continuation message should have been injected
+      const contMsg = addedMessages.find((m) => m.includes("cut off"));
+      expect(contMsg).toBeTruthy();
+    });
   });
 
   // ── Retry counter reset ─────────────────────────────────────────────

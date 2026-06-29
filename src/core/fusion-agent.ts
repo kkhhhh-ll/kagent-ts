@@ -636,13 +636,11 @@ export class FusionAgent extends Agent {
           return fallback;
         }
 
+        // Store the truncated message so the LLM has context for where it
+        // left off. The continuation instruction is injected AFTER tool
+        // execution (if any) so it does not break the tool_use/tool_result
+        // pairing required by the Anthropic API.
         this.contextManager.addMessage(assistantMessage.toDict());
-        const continueMsg = Message.user(
-          "Your previous response was cut off (max output tokens reached). " +
-            "Continue exactly where you left off — do NOT repeat any content already written. " +
-            "If you were calling tools, re-invoke them with complete arguments.",
-        );
-        this.contextManager.addMessage(continueMsg.toDict());
       } else {
         this.contextManager.addMessage(assistantMessage.toDict());
         consecutiveTruncations = 0;
@@ -674,6 +672,19 @@ export class FusionAgent extends Agent {
           response.tool_calls,
           mcpWarnedServers,
         );
+
+        // Inject the continuation instruction AFTER tool execution so it
+        // does not sit between the assistant's tool_use blocks and their
+        // tool_result blocks (which would violate the Anthropic API's
+        // requirement that tool_results appear in the immediately next
+        // message after tool_use blocks).
+        if (isTruncated) {
+          const continueMsg = Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written.",
+          );
+          this.contextManager.addMessage(continueMsg.toDict());
+        }
 
         // Update failure counter and step progress
         if (hadFailure) {
@@ -750,6 +761,13 @@ export class FusionAgent extends Agent {
               "\n\n[Note: Response may be incomplete due to output length constraints.]"
             );
           }
+          // Inject continuation instruction so the LLM knows to complete
+          // its truncated response (no tool calls were present).
+          const continueMsg = Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written.",
+          );
+          this.contextManager.addMessage(continueMsg.toDict());
           this.logger.info(
             "Fusion",
             "Answer truncated — continuing in next iteration.",

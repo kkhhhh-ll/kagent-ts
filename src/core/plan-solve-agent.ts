@@ -261,16 +261,11 @@ export class PlanSolveAgent extends Agent {
           return fallback;
         }
 
-        // Store the truncated message so the LLM has context for where it left off,
-        // then inject a continuation instruction.
+        // Store the truncated message so the LLM has context for where it
+        // left off. The continuation instruction is injected AFTER tool
+        // execution (if any) so it does not break the tool_use/tool_result
+        // pairing required by the Anthropic API.
         this.contextManager.addMessage(assistantMessage.toDict());
-
-        const continueMsg = Message.user(
-          "Your previous response was cut off (max output tokens reached). " +
-          "Continue exactly where you left off — do NOT repeat any content already written. " +
-          "If you were calling tools, re-invoke them with complete arguments."
-        );
-        this.contextManager.addMessage(continueMsg.toDict());
       } else {
         // Normal (non-truncated) response — store it and reset the counter.
         this.contextManager.addMessage(assistantMessage.toDict());
@@ -302,6 +297,19 @@ export class PlanSolveAgent extends Agent {
           response.tool_calls,
           mcpWarnedServers,
         );
+
+        // Inject the continuation instruction AFTER tool execution so it
+        // does not sit between the assistant's tool_use blocks and their
+        // tool_result blocks (which would violate the Anthropic API's
+        // requirement that tool_results appear in the immediately next
+        // message after tool_use blocks).
+        if (isTruncated) {
+          const continueMsg = Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          );
+          this.contextManager.addMessage(continueMsg.toDict());
+        }
 
         // Update consecutive failure count and step progress
         if (roundHadFailure) {
@@ -350,8 +358,8 @@ export class PlanSolveAgent extends Agent {
 
       // ── Final answer ────────────────────────────────────────────
       if (parsed.answer) {
-        // If truncated, don't return — the continuation instruction is
-        // already in context; next iteration will continue from here.
+        // If truncated, don't return — inject a continuation instruction
+        // so the LLM knows to pick up where it left off.
         if (isTruncated) {
           consecutiveEmptyIterations = 0;
           if (parsed.thought) {
@@ -366,6 +374,13 @@ export class PlanSolveAgent extends Agent {
             for (const h of this.hooks) h.onFinish?.(fallback);
             return fallback;
           }
+          // Inject continuation instruction so the LLM knows to complete
+          // its truncated response (no tool calls were present).
+          const continueMsg = Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          );
+          this.contextManager.addMessage(continueMsg.toDict());
           this.logger.info("Plan-Solve", "Answer truncated (max_tokens) — continuing in next iteration.");
           continue;
         }
