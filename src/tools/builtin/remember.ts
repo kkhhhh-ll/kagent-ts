@@ -43,10 +43,11 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
         content: {
           type: "string",
           description:
-            "Full markdown body. For rules: include why the user required it and " +
-            "when it takes effect. For project facts: include what happened, why " +
-            "(the constraint or deadline that drove it), and how the agent should " +
-            "apply this knowledge in future sessions.",
+            "Full markdown body. For rules: include a **Why:** section (why the " +
+            "user required it) and a **When:** section (when it takes effect). " +
+            "For project facts: include a **Why:** section (what happened and the " +
+            "constraint or deadline that drove it) and a **How to apply:** section " +
+            "(how the agent should use this knowledge in future sessions).",
         },
       },
       required: ["name", "type", "description", "content"],

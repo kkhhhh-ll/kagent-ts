@@ -8,9 +8,9 @@ Memory 系统使用 `MEMORY.md` 索引文件 + 独立 Markdown 记忆文件：
 
 ```
 .memory/
-├── MEMORY.md              # 索引文件
-├── user-prefers-pnpm.md   # 记忆 1
-├── project-structure.md   # 记忆 2
+├── MEMORY.md              # 索引文件（名称 + 摘要，< 200 行 / 25 KB）
+├── use-kebab-case.md      # 记忆 1
+├── migrate-to-pg.md       # 记忆 2
 └── ...
 ```
 
@@ -18,66 +18,109 @@ Memory 系统使用 `MEMORY.md` 索引文件 + 独立 Markdown 记忆文件：
 
 ```markdown
 ---
-name: user-prefers-pnpm
-description: 用户偏好使用 pnpm 作为包管理器
-metadata:
-  type: user
-  created: 2024-01-15
+name: use-kebab-case
+description: 用户要求使用 kebab-case 命名文件
+type: rule
 ---
 
-用户更习惯使用 pnpm，在新项目中应使用 pnpm 而非 npm 或 yarn。
+用户要求所有新文件使用 kebab-case 命名。
 
-**Why:** 个人偏好
-**How to apply:** 在执行初始化或安装依赖操作时使用 `pnpm` 命令
+**Why:** 用户偏好统一的命名风格
+**When:** 创建任何新文件或重命名现有文件时
 ```
+
+## 记忆类型
+
+kagent-ts 提供两种记忆类型，有意保持精简：
+
+```ts
+type MemoryType = "rule" | "project"
+```
+
+| 类型 | 用途 | 示例 |
+| --- | --- | --- |
+| `rule` | 用户设定的约束、偏好、反馈 | "始终用 kebab-case 命名"、"代码审查时优先关注安全" |
+| `project` | 项目事实、架构决策 | "从 MySQL 迁移到了 PostgreSQL" |
+
+### 设计理念
+
+`rule` 覆盖了用户偏好（"我喜欢用 pnpm"）、用户纠偏反馈（"下次不要用 any 类型"）、编码规范（"组件用函数式写法"）等场景。这些本质上都是**用户设定的约束**——由用户定义，Agent 在后续会话中遵守。
+
+`project` 覆盖项目级别的事实和决策——这些是**执行过程中沉淀下来的知识**，帮助 Agent 理解项目背景。
+
+不需要把类型拆得太细：用户偏好、反馈、习惯都是"用户规则"的不同来源，统一为 `rule` 即可。用户自己定义偏好，用户也可以自己设定规则。
 
 ## 基本用法
 
-### 在 Agent 中使用
-
-```ts
-import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
-
-const agent = new ReActAgent({
-  systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-  tools: [
-    ...BUILTIN_TOOLS,
-    createRememberTool(memoryManager),  // LLM 可调用的记忆写入工具
-    createRecallTool(memoryManager),    // LLM 可调用的记忆检索工具
-  ],
-  memoryConfig: {
-    directory: './.memory',
-  },
-})
-```
-
-### 直接使用 MemoryManager
+### MemoryManager API
 
 ```ts
 import { MemoryManager } from 'kagent-ts'
 
 const memory = new MemoryManager('./.memory')
 
-// 写入记忆
-await memory.remember({
+// 写入记忆（同名自动覆盖）
+memory.add({
   name: 'api-base-url',
   description: '项目 API 基础 URL',
-  fact: '生产环境 API 地址为 https://api.example.com/v2',
   type: 'project',
+  content: '生产环境 API 地址为 https://api.example.com/v2\n\n**Why:** 统一配置管理\n**How to apply:** 所有 API 请求使用此地址',
 })
 
-// 检索记忆
-const facts = await memory.recall('API 地址')
+// 检查是否存在
+memory.has('api-base-url') // true
 
-// 列出所有记忆
-const all = await memory.list()
+// 按名称读取
+const m = memory.get('api-base-url')
+
+// 获取全部记忆
+const all = memory.getAll()
+
+// 按类型筛选
+const rules = memory.getByType('rule')
+const projects = memory.getByType('project')
 
 // 删除记忆
-await memory.forget('api-base-url')
+memory.remove('api-base-url')
+
+// 记忆总数
+console.log(memory.count)
 ```
 
-> **安全提示：** `MemoryManager.buildPromptHint()`（注入 system prompt 的记忆索引）和 `recall` 工具返回的内容均由框架自动进行安全防护：
+### 通过 `remember` 工具让 LLM 写入
+
+```ts
+import { ReActAgent, OpenAIProvider, createRememberTool, createRecallTool } from 'kagent-ts'
+
+const agent = new ReActAgent({
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  systemPrompt: '你是一个有用的 AI 助手。',
+  tools: [
+    createRememberTool(memoryManager),  // LLM 可主动调用的记忆写入工具
+    createRecallTool(memoryManager),    // LLM 可调用的记忆检索工具
+  ],
+})
+
+// Agent 执行过程中：
+// 1. LLM 遇到需要记住的信息 → 调用 remember 工具
+// 2. LLM 需要上下文信息 → 调用 recall 工具
+// 3. 记忆自动持久化到 .memory/ 目录
+```
+
+### System Prompt 自动注入
+
+`MemoryManager.buildPromptHint()` 生成紧凑的记忆索引，可注入到 system prompt 中，让 LLM 在每次会话开始时了解已有的记忆：
+
+```ts
+const hint = memory.buildPromptHint()
+// 输出类似：
+// ## Long-Term Memories (3 entries — use the `recall` tool to load full content)
+// - use-kebab-case (`rule`)
+// - api-base-url (`project`)
+// - prefer-functional-components (`rule`)
+```
+
+> **安全提示：** `buildPromptHint()` 和 `recall` 工具返回的内容均由框架自动进行安全防护：
 > - **记忆索引** — 自动包裹 `wrapUntrusted` + 注入签名扫描
 > - **`recall` 工具** — 自动使用 `wrapAndScan`（注入扫描 + 边界包裹）
 >
@@ -95,7 +138,7 @@ const memory = new MemoryManager('.memory')
 const reflector = new MemoryReflector({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   memoryManager: memory,
-  maxIterations: 5,           // Fork 子 Agent 的最大 ReAct 迭代 (默认: 5)
+  maxIterations: 5,           // Fork 子 Agent 的最大 ReAct 迭代（默认: 5）
 })
 
 // 在 Agent 执行完成后调用
@@ -121,37 +164,6 @@ const hook = createReflectionHook({
 
 详见 [Reflection 反思](/advanced/reflection)。
 
-## 记忆类型
-
-```ts
-type MemoryType = 'user' | 'feedback' | 'project' | 'reference'
-
-interface MemoryEntry {
-  /** 唯一标识 (kebab-case) */
-  name: string
-
-  /** 简短描述 (用于召回时的相关性判断) */
-  description: string
-
-  /** 元数据 */
-  metadata: {
-    type: MemoryType
-    created: string
-    updated?: string
-  }
-
-  /** 记忆内容 (支持 Markdown) */
-  content: string
-}
-```
-
-| 类型 | 用途 | 示例 |
-|------|------|------|
-| `user` | 用户偏好、习惯 | "用户偏好 pnpm" |
-| `feedback` | 用户给 Agent 的反馈 | "代码审查时更关注安全" |
-| `project` | 项目特定信息 | "API 基础 URL" |
-| `reference` | 外部参考资源 | "MCP 协议文档链接" |
-
 ## 关联记忆
 
 记忆文件之间可以相互引用：
@@ -160,46 +172,35 @@ interface MemoryEntry {
 ---
 name: user-prefers-pnpm
 description: 用户偏好使用 pnpm
-metadata:
-  type: user
+type: rule
 ---
 
-用户更习惯使用 pnpm。相关记忆: [[project-node-version]] [[ci-pipeline-config]]
+用户更习惯使用 pnpm，在新项目中应使用 pnpm 而非 npm 或 yarn。
+相关记忆：[[project-node-version]] [[ci-pipeline-config]]
+
+**Why:** 个人偏好
+**When:** 执行初始化或安装依赖操作时使用 `pnpm` 命令
 ```
 
 `[[name]]` 语法创建记忆之间的链接，帮助构建知识网络。
 
-## 与 Agent 集成
+## 存储限制
 
-```ts
-const agent = new ReActAgent({
-  systemPrompt: '...',
-  provider,
-  tools: [
-    ...BUILTIN_TOOLS,
-    createRememberTool(memoryManager),
-    createRecallTool(memoryManager),
-  ],
-})
-
-// Agent 执行过程中：
-// 1. LLM 遇到需要记住的信息 → 调用 remember 工具
-// 2. LLM 需要上下文信息 → 调用 recall 工具
-// 3. 记忆自动持久化到 .memory/ 目录
-```
+- 索引文件（`MEMORY.md`）上限：**200 行** 且 **25 KB**
+- 超出限制时，最旧的条目会被静默移除
+- 单个记忆文件大小无硬性限制，但建议保持简洁
 
 ## 最佳实践
 
-1. **使用描述性的 name**: `user-prefers-pnpm` 优于 `fact-1`
-2. **关联相关记忆**: 使用 `[[name]]` 建立链接
-3. **分类清晰**: 正确选择 type (user/feedback/project/reference)
-4. **及时清理**: 删除过时或错误的记忆
-5. **Why 和 How**: 在 content 中说明原因和应用方式
+1. **使用描述性的 name**：`user-prefers-pnpm` 优于 `fact-1`
+2. **name 使用 kebab-case**：小写字母 + 数字 + 连字符
+3. **分类清晰**：用户约束/偏好用 `rule`，项目事实/决策用 `project`
+4. **content 结构化**：`rule` 包含 `**Why:**` + `**When:**`，`project` 包含 `**Why:**` + `**How to apply:**`
+5. **关联相关记忆**：使用 `[[name]]` 建立链接
+6. **及时清理**：删除过时或错误的记忆
 
 ## 下一步
 
 - [Reflection 反思](/advanced/reflection) — 自动记忆提取和错题本机制
 - [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
-- [Skill 渐进式技能](/advanced/skills) — 另一个知识注入机制
-- [Project Rules](/advanced/security) — 项目规则管理
-- [Preferences](/guide/configuration) — 用户偏好配置
+- [Hook 钩子系统](/core/hooks) — 通过 `ReflectionHook` 在 Agent 执行后自动触发记忆提取
