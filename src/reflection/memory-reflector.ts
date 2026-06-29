@@ -47,23 +47,26 @@ interface MemoryExtractionResponse {
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
 const MEMORY_EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction agent. Your job is to review a completed agent session
-and identify facts, preferences, constraints, and decisions worth remembering for future sessions.
+and identify explicit constraints and project decisions worth remembering for future sessions.
 
 You have access to read_file and grep_search tools to verify context against the codebase.
 
 Categories of memory to extract:
-- **rule**: A constraint the user set — why they required it, and when it takes effect.
+- **rule**: A constraint the user explicitly set — why they required it, and when it takes
+  effect. Rules are hard requirements the user stated directly (e.g. "must use X", "never do Y").
   Example: "Always use kebab-case for file names."
 - **project**: A fact or decision about the project — what happened, why (constraint / deadline
   that drove it), and how the agent should apply it.
   Example: "We switched from MySQL to PostgreSQL because of JSONB support."
 
 What to look for:
-- User preferences (language, coding style, naming conventions, tool preferences)
+- Explicit user constraints ("must", "must not", "always", "never", "don't use X")
 - Project decisions (architecture choices, tool/library selections, migration decisions)
-- Constraints (deadlines, limitations, requirements, "must not" rules)
-- Patterns worth repeating or avoiding (successful or failed approaches)
-- Workflow preferences (how the user likes to work, communication style)
+- Patterns worth repeating or avoiding (successful or failed approaches in this project)
+
+Do NOT extract:
+- User preferences or habits (soft preferences like "I like pnpm" are not rules)
+- Workflow or communication style preferences (these are personal, not project memory)
 
 An existing memories list is provided below — do NOT duplicate any existing memory name.
 Only output genuinely new, useful memories. An empty list is fine if nothing new is found.
