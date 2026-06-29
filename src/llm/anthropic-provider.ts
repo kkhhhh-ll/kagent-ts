@@ -476,6 +476,30 @@ export class AnthropicProvider implements LLMProvider {
       // An empty result means the message was skipped (e.g. empty content).
       if (!converted) continue;
 
+      // Merge consecutive tool-result messages into a single user message.
+      // Anthropic requires ALL tool_result blocks for a given assistant
+      // message's tool_use blocks to appear in the IMMEDIATELY next message.
+      // If we emit separate user messages for each tool result, the
+      // alternation logic below would insert synthetic "(continued)"
+      // messages between them, breaking the tool_use/tool_result pairing.
+      if (msg.role === Role.Tool && formattedMessages.length > 0) {
+        const last = formattedMessages[formattedMessages.length - 1];
+        if (
+          last.role === "user" &&
+          Array.isArray(last.content) &&
+          (last.content as Array<{ type: string }>).some(
+            (b) => b.type === "tool_result",
+          )
+        ) {
+          // Merge tool_result blocks into the previous user message.
+          const lastBlocks = last.content as Anthropic.ToolResultBlockParam[];
+          const newBlocks =
+            converted.content as Anthropic.ToolResultBlockParam[];
+          last.content = [...lastBlocks, ...newBlocks] as unknown as Anthropic.MessageParam["content"];
+          continue;
+        }
+      }
+
       // Ensure user/assistant alternation.
       // If the converted message has the same role as the last one in the array,
       // insert a synthetic message to break the consecutive sequence.
