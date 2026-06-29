@@ -81,11 +81,31 @@ export const WebFetchTool: Tool = {
       }
 
       const contentType = response.headers.get("content-type") ?? "";
+
+      // Reject binary / non-text responses early
+      const binaryTypes = [
+        "application/octet-stream",
+        "application/pdf",
+        "application/zip",
+        "application/gzip",
+        "application/x-tar",
+        "application/x-rar-compressed",
+      ];
+      const isBinary = binaryTypes.some((t) => contentType.startsWith(t)) ||
+        contentType.startsWith("image/") ||
+        contentType.startsWith("audio/") ||
+        contentType.startsWith("video/");
+
+      if (isBinary) {
+        return `Error: Cannot fetch binary content (Content-Type: ${contentType}). ` +
+          `The web_fetch tool only supports text-based resources (HTML, JSON, plain text, etc.).`;
+      }
+
       const raw = await response.text();
 
       // Extract title
       const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-      const title = titleMatch ? titleMatch[1].trim() : parsedUrl.hostname;
+      const title = titleMatch?.[1]?.trim() || parsedUrl.hostname;
 
       // Strip HTML to get readable text
       const text = stripHtml(raw);

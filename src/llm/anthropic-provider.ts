@@ -544,7 +544,88 @@ export class AnthropicProvider implements LLMProvider {
       });
     }
 
+    // ── Post-process: repair broken tool_use / tool_result pairs ──────
+    // In complex multi-round conversations (e.g. batch review with
+    // sub-agents, compression, and truncation interplay), the merge
+    // logic above can occasionally leave tool_use blocks without
+    // corresponding tool_result blocks in the immediately-next message.
+    // Anthropic rejects such requests with a hard 400 error, so we
+    // defensively strip any unpaired tool_use blocks.
+    AnthropicProvider.repairToolPairing(formattedMessages);
+
     return { systemPrompt, formattedMessages };
+  }
+
+  /**
+   * Scan `formattedMessages` and synthesize tool_result blocks for any
+   * tool_use blocks that lack a matching tool_result in the immediately-
+   * next message.
+   *
+   * This is a safety net — the main conversion logic should never produce
+   * broken pairs, but when it does (due to edge cases in compression /
+   * sub-agent injection / truncation interplay), this prevents a hard
+   * 400 error from the Anthropic API.
+   *
+   * Instead of silently deleting the unpaired tool_use (which would lose
+   * context), we inject a synthetic tool_result explaining that the tool
+   * was skipped due to an internal error.  The LLM can then decide to
+   * retry or work around it.
+   */
+  private static repairToolPairing(
+    messages: Anthropic.MessageParam[],
+  ): void {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.role !== "assistant") continue;
+
+      const content = msg.content;
+      if (typeof content === "string" || !Array.isArray(content)) continue;
+
+      const toolUses = content.filter(
+        (b: any) => b.type === "tool_use",
+      ) as Array<{ type: "tool_use"; id: string; name?: string }>;
+      if (toolUses.length === 0) continue;
+
+      const next = messages[i + 1];
+      const nextBlocks = next && Array.isArray(next.content)
+        ? (next.content as any[])
+        : [];
+      const resultIds = new Set(
+        nextBlocks
+          .filter((b: any) => b.type === "tool_result")
+          .map((b: any) => b.tool_use_id),
+      );
+
+      const missing = toolUses.filter((tu) => !resultIds.has(tu.id));
+      if (missing.length === 0) continue;
+
+      // Synthesize tool_result blocks for each unpaired tool_use.
+      const syntheticResults = missing.map((tu) => ({
+        type: "tool_result" as const,
+        tool_use_id: tu.id,
+        content: `[Tool "${tu.name ?? "unknown"}" was skipped due to an internal message-ordering error and was not executed. ` +
+          `Please retry the tool call or use an alternative approach.]`,
+      }));
+
+      if (next && next.role === "user" && Array.isArray(next.content)) {
+        // Append synthetic results to the existing next user message.
+        (next.content as any[]).push(...syntheticResults);
+      } else if (next && next.role === "user" && typeof next.content === "string") {
+        // Convert plain-text user message to content-block array so we
+        // can append tool_result blocks alongside the text.
+        next.content = [
+          { type: "text", text: next.content as string },
+          ...syntheticResults,
+        ] as unknown as Anthropic.MessageParam["content"];
+      } else {
+        // No next message or next is not a user message — insert a new
+        // user message containing only the synthetic tool_results.
+        messages.splice(i + 1, 0, {
+          role: "user",
+          content: syntheticResults,
+        } as unknown as Anthropic.MessageParam);
+      }
+    }
   }
 
   /** Counter for generating unique synthetic tool_use_ids. */

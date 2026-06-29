@@ -19,6 +19,18 @@ export interface SessionManagerConfig {
  * Sessions are self-contained (messages are inline) so they survive any
  * memory/component lifecycle and can be resumed after process restarts.
  */
+
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+function validateSessionId(id: string): void {
+  if (!SESSION_ID_PATTERN.test(id)) {
+    throw new Error(
+      `Invalid session ID: "${id}". ` +
+      `Session IDs must only contain alphanumeric characters, hyphens, and underscores.`,
+    );
+  }
+}
+
 export class SessionManager {
   private sessionId: string;
   private sessionDir: string;
@@ -26,6 +38,7 @@ export class SessionManager {
   constructor(config?: SessionManagerConfig) {
     this.sessionId =
       config?.sessionId ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    validateSessionId(this.sessionId);
     this.sessionDir = path.resolve(config?.sessionDir ?? ".kagent-sessions");
     fs.mkdirSync(this.sessionDir, { recursive: true });
   }
@@ -44,6 +57,7 @@ export class SessionManager {
    * Set the session ID (used during resume to match the restored session).
    */
   setSessionId(id: string): void {
+    validateSessionId(id);
     this.sessionId = id;
   }
 
@@ -78,6 +92,7 @@ export class SessionManager {
    * Load a session by ID. Returns null if the file is missing or corrupt.
    */
   loadSession(sessionId: string): SessionState | null {
+    validateSessionId(sessionId);
     const filePath = path.join(this.sessionDir, `${sessionId}.json`);
     try {
       const raw = fs.readFileSync(filePath, "utf-8");
@@ -122,6 +137,7 @@ export class SessionManager {
    * Delete a session file from disk.
    */
   deleteSession(sessionId: string): void {
+    validateSessionId(sessionId);
     const filePath = path.join(this.sessionDir, `${sessionId}.json`);
     try {
       fs.unlinkSync(filePath);
@@ -134,6 +150,7 @@ export class SessionManager {
    * Update the status and timestamp of a session in-place.
    */
   markStatus(sessionId: string, status: SessionStatus): void {
+    validateSessionId(sessionId);
     const state = this.loadSession(sessionId);
     if (state) {
       state.status = status;
