@@ -98,13 +98,14 @@ export class ChromaVectorStore implements VectorStore {
     const result = await this.collection!.query({
       queryEmbeddings: [queryEmbedding],
       nResults: topK,
-      include: [IncludeEnum.Distances, IncludeEnum.Documents, IncludeEnum.Metadatas],
+      include: [IncludeEnum.Distances, IncludeEnum.Documents, IncludeEnum.Metadatas, IncludeEnum.Embeddings],
     });
 
     const ids = result.ids[0];           // Array of IDs for query 0
     const distances = result.distances?.[0] ?? [];
     const documents = result.documents?.[0] ?? [];
     const metadatasArr = result.metadatas?.[0] ?? [];
+    const embeddingsArr = result.embeddings?.[0] ?? [];
 
     const searchResults: RAGSearchResult[] = [];
     for (let i = 0; i < ids.length; i++) {
@@ -116,7 +117,7 @@ export class ChromaVectorStore implements VectorStore {
       searchResults.push({
         chunk: {
           text: documents[i] ?? "",
-          embedding: queryEmbedding, // not stored in results — placeholder
+          embedding: embeddingsArr[i] ?? [],
           sourcePath: String(metadatasArr[i]?.sourcePath ?? ""),
           chunkIndex: Number(metadatasArr[i]?.chunkIndex ?? 0),
         },
