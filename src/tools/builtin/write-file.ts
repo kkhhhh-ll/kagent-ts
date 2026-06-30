@@ -36,8 +36,8 @@ export const WriteFileTool: Tool = {
     if (!filePath || typeof filePath !== "string") {
       return 'Error: "file_path" must be a non-empty string.';
     }
-    if (typeof content !== "string" || !content) {
-      return 'Error: "content" must be a non-empty string.';
+    if (typeof content !== "string") {
+      return 'Error: "content" must be a string.';
     }
 
     const resolvedPath = path.resolve(filePath);

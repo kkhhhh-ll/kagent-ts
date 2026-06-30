@@ -58,7 +58,8 @@ export const BashTool: Tool = {
           shell: process.env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/sh"),
         },
         (error, stdout, stderr) => {
-          const exitCode = error?.code ?? 0;
+          const exitCode =
+            typeof error?.code === "number" ? error.code : error?.code ? 1 : 0;
           const signal = error?.signal;
 
           let output = `(exit code: ${exitCode})\n`;
@@ -88,21 +89,6 @@ export const BashTool: Tool = {
           resolve(output);
         },
       );
-
-      // Ensure the process is killed after timeout
-      const killTimer = setTimeout(() => {
-        if (child.exitCode === null) {
-          child.kill("SIGTERM");
-          setTimeout(() => {
-            if (child.exitCode === null) {
-              child.kill("SIGKILL");
-            }
-          }, 2000);
-        }
-      }, timeoutMs);
-
-      child.on("close", () => clearTimeout(killTimer));
-      child.on("exit", () => clearTimeout(killTimer));
     });
   },
 };

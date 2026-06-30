@@ -64,8 +64,7 @@ export class ToolOutputTruncator {
 
     fs.writeFileSync(filePath, result, "utf-8");
 
-    const previewBuf = Buffer.from(result, "utf-8").subarray(0, this.keepBytes);
-    const preview = previewBuf.toString("utf-8");
+    const preview = Buffer.from(result, "utf-8").toString("utf-8", 0, this.keepBytes);
     const keptBytes = Buffer.byteLength(preview, "utf-8");
     const truncatedSize = byteLength - keptBytes;
     const marker =

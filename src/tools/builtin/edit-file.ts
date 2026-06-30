@@ -81,7 +81,7 @@ export const EditFileTool: Tool = {
       // Perform the replacement
       const newContent = replaceAll
         ? content.split(oldString).join(newString)
-        : content.replace(oldString, newString);
+        : content.replace(oldString, () => newString);
 
       // Write back
       fs.writeFileSync(resolvedPath, newContent, "utf-8");

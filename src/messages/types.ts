@@ -22,6 +22,11 @@ export interface ToolCall {
 
 /**
  * Raw data shape of a message — used for serialization and LLM API calls.
+ *
+ * NOTE: `content` is always a non-null `string`.  When a raw LLM API response
+ * returns `content: null` (e.g. assistant messages with only tool_calls), the
+ * provider layer normalizes it to an empty string BEFORE constructing the
+ * MessageData.  Callers can safely use string methods without null-guarding.
  */
 export interface MessageData {
   role: Role;

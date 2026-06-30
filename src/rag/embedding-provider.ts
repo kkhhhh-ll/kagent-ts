@@ -17,6 +17,14 @@ export interface OpenAIEmbeddingConfig {
   apiKey: string;
   /** Embedding model ID (default: "text-embedding-3-small"). */
   model?: string;
+  /**
+   * Embedding vector dimension.
+   *
+   * Auto-detected for known OpenAI models (1536 for small/ada, 3072 for
+   * large). REQUIRED when using custom / third-party models to avoid silent
+   * dimension mismatches in vector search.
+   */
+  dimensions?: number;
   /** Optional base URL for proxies / compatible APIs. */
   baseURL?: string;
   /** Request timeout in milliseconds (default: 30_000). */
@@ -42,7 +50,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     this.model = config.model ?? "text-embedding-3-small";
     this.baseURL = config.baseURL ?? "https://api.openai.com/v1";
     this.timeoutMs = config.timeoutMs ?? 30_000;
-    this.dimensions = dimensionForModel(this.model);
+    this.dimensions = config.dimensions ?? dimensionForModel(this.model);
   }
 
   async embed(texts: string[]): Promise<number[][]> {

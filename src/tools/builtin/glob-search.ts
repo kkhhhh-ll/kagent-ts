@@ -58,14 +58,17 @@ export const GlobSearchTool: Tool = {
       const matcher = buildGlobMatcher(rawPattern, resolvedPath);
       const matched = allFiles.filter(matcher);
 
-      // Sort by modification time (newest first)
-      matched.sort((a, b) => {
+      // Sort by modification time (newest first).
+      // Pre-compute mtimes to avoid O(n log n) fs.statSync calls.
+      const mtimeMap = new Map<string, number>();
+      for (const f of matched) {
         try {
-          return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+          mtimeMap.set(f, fs.statSync(f).mtimeMs);
         } catch {
-          return 0;
+          mtimeMap.set(f, 0);
         }
-      });
+      }
+      matched.sort((a, b) => (mtimeMap.get(b) ?? 0) - (mtimeMap.get(a) ?? 0));
 
       const results = matched.slice(0, maxResults);
       const cwd = process.cwd();
