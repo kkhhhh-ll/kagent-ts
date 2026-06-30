@@ -66,7 +66,7 @@ function countWithTiktoken(text: string, model?: string): number {
     return enc.encode(text).length;
   } finally {
     // Free the encoder to avoid memory leaks (tiktoken is wasm-backed)
-    enc.free();
+    if (enc) enc.free();
   }
 }
 

@@ -45,10 +45,6 @@ export class FallbackProvider implements LLMProvider {
   constructor(config: FallbackProviderConfig) {
     this.providers = [config.primary, ...config.fallbacks];
     this.logger = config.logger ?? new ConsoleLogger();
-
-    if (this.providers.length === 0) {
-      throw new Error("FallbackProvider: at least one provider is required.");
-    }
   }
 
   get model(): string {

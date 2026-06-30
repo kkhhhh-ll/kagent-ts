@@ -147,11 +147,10 @@ export class SessionManager {
   }
 
   /**
-   * Update the status and timestamp of a session in-place.
+   * Update the status and timestamp of the current session in-place.
    */
-  markStatus(sessionId: string, status: SessionStatus): void {
-    validateSessionId(sessionId);
-    const state = this.loadSession(sessionId);
+  markStatus(status: SessionStatus): void {
+    const state = this.loadSession(this.sessionId);
     if (state) {
       state.status = status;
       state.updatedAt = new Date().toISOString();

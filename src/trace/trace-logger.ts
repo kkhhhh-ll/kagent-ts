@@ -126,12 +126,18 @@ export class TraceLogger implements AgentHooks {
    * @returns The absolute path to the generated HTML file.
    */
   flush(): string {
-    const html = this.generateHTML();
-    fs.mkdirSync(this.outputDir, { recursive: true });
-    const filePath = path.join(this.outputDir, `${this.sessionId}.html`);
-    fs.writeFileSync(filePath, html, "utf-8");
-    this.logger.info("Trace", `Saved session trace → ${filePath}`);
-    return filePath;
+    try {
+      const html = this.generateHTML();
+      fs.mkdirSync(this.outputDir, { recursive: true });
+      const filePath = path.join(this.outputDir, `${this.sessionId}.html`);
+      fs.writeFileSync(filePath, html, "utf-8");
+      this.logger.info("Trace", `Saved session trace → ${filePath}`);
+      return filePath;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error("Trace", `Failed to write trace file: ${message}`);
+      return "";
+    }
   }
 
   // ─── AgentHooks Implementation ─────────────────────────────────────────

@@ -104,7 +104,7 @@ describe("SessionManager", () => {
   it("markStatus updates status in-place", () => {
     const sm = new SessionManager({ sessionId: "sess-1", sessionDir: dir });
     sm.saveCheckpoint(makeState({ status: "active" }));
-    sm.markStatus("sess-1", "completed");
+    sm.markStatus("completed");
     const loaded = sm.loadSession("sess-1")!;
     expect(loaded.status).toBe("completed");
   });
