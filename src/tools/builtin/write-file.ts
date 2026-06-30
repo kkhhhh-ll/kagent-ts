@@ -1,4 +1,3 @@
-import { existsSync } from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
