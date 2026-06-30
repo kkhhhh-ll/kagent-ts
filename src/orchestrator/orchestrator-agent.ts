@@ -5,6 +5,7 @@ import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
+import type { SubAgentManager } from "../subagent/subagent-manager";
 
 import type {
   TaskNode,
@@ -136,7 +137,7 @@ export class OrchestratorAgent extends Agent {
    * Return the SubAgentManager, throwing a clear error if sub-agents were
    * not configured. The Orchestrator cannot function without sub-agents.
    */
-  private getSubAgentManager(): import("../subagent/subagent-manager").SubAgentManager {
+  private getSubAgentManager(): SubAgentManager {
     if (!this.subAgentManager) {
       throw new Error(
         "OrchestratorAgent requires sub-agents to be configured. " +

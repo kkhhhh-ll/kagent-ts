@@ -1,4 +1,5 @@
-import * as fs from "fs";
+import { existsSync } from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
 
@@ -45,12 +46,12 @@ export const WriteFileTool: Tool = {
     try {
       // Create parent directories if needed
       const dir = path.dirname(resolvedPath);
-      fs.mkdirSync(dir, { recursive: true });
+      await fsp.mkdir(dir, { recursive: true });
 
       // Write file
-      fs.writeFileSync(resolvedPath, String(content), "utf-8");
+      await fsp.writeFile(resolvedPath, content, "utf-8");
 
-      const stat = fs.statSync(resolvedPath);
+      const stat = await fsp.stat(resolvedPath);
       return `Successfully wrote ${stat.size} bytes to ${resolvedPath}`;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

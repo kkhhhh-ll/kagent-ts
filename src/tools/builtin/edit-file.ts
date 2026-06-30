@@ -1,4 +1,5 @@
-import * as fs from "fs";
+import { existsSync } from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
 
@@ -63,12 +64,12 @@ export const EditFileTool: Tool = {
     const resolvedPath = path.resolve(filePath);
 
     // Validate file exists
-    if (!fs.existsSync(resolvedPath)) {
+    if (!existsSync(resolvedPath)) {
       return `Error: File not found: ${resolvedPath}`;
     }
 
     try {
-      const content = fs.readFileSync(resolvedPath, "utf-8");
+      const content = await fsp.readFile(resolvedPath, "utf-8");
 
       // Check that old_string exists in the file
       if (!content.includes(oldString)) {
@@ -84,7 +85,7 @@ export const EditFileTool: Tool = {
         : content.replace(oldString, () => newString);
 
       // Write back
-      fs.writeFileSync(resolvedPath, newContent, "utf-8");
+      await fsp.writeFile(resolvedPath, newContent, "utf-8");
 
       // Count occurrences replaced
       const oldCount = content.split(oldString).length - 1;

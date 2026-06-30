@@ -124,6 +124,14 @@ export class ProjectRules {
         latestMtime = Math.max(latestMtime, stat.mtimeMs);
       }
 
+      if (files.length === 0) {
+        if (this.cachedContent !== "") {
+          this.cachedContent = "";
+          return true;
+        }
+        return false;
+      }
+
       if (latestMtime <= this.lastLoadedMtime) return false;
       this.lastLoadedMtime = latestMtime;
 

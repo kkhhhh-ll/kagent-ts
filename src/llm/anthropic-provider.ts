@@ -141,13 +141,6 @@ export class AnthropicProvider implements LLMProvider {
   private cacheSystemPrompt: boolean;
 
   constructor(config: AnthropicConfig) {
-    this.client = new Anthropic({
-      apiKey: config.apiKey,
-      baseURL: config.baseURL,
-      timeout: config.timeout,
-      maxRetries: 0, // We handle retries ourselves via withRetry
-    });
-
     if (!config.model) {
       throw new Error(
         "AnthropicProvider: `model` is required. " +
@@ -157,6 +150,13 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     this.model = config.model;
+
+    this.client = new Anthropic({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+      timeout: config.timeout,
+      maxRetries: 0, // We handle retries ourselves via withRetry
+    });
     this.temperature = config.temperature ?? 0.7;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.timeout = config.timeout;

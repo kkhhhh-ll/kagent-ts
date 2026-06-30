@@ -1,4 +1,5 @@
-import * as fs from "fs";
+import { existsSync } from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
 
@@ -10,8 +11,6 @@ import { Tool } from "../types";
  * - path (optional): File or directory to search in (default: current directory).
  * - glob (optional): File pattern filter (e.g. "*.ts", "*.{ts,js}").
  * - case_sensitive (optional): Whether the search is case-sensitive (default: false).
- *
- * Uses a recursive file walk with Node.js built-in fs — no external dependencies.
  */
 export const GrepSearchTool: Tool = {
   name: "grep_search",
@@ -69,7 +68,7 @@ export const GrepSearchTool: Tool = {
 
     const resolvedPath = path.resolve(searchPath);
 
-    if (!fs.existsSync(resolvedPath)) {
+    if (!existsSync(resolvedPath)) {
       return `Error: Path not found: ${resolvedPath}`;
     }
 
@@ -83,7 +82,7 @@ export const GrepSearchTool: Tool = {
       const MAX_RESULTS = 200;
       const MAX_FILE_SIZE = 1024 * 1024; // 1 MB per file
 
-      const files = listFilesRecursive(resolvedPath);
+      const files = await listFilesRecursive(resolvedPath);
 
       for (const filePath of files) {
         if (results.length >= MAX_RESULTS) break;
@@ -94,11 +93,16 @@ export const GrepSearchTool: Tool = {
         if (!globFilter(filePath)) continue;
 
         // Check file size
-        const stat = fs.statSync(filePath);
+        let stat: fsp.Stats;
+        try {
+          stat = await fsp.stat(filePath);
+        } catch {
+          continue;
+        }
         if (stat.size > MAX_FILE_SIZE) continue;
 
         try {
-          const content = fs.readFileSync(filePath, "utf-8");
+          const content = await fsp.readFile(filePath, "utf-8");
           const lines = content.split("\n");
 
           for (let i = 0; i < lines.length; i++) {
@@ -137,44 +141,46 @@ export const GrepSearchTool: Tool = {
  * List all files recursively under a directory (or a single file).
  * Skips node_modules, .git, and hidden directories.
  */
-function listFilesRecursive(rootPath: string): string[] {
+async function listFilesRecursive(rootPath: string): Promise<string[]> {
   const results: string[] = [];
   const SKIP_DIRS = new Set([
     "node_modules", ".git", ".hg", ".svn", ".claude",
     "__pycache__", ".cache",
   ]);
 
-  function walk(dir: string): void {
+  async function walk(dir: string): Promise<void> {
+    let entries: fsp.Dirent[];
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          // Skip hidden dirs and common ignore dirs
-          if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-          walk(fullPath);
-        } else if (entry.isFile()) {
-          // Skip binary extensions
-          const ext = path.extname(entry.name).toLowerCase();
-          const BINARY_EXTS = new Set([
-            ".png", ".jpg", ".jpeg", ".gif", ".ico",
-            ".woff", ".woff2", ".ttf", ".eot",
-            ".zip", ".tar", ".gz", ".rar",
-            ".o", ".obj", ".exe", ".dll", ".so", ".dylib",
-            ".mp3", ".mp4", ".avi", ".mov",
-            ".pdf", ".doc", ".docx",
-          ]);
-          if (BINARY_EXTS.has(ext)) continue;
-          results.push(fullPath);
-        }
-      }
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
-      // Permission denied, skip
+      return; // Permission denied, skip
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Skip hidden dirs and common ignore dirs
+        if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        // Skip binary extensions
+        const ext = path.extname(entry.name).toLowerCase();
+        const BINARY_EXTS = new Set([
+          ".png", ".jpg", ".jpeg", ".gif", ".ico",
+          ".woff", ".woff2", ".ttf", ".eot",
+          ".zip", ".tar", ".gz", ".rar",
+          ".o", ".obj", ".exe", ".dll", ".so", ".dylib",
+          ".mp3", ".mp4", ".avi", ".mov",
+          ".pdf", ".doc", ".docx",
+        ]);
+        if (BINARY_EXTS.has(ext)) continue;
+        results.push(fullPath);
+      }
     }
   }
 
   try {
-    const stat = fs.statSync(rootPath);
+    const stat = await fsp.stat(rootPath);
     if (stat.isFile()) {
       return [rootPath];
     }
@@ -182,7 +188,7 @@ function listFilesRecursive(rootPath: string): string[] {
     return [];
   }
 
-  walk(rootPath);
+  await walk(rootPath);
   return results;
 }
 

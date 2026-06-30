@@ -1,4 +1,5 @@
-import * as fs from "fs";
+import { existsSync } from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
 
@@ -49,21 +50,21 @@ export const GlobSearchTool: Tool = {
 
     const resolvedPath = path.resolve(searchPath);
 
-    if (!fs.existsSync(resolvedPath)) {
+    if (!existsSync(resolvedPath)) {
       return `Error: Path not found: ${resolvedPath}`;
     }
 
     try {
-      const allFiles = listAllFiles(resolvedPath);
+      const allFiles = await listAllFiles(resolvedPath);
       const matcher = buildGlobMatcher(rawPattern, resolvedPath);
       const matched = allFiles.filter(matcher);
 
       // Sort by modification time (newest first).
-      // Pre-compute mtimes to avoid O(n log n) fs.statSync calls.
+      // Pre-compute mtimes to avoid O(n log n) stat calls.
       const mtimeMap = new Map<string, number>();
       for (const f of matched) {
         try {
-          mtimeMap.set(f, fs.statSync(f).mtimeMs);
+          mtimeMap.set(f, (await fsp.stat(f)).mtimeMs);
         } catch {
           mtimeMap.set(f, 0);
         }
@@ -77,26 +78,26 @@ export const GlobSearchTool: Tool = {
         return `No files found matching pattern "${rawPattern}" in ${resolvedPath}.`;
       }
 
-      const formatted = results
-        .map((filePath) => {
-          const relative = path.relative(cwd, filePath);
-          try {
-            const stat = fs.statSync(filePath);
-            const size = stat.size;
-            const mtime = stat.mtime.toISOString().split("T")[0];
-            const sizeStr =
-              size > 1024 * 1024
-                ? `${(size / 1024 / 1024).toFixed(1)} MB`
-                : size > 1024
-                  ? `${(size / 1024).toFixed(1)} KB`
-                  : `${size} B`;
-            return `${relative}  (${sizeStr}, ${mtime})`;
-          } catch {
-            return relative;
-          }
-        })
-        .join("\n");
+      const formattedLines: string[] = [];
+      for (const filePath of results) {
+        const relative = path.relative(cwd, filePath);
+        try {
+          const stat = await fsp.stat(filePath);
+          const size = stat.size;
+          const mtime = stat.mtime.toISOString().split("T")[0];
+          const sizeStr =
+            size > 1024 * 1024
+              ? `${(size / 1024 / 1024).toFixed(1)} MB`
+              : size > 1024
+                ? `${(size / 1024).toFixed(1)} KB`
+                : `${size} B`;
+          formattedLines.push(`${relative}  (${sizeStr}, ${mtime})`);
+        } catch {
+          formattedLines.push(relative);
+        }
+      }
 
+      const formatted = formattedLines.join("\n");
       const summary =
         results.length < matched.length
           ? `Found ${matched.length} files, showing ${results.length} (newest first):`
@@ -115,7 +116,7 @@ export const GlobSearchTool: Tool = {
 /**
  * Recursively list all non-binary files under a root path.
  */
-function listAllFiles(rootPath: string): string[] {
+async function listAllFiles(rootPath: string): Promise<string[]> {
   const results: string[] = [];
   const SKIP_DIRS = new Set([
     "node_modules",
@@ -127,44 +128,40 @@ function listAllFiles(rootPath: string): string[] {
     ".cache",
   ]);
 
-  function walk(dir: string): void {
+  async function walk(dir: string): Promise<void> {
+    let entries: fsp.Dirent[];
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-          walk(fullPath);
-        } else if (entry.isFile()) {
-          results.push(fullPath);
-        }
-      }
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
-      // Permission denied, skip
+      return; // Permission denied, skip
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        results.push(fullPath);
+      }
     }
   }
 
   try {
-    if (fs.statSync(rootPath).isFile()) {
+    const stat = await fsp.stat(rootPath);
+    if (stat.isFile()) {
       return [rootPath];
     }
   } catch {
     return [];
   }
 
-  walk(rootPath);
+  await walk(rootPath);
   return results;
 }
 
 /**
- * Build a glob matcher function.
- * Supports: ** (recursive), * (single-segment wildcard), ? (single char),
- * {a,b} (alternatives).
- *
- * Tries three matching strategies in order:
- * 1. Match against the absolute path directly.
- * 2. Match relative to the search root directory.
- * 3. Match against just the file basename (for simple patterns like "*.ts").
+ * Build a glob matcher function (unchanged — pure logic).
  */
 function buildGlobMatcher(
   pattern: string,

@@ -1,4 +1,5 @@
-import * as fs from "fs";
+import { existsSync } from "fs";
+import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
 
@@ -52,12 +53,12 @@ export const ReadFileTool: Tool = {
     const resolvedPath = path.resolve(filePath);
 
     // Check file exists
-    if (!fs.existsSync(resolvedPath)) {
+    if (!existsSync(resolvedPath)) {
       return `Error: File not found: ${resolvedPath}`;
     }
 
     // Check it's a file, not a directory
-    const stat = fs.statSync(resolvedPath);
+    const stat = await fsp.stat(resolvedPath);
     if (!stat.isFile()) {
       return `Error: Not a file: ${resolvedPath}`;
     }
@@ -69,7 +70,7 @@ export const ReadFileTool: Tool = {
     }
 
     try {
-      const content = fs.readFileSync(resolvedPath, "utf-8");
+      const content = await fsp.readFile(resolvedPath, "utf-8");
       const lines = content.split("\n");
       const startIdx = Math.max(0, offset - 1);
       const endIdx = limit ? startIdx + limit : lines.length;

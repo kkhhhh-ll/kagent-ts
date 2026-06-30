@@ -47,6 +47,13 @@ export class FallbackProvider implements LLMProvider {
     this.logger = config.logger ?? new ConsoleLogger();
   }
 
+  /**
+   * Returns the primary provider's model name.
+   *
+   * NOTE: This always reflects the primary, even when a fallback provider
+   * handled the most recent request.  The fallback provider is transparent
+   * resilience — consumers should treat `model` as the "intended" model.
+   */
   get model(): string {
     return this.providers[0].model;
   }
