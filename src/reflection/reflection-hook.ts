@@ -73,6 +73,11 @@ export function createReflectionHook(
     : null;
 
   const hook: AgentHooks = {
+    // This hook spawns sub-agents in onFinish — passing it to sub-agents
+    // would cause unbounded recursion (sub-agent finishes → spawns more
+    // sub-agents → those finish → spawn more...).
+    safeForSubAgent: false,
+
     // ── Capture the full conversation from each LLM call ──────────────
     onLLMStart(messages: MessageData[]): void {
       // Capture the first user message as the original query

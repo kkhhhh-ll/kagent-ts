@@ -682,6 +682,87 @@ describe("OrchestratorAgent", () => {
       await agent.run("cancelled");
       expect(finalAnswer).toContain("Execution cancelled");
     });
+
+    it("emits onPlanCreated with task graph after decompose", async () => {
+      const plans: string[][] = [];
+
+      const llm = mockSequenceLLM([
+        [decomposeJSON([
+          { id: "a", description: "Task A", subAgentName: "worker", input: "A" },
+          { id: "b", description: "Task B", subAgentName: "researcher", input: "B" },
+        ], "Decomposition done.")],
+        [synthesizeCompleteJSON("All done.")],
+      ]);
+
+      const agent = createOrchestrator(llm, {
+        hooks: [{ onPlanCreated: (p: string[]) => plans.push(p) }],
+      });
+
+      await agent.run("two tasks");
+
+      expect(plans).toHaveLength(1);
+      expect(plans[0]).toHaveLength(2);
+      expect(plans[0][0]).toContain("[a] worker: Task A");
+      expect(plans[0][1]).toContain("[b] researcher: Task B");
+    });
+
+    it("emits onToolStart/onToolEnd during dispatch for each sub-agent", async () => {
+      const toolStarts: string[] = [];
+      const toolEnds: string[] = [];
+
+      const llm = mockSequenceLLM([
+        [decomposeJSON([
+          { id: "t1", description: "Task 1", subAgentName: "worker", input: "Work 1" },
+          { id: "t2", description: "Task 2", subAgentName: "worker", input: "Work 2" },
+        ])],
+        [synthesizeCompleteJSON("Both tasks done.")],
+      ]);
+
+      const agent = createOrchestrator(llm, {
+        hooks: [{
+          onToolStart: (name: string, _args: any, _id?: string) => {
+            if (name === "spawn_subagent") toolStarts.push(name);
+          },
+          onToolEnd: (name: string, _result: string, _id?: string) => {
+            if (name === "spawn_subagent") toolEnds.push(name);
+          },
+        }],
+      });
+
+      await agent.run("two parallel tasks");
+
+      // Two spawns, two results
+      expect(toolStarts).toHaveLength(2);
+      expect(toolEnds).toHaveLength(2);
+    });
+
+    it("emits onPlanRevised after adapt adds new nodes", async () => {
+      const revisions: string[][] = [];
+
+      const llm = mockSequenceLLM([
+        [decomposeJSON([
+          { id: "initial", description: "Initial work", subAgentName: "worker", input: "Initial" },
+        ])],
+        [synthesizeIncompleteJSON(["Need more detail"])],
+        [adaptJSON([
+          { id: "followup", description: "Follow-up", subAgentName: "researcher", input: "Follow-up" },
+        ])],
+        [synthesizeCompleteJSON("Done after adapt.")],
+      ]);
+
+      const agent = createOrchestrator(llm, {
+        hooks: [{ onPlanRevised: (p: string[]) => revisions.push(p) }],
+      });
+
+      await agent.run("task needing adapt");
+
+      expect(revisions).toHaveLength(1);
+      // Should show all nodes including the new one, with statuses
+      expect(revisions[0].some((s: string) => s.includes("initial"))).toBe(true);
+      expect(revisions[0].some((s: string) => s.includes("followup"))).toBe(true);
+      expect(revisions[0].some((s: string) => s.includes("completed"))).toBe(true);
+    });
+
   });
 
   // ════════════════════════════════════════════════════════════════════════

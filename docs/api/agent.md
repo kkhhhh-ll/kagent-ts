@@ -131,6 +131,16 @@ interface AgentConfig {
   sessionId?: string
   mcpServers?: McpServerConfig[]
   subAgents?: SubAgentDefinition[]
+
+  /**
+   * 子 Agent 的生命周期钩子。
+   * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks | AgentHooks[]。
+   * 用于为子 Agent 注入 TraceLogger 等观测型 hook。
+   *
+   * 标记了 safeForSubAgent: false 的 hook 会被自动过滤（防止无限递归）。
+   */
+  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
+
   preferences?: Record<string, string>
   memoryConfig?: MemoryConfig
   enableReflection?: boolean
@@ -149,16 +159,22 @@ type ApprovalCallback = (
 
 ```ts
 interface AgentHooks {
-  onLLMStart?: (messages: MessageData[]) => void
+  /**
+   * 当为 false 时，此 hook 不会被传入子 Agent（防止无限递归）。
+   * 默认 undefined 视为安全。
+   */
+  safeForSubAgent?: boolean
+
+  onLLMStart?: (messages: MessageData[], tools: Tool[]) => void
   onLLMEnd?: (response: LLMResponse) => void
-  onLLMError?: (error: Error) => void
-  onToolStart?: (toolName: string, args: Record<string, unknown>) => void
-  onToolEnd?: (toolName: string, result: ToolResult) => void
-  onToolError?: (toolName: string, error: Error) => void
+  onLLMError?: (error: LLMNetworkError) => void
+  onToolStart?: (toolName: string, args: Record<string, unknown>, toolCallId?: string) => void
+  onToolEnd?: (toolName: string, result: string, toolCallId?: string) => void
+  onToolError?: (toolName: string, error: string, toolCallId?: string) => void
   onThought?: (thought: string) => void
-  onPlanCreated?: (plan: string[], reason: string) => void
-  onPlanRevised?: (oldPlan: string[], newPlan: string[], reason: string) => void
-  onFinish?: (answer: string, stats: AgentStats) => void
+  onPlanCreated?: (plan: string[]) => void
+  onPlanRevised?: (plan: string[]) => void
+  onFinish?: (answer: string) => void
 }
 ```
 

@@ -203,6 +203,12 @@ export class OrchestratorAgent extends Agent {
         return fallback;
       }
 
+      // Fire onPlanCreated so traces capture the decomposition DAG
+      const planSteps = this.taskGraph.nodes.map(
+        (n) => `[${n.id}] ${n.subAgentName}: ${n.description}`,
+      );
+      for (const h of this.hooks) h.onPlanCreated?.(planSteps);
+
       this.logger.info("Orchestrator", `Decomposed into ${this.taskGraph.nodes.length} node(s).`);
       for (const n of this.taskGraph.nodes) {
         const depStr = n.dependsOn.length > 0
@@ -301,6 +307,12 @@ export class OrchestratorAgent extends Agent {
       // Append new nodes to the graph
       this.taskGraph.nodes.push(...adaptResult.newNodes);
       this.logger.info("Orchestrator", `Round ${this.completedRounds + 1}: ${adaptResult.newNodes.length} new node(s) added.`);
+
+      // Fire onPlanRevised so traces capture the updated DAG
+      const revisedSteps = this.taskGraph.nodes.map(
+        (n) => `[${n.id}] ${n.subAgentName}: ${n.description} (${n.status})`,
+      );
+      for (const h of this.hooks) h.onPlanRevised?.(revisedSteps);
 
       if (this.checkpointingEnabled) {
         this.saveCheckpoint("active");
@@ -421,7 +433,11 @@ export class OrchestratorAgent extends Agent {
 
         try {
           const runId = this.getSubAgentManager().spawn(node.subAgentName, resolvedInput);
+          node.runId = runId;
           this.logger.info("Orchestrator", `  Spawned [${node.id}] → ${node.subAgentName} (${runId})`);
+
+          // Fire onToolStart so traces capture the sub-agent dispatch
+          for (const h of this.hooks) h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn("Orchestrator", `  Failed to spawn [${node.id}]: ${message}`);
@@ -434,6 +450,9 @@ export class OrchestratorAgent extends Agent {
             durationMs: 0,
           };
           node.durationMs = 0;
+
+          // Fire onToolError for the failed spawn
+          for (const h of this.hooks) h.onToolError?.("spawn_subagent", node.result.output, undefined);
         }
       }
 
@@ -508,6 +527,14 @@ export class OrchestratorAgent extends Agent {
                 "Orchestrator",
                 `  [${node.id}] ${node.status} (${node.durationMs}ms)`,
               );
+
+              // Fire hooks so traces capture the sub-agent result
+              if (result.success) {
+                for (const h of this.hooks) h.onToolEnd?.("spawn_subagent", result.output, node.runId);
+              } else {
+                for (const h of this.hooks) h.onToolError?.("spawn_subagent", result.output, node.runId);
+              }
+
               break;
             }
           }

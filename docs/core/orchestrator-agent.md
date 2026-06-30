@@ -170,6 +170,36 @@ const report = await agent.run(
 console.log(report)
 ```
 
+## 执行追踪
+
+Orchestrator Agent 在执行过程中会触发完整的生命周期钩子，可用于追踪和调试：
+
+| 阶段 | 触发的 Hook | 说明 |
+| --- | --- | --- |
+| Decompose | `onLLMStart/End`, `onThought`, `onPlanCreated` | LLM 分解请求 → 产生 TaskGraph DAG |
+| Dispatch | `onToolStart/End/Error("spawn_subagent")` | 每个子 Agent 的 spawn 和结果 |
+| Synthesize | `onLLMStart/End`, `onThought` | LLM 综合所有子 Agent 结果 |
+| Adapt | `onLLMStart/End`, `onThought`, `onPlanRevised` | 生成新节点 → 更新 TaskGraph |
+| 完成 | `onFinish` | 返回最终答案 |
+
+结合 `TraceLogger` 和 `subAgentHooks`，可以生成完整的编排追踪报告：
+
+```ts
+const mainTrace = new TraceLogger({ sessionId: 'orch-run' })
+
+const agent = new OrchestratorAgent({
+  llm: provider,
+  hooks: mainTrace,
+  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
+  subAgentsDir: './subagents',
+})
+```
+
+生成的 trace 文件中：
+
+- **主 trace** 显示 Decompose → Dispatch（🚀 spawn + 📬 result）→ Synthesize → Adapt 的完整时间线
+- **子 trace** 每个子 Agent 有独立的 `.html` 文件，记录其内部 ReAct 循环
+
 ## 什么时候用 Orchestrator？
 
 ✅ **适合**:

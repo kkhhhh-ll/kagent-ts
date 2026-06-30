@@ -267,7 +267,7 @@ export class ToolErrorTracker {
     const summaries: ErrorTraceSummary[] = [];
     for (const trace of this.traces.values()) {
       const failureEvents = trace.events.filter(
-        (e) => e.type === "failure" || e.type === "retry"
+        (e) => e.type === "failure" || e.type === "retry" || e.type === "retries_exhausted"
       );
       summaries.push({
         traceId: trace.traceId,
@@ -363,6 +363,8 @@ export class ToolErrorTracker {
           if (event.analysis) {
             detail += `<br/>*Analysis:* ${event.analysis.slice(0, 300)}`;
           }
+        } else if (event.type === "retries_exhausted") {
+          detail = `Retries exhausted after ${event.attemptNumber} attempt(s): \`${event.error?.slice(0, 200) ?? ""}\``;
         } else if (event.type === "recovery") {
           detail = event.resolution ?? "Recovered";
         } else if (event.type === "circuit_half_open") {
@@ -426,6 +428,8 @@ export class ToolErrorTracker {
         return "⚠️ Circuit Half-Open";
       case "circuit_open":
         return "⛔ Circuit Open";
+      case "retries_exhausted":
+        return "❌ Retries Exhausted";
       case "analysis":
         return "💡 Analysis";
       default:

@@ -13,6 +13,18 @@ import { Tool } from "../tools/types";
  * All hooks are optional — only the ones you provide are called.
  */
 export interface AgentHooks {
+  /**
+   * Whether this hook is safe to pass to sub-agents.
+   *
+   * When `false`, the hook is automatically excluded from sub-agent hook
+   * lists to prevent unbounded recursion. Set to `false` for hooks that
+   * spawn their own sub-agents (e.g. {@link ReflectionHook}).
+   *
+   * Default (`undefined`) is treated as safe — the hook is a pure observer
+   * (logging, tracing, metrics) and can safely run in sub-agents.
+   */
+  safeForSubAgent?: boolean;
+
   // ─── LLM Lifecycle ───────────────────────────────────────────────────
 
   /**

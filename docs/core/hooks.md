@@ -6,6 +6,13 @@
 
 ```ts
 interface AgentHooks {
+  /**
+   * 当为 false 时，此 hook 会被 SubAgentManager 自动排除，
+   * 防止传入子 Agent 导致无限递归。
+   * 默认 (undefined) 视为安全（纯观测型 hook）。
+   */
+  safeForSubAgent?: boolean
+
   /** LLM 调用开始时触发 */
   onLLMStart?: (messages: MessageData[], tools: Tool[]) => void
 
@@ -28,10 +35,10 @@ interface AgentHooks {
   onThought?: (thought: string) => void
 
   /** 计划创建时触发 (PlanSolve/Fusion/Orchestrator) */
-  onPlanCreated?: (plan: string[], reason: string) => void
+  onPlanCreated?: (plan: string[]) => void
 
   /** 计划修订时触发 */
-  onPlanRevised?: (oldPlan: string[], newPlan: string[], reason: string) => void
+  onPlanRevised?: (plan: string[]) => void
 
   /** Agent 执行完成时触发 */
   onFinish?: (answer: string) => void
@@ -88,6 +95,31 @@ const metricsHook: AgentHooks = {
   },
 }
 ```
+
+## 子 Agent 的 Hook 传递
+
+通过 `subAgentHooks` 配置，可以将观测型 hook（如 `TraceLogger`）自动注入到每个子 Agent 中：
+
+```ts
+import { TraceLogger } from 'kagent-ts'
+
+const mainTrace = new TraceLogger({ sessionId: 'main-session' })
+
+const agent = new OrchestratorAgent({
+  llm: provider,
+  hooks: mainTrace,                                           // 主 Agent 追踪
+  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),  // 子 Agent 独立追踪
+  subAgentsDir: './subagents',
+})
+```
+
+`subAgentHooks` 支持三种形式：
+
+- **静态对象**：`subAgentHooks: { onFinish: () => ... }`
+- **数组**：`subAgentHooks: [traceLogger, metricsHook]`
+- **工厂函数**：`subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId)`
+
+> ⚠️ **安全防护**：标记了 `safeForSubAgent: false` 的 hook（如 `ReflectionHook`——它在 `onFinish` 中又会 spawn 子 Agent）会被 `SubAgentManager` 自动过滤，并打印警告日志。这样可以防止无限递归。
 
 ## 内置 Hook 实现
 

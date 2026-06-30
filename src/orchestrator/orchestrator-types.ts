@@ -65,6 +65,12 @@ export interface TaskNode {
 
   /** Wall-clock duration in ms, set on completion. */
   durationMs?: number;
+
+  /**
+   * The sub-agent run ID returned by SubAgentManager.spawn().
+   * Set at dispatch time so hooks can correlate spawn → result.
+   */
+  runId?: string;
 }
 
 /**

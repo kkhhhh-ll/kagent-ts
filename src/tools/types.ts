@@ -144,7 +144,7 @@ export interface BreakerStatus {
  */
 export interface TraceEvent {
   /** Event type. */
-  type: "failure" | "retry" | "recovery" | "circuit_half_open" | "circuit_open" | "analysis";
+  type: "failure" | "retry" | "recovery" | "circuit_half_open" | "circuit_open" | "retries_exhausted" | "analysis";
   /** When the event occurred. */
   timestamp: string;
   /** The error message (for failure/retry events). */

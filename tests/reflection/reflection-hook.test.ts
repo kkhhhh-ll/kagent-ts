@@ -112,6 +112,27 @@ describe("createReflectionHook", () => {
       expect(hook.onFinish).toBeDefined();
     });
 
+    it("marks safeForSubAgent=false to prevent unbounded recursion", () => {
+      const llm: LLMProvider = {
+        model: "mock",
+        chat: async () => ({ content: "{}" }),
+        chatStream: async function* () { yield { type: "done" as const }; },
+        getTokenCount: () => 10,
+      };
+
+      const hook = createReflectionHook({
+        llm,
+        notebook,
+        maxErrorIterations: 1,
+        logger: new SilentLogger(),
+      });
+
+      // The hook spawns sub-agents in onFinish — if passed to sub-agents
+      // it would cause infinite recursion. This flag lets SubAgentManager
+      // automatically filter it out.
+      expect(hook.safeForSubAgent).toBe(false);
+    });
+
     it("creates a hook with notebook only (no memoryManager)", () => {
       const llm: LLMProvider = {
         model: "mock",

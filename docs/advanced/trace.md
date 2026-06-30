@@ -50,6 +50,8 @@ interface TraceLoggerConfig {
 | `onThought` | LLM 的推理文本 |
 | `onPlanCreated/onPlanRevised` | 计划的创建和修改 |
 | `onFinish` | 最终答案、统计信息 |
+| `subagent_spawn` | 子 Agent 派发事件（通过 `spawn_subagent` 工具或 Orchestrator dispatch） |
+| `subagent_result` | 子 Agent 返回结果（通过 `spawn_subagent` 工具或 Orchestrator dispatch） |
 
 ## HTML 输出
 
@@ -101,6 +103,32 @@ const agent = new ReActAgent({
   ],
 })
 ```
+
+## 子 Agent 追踪
+
+通过 `createChildTrace()` 和 `subAgentHooks`，可以为每个子 Agent 生成独立的 trace 文件：
+
+```ts
+const mainTrace = new TraceLogger({ sessionId: 'main-session' })
+
+const agent = new OrchestratorAgent({
+  llm: provider,
+  hooks: mainTrace,                                             // 主 Agent 轨迹
+  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),  // 每个子 Agent 独立轨迹
+  subAgentsDir: './subagents',
+})
+
+await agent.run('分析整个项目')
+
+// 生成:
+//   .kagent-traces/main-session.html
+//   .kagent-traces/main-session__sub_code-reviewer_1_1718123456789.html
+//   .kagent-traces/main-session__sub_researcher_2_1718123456790.html
+```
+
+`createChildTrace(name, runId)` 返回一个新的 `TraceLogger`，自动使用嵌套 session ID（`{parentId}__sub_{name}_{runId}`），继承父 trace 的输出目录、模型名、pricing 配置。
+
+Orchestrator Agent 的 trace 会完整显示 Decompose → Dispatch（每个 🚀 spawn + 📬 result）→ Synthesize → Adapt 的时间线。
 
 ## 下一步
 

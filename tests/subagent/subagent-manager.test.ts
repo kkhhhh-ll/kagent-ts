@@ -396,6 +396,146 @@ describe("SubAgentManager", () => {
     });
   });
 
+  // ── Sub-agent hooks ──────────────────────────────────────────────────
+
+  describe("sub-agent hooks", () => {
+    /**
+     * Helper: create a bound manager with hooks in one call.
+     * Avoids the double-bind issue when using createBoundManager + bind with hooks.
+     */
+    function createHookedManager(
+      subAgentHooks: any,
+    ): SubAgentManager {
+      const manager = new SubAgentManager();
+      manager.setLogger(new SilentLogger());
+      const toolRegistry = new ToolRegistry();
+      toolRegistry.register(dummyTool);
+      manager.bind(
+        mockAnswerLLM("Sub-agent hooked result."),
+        toolRegistry,
+        new SkillManager(),
+        undefined,
+        5000,
+        undefined,
+        undefined,
+        subAgentHooks,
+      );
+      return manager;
+    }
+
+    it("passes static hooks to spawned sub-agents", async () => {
+      const llmStarts: string[] = [];
+      const finishes: string[] = [];
+
+      const manager = createHookedManager([{
+        onLLMStart: () => llmStarts.push("start"),
+        onFinish: () => finishes.push("finish"),
+      }]);
+
+      manager.register({
+        name: "hooked",
+        description: "Has hooks.",
+        systemPrompt: "You are hooked.",
+        tools: ["echo"],
+        skills: [],
+      });
+
+      manager.spawn("hooked", "task");
+      await new Promise((r) => setTimeout(r, 100));
+      await manager.pollCompleted();
+
+      expect(llmStarts.length).toBeGreaterThanOrEqual(1);
+      expect(finishes.length).toBe(1);
+    });
+
+    it("passes factory-generated hooks to spawned sub-agents", async () => {
+      const factoryCalls: Array<{ name: string; runId: string }> = [];
+      const finishes: string[] = [];
+
+      const manager = createHookedManager(
+        (name: string, runId: string) => {
+          factoryCalls.push({ name, runId });
+          return { onFinish: () => finishes.push(`done:${name}`) };
+        },
+      );
+
+      manager.register({
+        name: "factory-agent",
+        description: "Uses factory hooks.",
+        systemPrompt: "You are factory-hooked.",
+        tools: ["echo"],
+        skills: [],
+      });
+
+      const runId = manager.spawn("factory-agent", "task");
+      await new Promise((r) => setTimeout(r, 100));
+      await manager.pollCompleted();
+
+      expect(factoryCalls).toHaveLength(1);
+      expect(factoryCalls[0].name).toBe("factory-agent");
+      expect(factoryCalls[0].runId).toBe(runId);
+      expect(finishes).toHaveLength(1);
+      expect(finishes[0]).toBe("done:factory-agent");
+    });
+
+    it("filters out hooks marked safeForSubAgent=false", async () => {
+      const safeCalled: string[] = [];
+      const unsafeCalled: string[] = [];
+
+      const manager = createHookedManager([
+        {
+          safeForSubAgent: false,
+          onFinish: () => unsafeCalled.push("unsafe"),
+        },
+        {
+          onFinish: () => safeCalled.push("safe"),
+        },
+      ]);
+
+      manager.register({
+        name: "safe-filter",
+        description: "Tests safe filtering.",
+        systemPrompt: "You are filtered.",
+        tools: ["echo"],
+        skills: [],
+      });
+
+      manager.spawn("safe-filter", "task");
+      await new Promise((r) => setTimeout(r, 100));
+      await manager.pollCompleted();
+
+      // Unsafe hook was skipped
+      expect(unsafeCalled).toHaveLength(0);
+      // Safe hook ran
+      expect(safeCalled).toHaveLength(1);
+    });
+
+    it("filters unsafe hooks from factory as well", async () => {
+      const unsafeCalled: string[] = [];
+
+      const manager = createHookedManager(
+        (_name: string, _runId: string) => ({
+          safeForSubAgent: false,
+          onFinish: () => unsafeCalled.push("should not run"),
+        }),
+      );
+
+      manager.register({
+        name: "factory-filter",
+        description: "Factory filter test.",
+        systemPrompt: "...",
+        tools: ["echo"],
+        skills: [],
+      });
+
+      manager.spawn("factory-filter", "task");
+      await new Promise((r) => setTimeout(r, 100));
+      await manager.pollCompleted();
+
+      expect(unsafeCalled).toHaveLength(0);
+    });
+  });
+
   // ── Sub-agent tool filtering ────────────────────────────────────────
 
   describe("tool filtering", () => {

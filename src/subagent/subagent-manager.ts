@@ -7,6 +7,7 @@ import { Tool } from "../tools/types";
 import { ToolFilter } from "../tools/tool-filter";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import { AgentHooks } from "../core/hooks";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,13 @@ export class SubAgentManager {
    */
   private defaultFilter?: ToolFilter;
 
+  /**
+   * Hooks for sub-agents: a static set, or a factory `(name, runId) => hooks`
+   * called per spawn. Passed to every sub-agent so their execution is
+   * observable (tracing, metrics, etc.).
+   */
+  private subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
+
   /** Counter for generating unique sub-agent run IDs. */
   private runIdCounter = 0;
 
@@ -151,6 +159,7 @@ export class SubAgentManager {
     timeoutMs?: number,
     defaultFilter?: ToolFilter,
     subAgentLLM?: LLMProvider,
+    subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]),
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
@@ -159,6 +168,7 @@ export class SubAgentManager {
     if (timeoutMs !== undefined) this.timeoutMs = timeoutMs;
     this.defaultFilter = defaultFilter;
     this.subAgentLLM = subAgentLLM;
+    this.subAgentHooks = subAgentHooks;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -401,6 +411,27 @@ export class SubAgentManager {
     startedAt: number,
   ): Promise<SubAgentResult> {
     const agent = this.buildSubAgent(definition);
+
+    // Resolve and apply sub-agent hooks (static or factory).
+    // Unsafe hooks (safeForSubAgent === false) are skipped — they could
+    // spawn their own sub-agents and cause unbounded recursion.
+    if (this.subAgentHooks) {
+      const hooks = typeof this.subAgentHooks === "function"
+        ? this.subAgentHooks(name, runId)
+        : this.subAgentHooks;
+      const hooksArr = Array.isArray(hooks) ? hooks : [hooks];
+      for (const h of hooksArr) {
+        if (h.safeForSubAgent === false) {
+          this.logger.warn(
+            "SubAgent",
+            `Skipping hook for "${name}": hook is marked safeForSubAgent=false (may cause recursion).`,
+          );
+          continue;
+        }
+        agent.addHook(h);
+      }
+    }
+
     const output = await agent.run(input);
     const durationMs = Date.now() - startedAt;
     return {

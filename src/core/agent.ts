@@ -276,6 +276,36 @@ export interface AgentConfig {
   subAgentLLM?: LLMProvider;
 
   /**
+   * Lifecycle hooks for sub-agents spawned by the main agent.
+   *
+   * These hooks are passed to every sub-agent created via `spawn_subagent`,
+   * enabling tracing, metrics, and logging of sub-agent execution. If not
+   * set, sub-agents run without hooks (their internal execution is invisible
+   * to the main agent's observers).
+   *
+   * Accepts a single {@link AgentHooks}, an array, or a factory function
+   * `(name, runId) => AgentHooks | AgentHooks[]` called each time a
+   * sub-agent is spawned — use the factory to create per-sub-agent
+   * {@link TraceLogger} instances for isolated trace files.
+   *
+   * **WARNING**: Be careful with hooks that spawn MORE sub-agents (e.g.
+   * {@link ReflectionHook}) — passing them here causes unbounded recursion.
+   * Only pass pure-observation hooks ({@link TraceLogger}, evaluators, etc.).
+   *
+   * @example
+   * ```ts
+   * const mainTrace = new TraceLogger({ sessionId: "main" });
+   * const agent = new ReActAgent({
+   *   llm: provider,
+   *   hooks: mainTrace,
+   *   subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
+   *   subAgentsDir: "./subagents",
+   * });
+   * ```
+   */
+  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
+
+  /**
    * RAG (Retrieval-Augmented Generation) configuration.
    *
    * When set, documents from `documentsDir` are indexed at startup and the
@@ -408,6 +438,9 @@ export abstract class Agent {
   /** LLM provider for sub-agents (defaults to main llm if not set). */
   protected subAgentLLM?: LLMProvider;
 
+  /** Hooks for sub-agents (from AgentConfig). */
+  protected subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
+
   /** Skills directory path (from AgentConfig). */
   protected skillsDir?: string;
 
@@ -470,6 +503,7 @@ export abstract class Agent {
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
     this.mcpServerConfigs = config.mcpServers;
     this.subAgentsDir = config.subAgentsDir;
+    this.subAgentHooks = config.subAgentHooks;
     this.skillsDir = config.skillsDir;
     this.ragConfig = config.rag;
 
@@ -1336,7 +1370,7 @@ export abstract class Agent {
     if (this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
       this.subAgentManager.setLogger(this.logger);
-      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir, undefined, undefined, this.subAgentLLM);
+      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir, undefined, undefined, this.subAgentLLM, this.subAgentHooks);
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 
       // Register sub-agent tools into the tool registry

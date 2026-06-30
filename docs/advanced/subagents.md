@@ -278,6 +278,43 @@ const report = await agent.run(
 )
 ```
 
+## 子 Agent 的 Hook 与追踪
+
+通过 `subAgentHooks` 可以为子 Agent 注入生命周期钩子（如 `TraceLogger`），记录其内部的 LLM 调用、工具调用等执行轨迹：
+
+```ts
+import { OrchestratorAgent, TraceLogger } from 'kagent-ts'
+
+const mainTrace = new TraceLogger({ sessionId: 'orchestrator-run' })
+
+const agent = new OrchestratorAgent({
+  llm: provider,
+  hooks: mainTrace,
+  subAgentsDir: './subagents',
+  // 工厂函数：每次 spawn 时调用，创建子 Agent 的独立 TraceLogger
+  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
+})
+```
+
+`subAgentHooks` 支持三种形式：
+
+- **静态对象**：所有子 Agent 共享同一套 hook
+- **数组**：传入多个 hook
+- **工厂函数**：`(name: string, runId: string) => AgentHooks | AgentHooks[]`，每次 spawn 时调用
+
+### 安全防护
+
+标记了 `safeForSubAgent: false` 的 hook 会被 `SubAgentManager` 自动过滤：
+
+```ts
+const unsafeHook = {
+  safeForSubAgent: false,   // ← 标记为不安全，不会被传入子 Agent
+  onFinish: () => { /* ... spawns more sub-agents ... */ },
+}
+```
+
+这是为了防止无限递归——例如 `ReflectionHook`（`createReflectionHook()`）在 `onFinish` 中会 spawn 子 Agent 进行反思，如果将它传入子 Agent，会导致：子 Agent 完成 → spawn 反思 Agent → 反思 Agent 完成 → spawn 更多 Agent → ……
+
 ## 下一步
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理编排

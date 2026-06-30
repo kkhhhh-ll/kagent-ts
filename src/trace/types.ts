@@ -11,7 +11,9 @@ export type AgentTraceEventType =
   | "thought"
   | "plan_created"
   | "plan_revised"
-  | "finish";
+  | "finish"
+  | "subagent_spawn"
+  | "subagent_result";
 
 /**
  * A single trace event in the agent's execution timeline.
