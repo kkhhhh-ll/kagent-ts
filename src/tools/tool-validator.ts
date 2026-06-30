@@ -1,5 +1,6 @@
 import Ajv, { ErrorObject } from "ajv";
 import { ToolErrorCode, toolError, ToolResult } from "./types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Validates tool arguments against the tool's JSON Schema definition.
@@ -72,7 +73,9 @@ export function validateToolArgs(
   toolName: string,
   parameters: Record<string, unknown>,
   args: Record<string, unknown>,
+  logger?: Logger,
 ): ToolResult | null {
+  const log = logger ?? new ConsoleLogger();
   // ── Guard: nothing to validate ────────────────────────────────────────
   if (!hasConstraints(parameters)) {
     return null;
@@ -92,8 +95,9 @@ export function validateToolArgs(
       // Schema itself is malformed — log and skip validation for this tool.
       // The LLM will still get error feedback from the actual tool call.
       const msg = compileErr instanceof Error ? compileErr.message : String(compileErr);
-      console.warn(
-        `[tool-validator] Failed to compile schema for tool "${toolName}": ${msg}`,
+      log.warn(
+        "ToolValidator",
+        `Failed to compile schema for tool "${toolName}": ${msg}`,
       );
       return null;
     }

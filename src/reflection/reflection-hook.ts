@@ -90,7 +90,12 @@ export function createReflectionHook(
     // ── Run reflection & memory extraction after the agent finishes ──
     onFinish: async (finalAnswer: string) => {
       const sessionId = `session_${Date.now()}`;
+
+      // Snapshot state immediately so an overlapping onLLMStart from a
+      // subsequent run doesn't overwrite these while the async reflection
+      // is still in progress.
       const query = userQuery ?? "(unknown)";
+      const conversation = lastConversation;
 
       // Run error reflector and memory reflector in parallel.
       // Both are best-effort — failures in one don't affect the other.
@@ -101,7 +106,7 @@ export function createReflectionHook(
             const entries = await errorReflector.reflect({
               userQuery: query,
               finalAnswer,
-              conversation: lastConversation,
+              conversation,
               sessionId,
             });
             if (entries.length > 0) {
@@ -124,7 +129,7 @@ export function createReflectionHook(
             const memories = await memoryReflector.reflect({
               userQuery: query,
               finalAnswer,
-              conversation: lastConversation,
+              conversation,
               sessionId,
             });
             if (memories.length > 0) {
@@ -142,6 +147,10 @@ export function createReflectionHook(
       ]);
 
       config.onReflectionComplete?.(errorEntries.length, memoryEntries.length);
+
+      // Reset accumulated state so the next agent.run() gets fresh data
+      userQuery = null;
+      lastConversation = [];
     },
   };
 

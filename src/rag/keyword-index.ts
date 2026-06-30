@@ -182,7 +182,7 @@ export class InMemoryKeywordIndex {
     for (const len of this.docLengths.values()) {
       totalLen += len;
     }
-    this.avgDocLength = this.totalDocs > 0 ? totalLen / this.totalDocs : 1;
+    this.avgDocLength = this.totalDocs > 0 ? Math.max(1, totalLen / this.totalDocs) : 1;
 
     // IDF
     this.idfValues.clear();

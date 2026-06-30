@@ -103,7 +103,10 @@ export class ProjectRules {
       this.cachedContent = fs.readFileSync(this.filePath!, "utf-8").trim();
       return true;
     } catch {
-      this.cachedContent = "";
+      if (this.cachedContent !== "") {
+        this.cachedContent = "";
+        return true;
+      }
       return false;
     }
   }
@@ -132,7 +135,10 @@ export class ProjectRules {
       this.cachedContent = sections.join("\n\n");
       return true;
     } catch {
-      this.cachedContent = "";
+      if (this.cachedContent !== "") {
+        this.cachedContent = "";
+        return true;
+      }
       return false;
     }
   }

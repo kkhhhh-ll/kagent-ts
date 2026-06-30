@@ -139,7 +139,10 @@ export const GrepSearchTool: Tool = {
  */
 function listFilesRecursive(rootPath: string): string[] {
   const results: string[] = [];
-  const SKIP_DIRS = new Set(["node_modules", ".git", ".hg", ".svn", ".claude"]);
+  const SKIP_DIRS = new Set([
+    "node_modules", ".git", ".hg", ".svn", ".claude",
+    "__pycache__", ".cache",
+  ]);
 
   function walk(dir: string): void {
     try {
@@ -154,7 +157,7 @@ function listFilesRecursive(rootPath: string): string[] {
           // Skip binary extensions
           const ext = path.extname(entry.name).toLowerCase();
           const BINARY_EXTS = new Set([
-            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
+            ".png", ".jpg", ".jpeg", ".gif", ".ico",
             ".woff", ".woff2", ".ttf", ".eot",
             ".zip", ".tar", ".gz", ".rar",
             ".o", ".obj", ".exe", ".dll", ".so", ".dylib",

@@ -26,12 +26,6 @@ export interface LLMReRankerConfig {
    * Default: 20. More candidates = better comparison but higher cost.
    */
   maxCandidates?: number;
-
-  /**
-   * Model to use (overrides the LLM provider's default model).
-   * Useful for using a cheaper/faster model for re-ranking.
-   */
-  model?: string;
 }
 
 // ─── LLMReRanker ─────────────────────────────────────────────────────────────

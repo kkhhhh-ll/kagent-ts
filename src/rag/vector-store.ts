@@ -41,7 +41,7 @@ export class InMemoryVectorStore implements VectorStore {
 
     for (const chunk of this.chunks) {
       const score = cosineSimilarity(queryEmbedding, chunk.embedding);
-      if (score > 0) {
+      if (score !== 0) {
         results.push({ chunk, score });
       }
     }

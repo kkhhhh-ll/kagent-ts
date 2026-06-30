@@ -128,7 +128,7 @@ export class SessionManager {
     }
 
     sessions.sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime()
     );
     return sessions;
   }

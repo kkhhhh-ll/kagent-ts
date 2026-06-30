@@ -64,13 +64,15 @@ export class ToolOutputTruncator {
 
     fs.writeFileSync(filePath, result, "utf-8");
 
-    const preview = result.slice(0, this.keepBytes);
-    const truncatedSize = byteLength - this.keepBytes;
+    const previewBuf = Buffer.from(result, "utf-8").subarray(0, this.keepBytes);
+    const preview = previewBuf.toString("utf-8");
+    const keptBytes = Buffer.byteLength(preview, "utf-8");
+    const truncatedSize = byteLength - keptBytes;
     const marker =
       `\n\n---\n` +
       `[Output truncated: ${(byteLength / 1024).toFixed(1)} KB total | ` +
-      `showing first ${(this.keepBytes / 1024).toFixed(1)} KB | ` +
-      `${truncatedSize} bytes truncated.]\n` +
+      `showing first ${(keptBytes / 1024).toFixed(1)} KB | ` +
+      `${(truncatedSize / 1024).toFixed(1)} KB truncated.]\n` +
       `[Full output saved to: ${filePath}]\n` +
       `[Use the read_file tool with file_path="${filePath}" to read the complete output.]`;
 

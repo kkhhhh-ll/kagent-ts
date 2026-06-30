@@ -14,6 +14,18 @@ export interface TokenBudgetConfig {
   maxTotalTokens: number;
 
   /**
+   * Tokens reserved per call for the LLM's output.
+   *
+   * `checkBeforeCall()` adds this to the estimated input so the circuit breaker
+   * accounts for the output that the call will produce.  Without a reserve the
+   * budget can be exceeded when the LLM returns many completion tokens.
+   *
+   * Default: 0 (backward-compatible — budget is enforced after the fact via
+   * `recordUsage()`).
+   */
+  reservedOutputTokens?: number;
+
+  /**
    * Warn via the logger when usage exceeds this fraction of the budget.
    * Default: 0.8 (80 %).
    */
@@ -62,6 +74,7 @@ export interface TokenBudgetCost {
 
 export class TokenBudget {
   private maxTotalTokens: number;
+  private reservedOutputTokens: number;
   private warnThreshold: number;
   private pricing?: { inputPricePer1K: number; outputPricePer1K: number };
   private totalTokensUsed = 0;
@@ -72,6 +85,7 @@ export class TokenBudget {
 
   constructor(config: TokenBudgetConfig) {
     this.maxTotalTokens = config.maxTotalTokens;
+    this.reservedOutputTokens = config.reservedOutputTokens ?? 0;
     this.warnThreshold = config.warnThreshold ?? 0.8;
     this.pricing = config.pricing;
   }
@@ -98,7 +112,7 @@ export class TokenBudget {
    *          making the LLM call.
    */
   checkBeforeCall(estimatedInputTokens: number): TokenBudgetStatus {
-    const projected = this.totalTokensUsed + estimatedInputTokens;
+    const projected = this.totalTokensUsed + estimatedInputTokens + this.reservedOutputTokens;
     return {
       totalTokensUsed: this.totalTokensUsed,
       maxTotalTokens: this.maxTotalTokens,

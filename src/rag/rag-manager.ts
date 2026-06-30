@@ -154,6 +154,7 @@ export class RAGManager {
       const fetchK = k * fetchFactor;
 
       const [queryEmbedding] = await this.config.embeddingProvider.embed([query]);
+      if (!queryEmbedding) return [];
 
       const [vectorResults, bm25Results] = await Promise.all([
         this.store.search(queryEmbedding, fetchK),
@@ -179,6 +180,7 @@ export class RAGManager {
       // ── Pure vector mode ─────────────────────────────────────────
       const fetchK = k * fetchFactor;
       const [queryEmbedding] = await this.config.embeddingProvider.embed([query]);
+      if (!queryEmbedding) return [];
       results = await this.store.search(queryEmbedding, fetchK);
     }
 

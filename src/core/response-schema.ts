@@ -177,8 +177,7 @@ function extractBalancedBraces(text: string): string | null {
 function cleanupJSON(text: string): string {
   let result = text;
 
-  // Replace actual newlines inside JSON strings with \n escape
-  // (only between "..." regions)
+  // Normalize CRLF → LF, strip isolated CR (Windows/macOS line endings)
   result = result.replace(/\r\n/g, "\n").replace(/\r/g, "");
 
   return result;

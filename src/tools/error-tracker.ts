@@ -167,7 +167,9 @@ export class ToolErrorTracker {
         ? "failure"
         : breakerState === "half_open"
           ? "circuit_half_open"
-          : "circuit_open";
+          : breakerState === "open"
+            ? "circuit_open"
+            : "retries_exhausted";
 
     const event: TraceEvent = {
       type: eventType,
