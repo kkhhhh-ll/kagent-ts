@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, type Dirent, type Stats } from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import { Tool } from "../types";
@@ -93,7 +93,7 @@ export const GrepSearchTool: Tool = {
         if (!globFilter(filePath)) continue;
 
         // Check file size
-        let stat: fsp.Stats;
+        let stat: Stats;
         try {
           stat = await fsp.stat(filePath);
         } catch {
@@ -149,7 +149,7 @@ async function listFilesRecursive(rootPath: string): Promise<string[]> {
   ]);
 
   async function walk(dir: string): Promise<void> {
-    let entries: fsp.Dirent[];
+    let entries: Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
