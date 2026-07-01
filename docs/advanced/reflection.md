@@ -2,7 +2,7 @@
 
 Reflection 系统让 Agent 在执行完成后**自动启动两个子 Agent 并行反思**：
 - **错题本**（Error Reflection）— 分析执行过程，识别错误和优化机会
-- **记忆提取**（Memory Extraction）— 提取用户偏好、项目决策、约束条件等长期记忆
+- **记忆提取**（Memory Extraction）— 提取用户约束、项目决策、风格偏好等长期记忆
 
 两者都以 **Fork 子 Agent** 的形式运行——拥有独立的上下文和只读工具（`read_file`、`grep_search`），不污染主 Agent 的上下文。
 
@@ -21,7 +21,7 @@ ReflectionHook.onFinish()
   └── Fork MemoryReflector (ReAct, max 5 turns)
         ├── 审查完整对话历史
         ├── 用 read_file / grep_search 理解项目背景
-        ├── 提取规则 / 项目事实
+        ├── 提取规则 / 项目事实 / 用户偏好
         └── 持久化 → MemoryManager
 ```
 
@@ -65,7 +65,7 @@ const agent = new ReActAgent({
 const answer = await agent.run('用 kebab-case 命名所有文件')
 // → 用户看到 answer
 // → 后台 Fork 1: 找错 → notebook
-// → 后台 Fork 2: 提取 "用户偏好 kebab-case" → memory
+// → 后台 Fork 2: 提取 "用户要求 kebab-case 命名" (rule) 或 "用户偏好 pnpm" (preference) → memory
 ```
 
 ## ReflectionAgent (错题本 Fork)
@@ -130,8 +130,9 @@ const memories = await reflector.reflect({
 
 | 记忆类型 | 说明 | 示例 |
 |----------|------|------|
-| `rule` | 用户设定的约束 | "始终用 kebab-case 命名文件" |
-| `project` | 项目事实或决策 | "从 MySQL 迁移到了 PostgreSQL，因为 JSONB 支持" |
+| `rule` | 用户明确要求的硬约束 | "始终用 kebab-case 命名文件" |
+| `project` | 项目事实或架构决策 | "从 MySQL 迁移到 PostgreSQL，因为 JSONB 支持" |
+| `preference` | LLM 观察到的用户习惯、风格偏好 | "用户喜欢简短直接的回答"、"用户偏好 pnpm 而非 npm" |
 
 ### 去重
 
