@@ -9,7 +9,7 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /** Memory type. */
-export type MemoryType = "rule" | "project";
+export type MemoryType = "rule" | "project" | "preference";
 
 /**
  * A single memory entry.
@@ -20,6 +20,10 @@ export type MemoryType = "rule" | "project";
  * **Project**: a fact or decision about the project — what happened, why
  * (constraint / deadline that drove it), and how the agent should apply it.
  * Example: "We switched from MySQL to PostgreSQL because of JSONB support."
+ *
+ * **Preference**: a user habit or style preference the LLM has observed — not
+ * a hard constraint, but a pattern the user consistently prefers. Example:
+ * "User prefers short, direct answers without boilerplate explanations."
  */
 export interface Memory {
   /** Slug (kebab-case, used as filename). */
@@ -28,8 +32,18 @@ export interface Memory {
   description: string;
   /** Memory type. */
   type: MemoryType;
-  /** Markdown body. For rules: why + when. For projects: fact + why + how to apply. */
+  /**
+   * Markdown body. For rules: why + when. For projects: fact + why + how to
+   * apply. For preferences: observed pattern + evidence (what the user said).
+   */
   content: string;
+  /**
+   * ISO-8601 timestamp of the last `recall` access.
+   * Used for LRU eviction — memories that haven't been recalled recently
+   * are pruned first when the index exceeds limits.
+   * Undefined for newly-created or never-recalled memories.
+   */
+  lastRecalledAt?: string;
 }
 
 /** Index entry stored in MEMORY.md (lightweight pointer). */
@@ -125,6 +139,25 @@ export class MemoryManager {
     return true;
   }
 
+  /**
+   * Update `lastRecalledAt` to now for a given memory.
+   *
+   * Called by the `recall` tool whenever memory content is loaded, so the
+   * LRU eviction policy can preserve actively-used memories over stale ones.
+   *
+   * Returns `false` if the memory doesn't exist; `true` if updated.
+   */
+  touch(name: string): boolean {
+    const memory = this.loadFile(name);
+    if (!memory) return false;
+
+    memory.lastRecalledAt = new Date().toISOString();
+    const filePath = this.memoryPath(name);
+    const fileContent = this.formatFile(memory);
+    fs.writeFileSync(filePath, fileContent, "utf-8");
+    return true;
+  }
+
   // ─── Read ───────────────────────────────────────────────────────────────
 
   /**
@@ -187,12 +220,27 @@ export class MemoryManager {
   buildPromptHint(): string {
     if (this.index.length === 0) return "";
 
-    const names = this.index.map((e) => `- ${e.name} (\`${e.type}\`)`);
+    // Group by type with section headers for clarity
+    const rules = this.index.filter((e) => e.type === "rule");
+    const projects = this.index.filter((e) => e.type === "project");
+    const prefs = this.index.filter((e) => e.type === "preference");
+
+    const sections: string[] = [];
+    if (rules.length > 0) {
+      sections.push("📜 Rules", ...rules.map((e) => `- ${e.name}`));
+    }
+    if (projects.length > 0) {
+      sections.push("📋 Project", ...projects.map((e) => `- ${e.name}`));
+    }
+    if (prefs.length > 0) {
+      sections.push("💬 Preferences (observed habits — soft guidance)", ...prefs.map((e) => `- ${e.name}`));
+    }
+
     const body =
       "## Long-Term Memories (" +
       this.index.length +
       " entries — use the `recall` tool to load full content)\n" +
-      names.join("\n");
+      sections.join("\n");
 
     // Scan for prompt-injection signatures in LLM-generated content.
     // Memory names and descriptions are authored by the LLM via the
@@ -242,15 +290,19 @@ export class MemoryManager {
   }
 
   private formatFile(memory: Memory): string {
-    return [
+    const frontmatter: string[] = [
       "---",
       `name: ${memory.name}`,
       `description: ${memory.description}`,
       `type: ${memory.type}`,
-      "---",
-      "",
-      memory.content,
-    ].join("\n");
+    ];
+    if (memory.lastRecalledAt) {
+      frontmatter.push(`lastRecalledAt: ${memory.lastRecalledAt}`);
+    }
+    frontmatter.push("---");
+    frontmatter.push("");
+    frontmatter.push(memory.content);
+    return frontmatter.join("\n");
   }
 
   private loadFile(name: string): Memory | null {
@@ -276,11 +328,12 @@ export class MemoryManager {
     const description = frontmatter["description"];
     const type = frontmatter["type"] as MemoryType;
     const content = match[2];
+    const lastRecalledAt = frontmatter["lastRecalledAt"];
 
     if (!name || !description || !type) return null;
-    if (type !== "rule" && type !== "project") return null;
+    if (type !== "rule" && type !== "project" && type !== "preference") return null;
 
-    return { name, description, type, content };
+    return { name, description, type, content, lastRecalledAt };
   }
 
   // ─── Index Persistence ──────────────────────────────────────────────────
@@ -330,9 +383,11 @@ export class MemoryManager {
   // ─── Limit Enforcement ──────────────────────────────────────────────────
 
   /**
-   * Silently remove the oldest entries until both the line and byte limits
-   * are satisfied. Index entries are ordered oldest-first, so we shift from
-   * the front until the computed index content fits.
+   * LRU eviction: silently remove entries that haven't been recalled recently
+   * (or never) until both the line and byte limits are satisfied.
+   *
+   * Sorting: `lastRecalledAt` ascending (undefined = oldest, never recalled).
+   * Ties are broken by index position (earlier entries removed first).
    */
   private pruneIfNeeded(): void {
     let raw = this.buildIndexContent();
@@ -340,12 +395,51 @@ export class MemoryManager {
     let bytes = Buffer.byteLength(raw, "utf-8");
 
     while (this.index.length > 0 && (lines > MAX_INDEX_LINES || bytes > MAX_INDEX_BYTES)) {
-      const removed = this.index.pop()!;
-      try { fs.unlinkSync(this.memoryPath(removed.name)); } catch { /* ok */ }
+      const toEvict = this.pickEvictionCandidate();
+      if (!toEvict) break;
+
+      this.index = this.index.filter((e) => e.name !== toEvict.name);
+      try { fs.unlinkSync(this.memoryPath(toEvict.name)); } catch { /* ok */ }
+
       raw = this.buildIndexContent();
       lines = raw.split("\n").length;
       bytes = Buffer.byteLength(raw, "utf-8");
     }
+  }
+
+  /**
+   * Pick the best eviction candidate: the entry least recently recalled.
+   *
+   * Priority (first evicted):
+   * 1. Never recalled (`lastRecalledAt` undefined)
+   * 2. Oldest `lastRecalledAt`
+   * 3. Ties broken by index position (lower = older in insertion order)
+   */
+  private pickEvictionCandidate(): IndexEntry | null {
+    if (this.index.length === 0) return null;
+
+    let worst: { entry: IndexEntry; score: number } | null = null;
+
+    for (let i = 0; i < this.index.length; i++) {
+      const entry = this.index[i];
+      const memory = this.loadFile(entry.name);
+      const recalledAt = memory?.lastRecalledAt;
+
+      let score: number;
+      if (!recalledAt) {
+        // Never recalled — highest eviction priority (lowest score)
+        score = -1;
+      } else {
+        // Lower score = older = evicted first
+        score = new Date(recalledAt).getTime();
+      }
+
+      if (!worst || score < worst.score || (score === worst.score && i < this.index.indexOf(worst.entry))) {
+        worst = { entry, score };
+      }
+    }
+
+    return worst?.entry ?? null;
   }
 
   private buildIndexContent(): string {

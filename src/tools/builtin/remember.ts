@@ -17,7 +17,9 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
       "Save a long-term memory that will be recalled in future conversations. " +
       "Use this when you learn a user rule, project convention, or important " +
       "decision that should influence future sessions. Memories persist across " +
-      "sessions and are injected into the system prompt.",
+      "sessions and are injected into the system prompt. " +
+      "If the user contradicts a previously-stored memory, use `supersedes` to " +
+      "remove the outdated entries so they won't conflict in future sessions.",
     parameters: {
       type: "object",
       properties: {
@@ -29,10 +31,16 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
         },
         type: {
           type: "string",
-          enum: ["rule", "project"],
+          enum: ["rule", "project", "preference"],
           description:
-            "'rule' for user constraints (why + when they apply). " +
-            "'project' for project facts/decisions (what + why + how to apply).",
+            "'rule' for hard user constraints — things the user explicitly REQUIRED " +
+            "('always X', 'never Y'). Include why + when. " +
+            "'project' for project facts/decisions — what happened, why, how to apply. " +
+            "'preference' for observed user habits — patterns the user consistently " +
+            "prefers but did NOT state as a hard rule ('user likes short answers', " +
+            "'user prefers pnpm over npm'). Include evidence (what the user said/did). " +
+            "IMPORTANT: user style/habit observations go in 'preference', NOT 'rule'. " +
+            "'rule' is ONLY for explicit constraints the user stated as requirements.",
         },
         description: {
           type: "string",
@@ -43,11 +51,19 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
         content: {
           type: "string",
           description:
-            "Full markdown body. For rules: include a **Why:** section (why the " +
-            "user required it) and a **When:** section (when it takes effect). " +
-            "For project facts: include a **Why:** section (what happened and the " +
-            "constraint or deadline that drove it) and a **How to apply:** section " +
-            "(how the agent should use this knowledge in future sessions).",
+            "Full markdown body. For rules: **Why:** + **When:**. " +
+            "For projects: **Why:** + **How to apply:**. " +
+            "For preferences: **Observed pattern:** + **Evidence:** (what the user said/did).",
+        },
+        supersedes: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Names of existing memories that this new memory replaces. " +
+            "Use this when the user corrects or contradicts a previously-saved memory — " +
+            "the superseded entries will be deleted so they don't conflict in future sessions. " +
+            "Example: if the user previously wanted kebab-case file names but now wants " +
+            "camelCase, pass `[\"use-kebab-case\"]` to remove the old convention.",
         },
       },
       required: ["name", "type", "description", "content"],
@@ -55,7 +71,9 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
 
     async execute(params: Record<string, unknown>): Promise<string> {
       const name = String(params.name ?? "").trim();
-      const memType = (params.type as string) === "rule" ? "rule" : "project";
+      const memType = (params.type as string) === "rule" ? "rule"
+        : (params.type as string) === "preference" ? "preference"
+        : "project";
       const description = String(params.description ?? "").trim();
       const content = String(params.content ?? "").trim();
 
@@ -66,14 +84,31 @@ export function createRememberTool(memoryManager: MemoryManager): Tool {
         return `Error: 'name' must be kebab-case (e.g. 'use-prisma-migrations'). Got: "${name}".`;
       }
 
-      // Upsert: overwrite if exists, add if new. Oldest entries are
-      // silently pruned when the index exceeds 200 lines / 25 KB.
+      // Handle supersedes: remove outdated memories before writing the new one
+      const supersedes = params.supersedes as string[] | undefined;
+      let removedNames: string[] = [];
+      if (Array.isArray(supersedes) && supersedes.length > 0) {
+        for (const oldName of supersedes) {
+          if (typeof oldName === "string" && oldName !== name && memoryManager.has(oldName)) {
+            memoryManager.remove(oldName.trim());
+            removedNames.push(oldName.trim());
+          }
+        }
+      }
+
+      // Upsert: overwrite if exists, add if new. LRU eviction prunes
+      // the least-recalled entries when the index exceeds limits.
       const isUpdate = memoryManager.has(name);
       memoryManager.add({ name, type: memType as MemoryType, description, content });
 
-      return isUpdate
+      const parts: string[] = [];
+      parts.push(isUpdate
         ? `Memory "${name}" updated successfully.`
-        : `Memory "${name}" saved successfully (index: ${memoryManager.count} entries).`;
+        : `Memory "${name}" saved successfully (index: ${memoryManager.count} entries).`);
+      if (removedNames.length > 0) {
+        parts.push(`Superseded: ${removedNames.join(", ")}.`);
+      }
+      return parts.join(" ");
     },
   };
 }

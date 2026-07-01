@@ -31,24 +31,27 @@ type: rule
 
 ## 记忆类型
 
-kagent-ts 提供两种记忆类型，有意保持精简：
+kagent-ts 提供三种记忆类型：
 
 ```ts
-type MemoryType = "rule" | "project"
+type MemoryType = "rule" | "project" | "preference"
 ```
 
 | 类型 | 用途 | 示例 |
 | --- | --- | --- |
-| `rule` | 用户明确设定的约束、规范 | "始终用 kebab-case 命名"、"组件用函数式写法" |
+| `rule` | 用户**明确要求**的约束、规范 | "始终用 kebab-case 命名"、"组件用函数式写法" |
 | `project` | 项目事实、架构决策 | "从 MySQL 迁移到了 PostgreSQL"、"API 基础地址为 https://api.example.com/v2" |
+| `preference` | LLM **观察到的**用户习惯、风格偏好 | "用户喜欢简短直接的回答"、"用户偏好 pnpm 而非 npm" |
 
 ### 设计理念
 
-`rule` 是用户**明确设定**的约束和规范——比如编码风格、命名约定、禁用某类写法。这些是用户主动告诉 Agent "必须这样做 / 不准那样做"的硬性要求，Agent 在后续会话中严格遵守。
+`rule` 是用户**明确设定**的约束和规范——用户主动说了"必须这样做 / 不准那样做"。这些是硬性要求，Agent 严格遵守。
 
 `project` 是项目级别的事实和决策——执行过程中沉淀下来的知识，帮助 Agent 理解项目背景。
 
-用户偏好（"我喜欢用 pnpm"、"先问再改"）是更软性的个人习惯，不属于 `rule`。偏好由用户自己定义和管理，不作为记忆类型的一部分。
+`preference` 是 LLM **从对话中观察到的**用户习惯和风格偏好——用户没有明确说"这是规则"，但从多次交互中能看出稳定模式。这类记忆是软性的、可适应的，由 LLM 自动提取，无需用户手动管理。
+
+**关键区别**：rule 是用户说"要这样"，preference 是 LLM 看出"用户喜欢这样"。不要把观察到的习惯放进 rule。
 
 ## 基本用法
 
@@ -106,6 +109,22 @@ const agent = new ReActAgent({
 // 2. LLM 需要上下文信息 → 调用 recall 工具
 // 3. 记忆自动持久化到 .memory/ 目录
 ```
+
+**冲突处理 — `supersedes` 参数：**
+
+当用户纠正或推翻之前存储的记忆时，LLM 可以通过 `supersedes` 参数标记旧记忆，框架会自动删除它们：
+
+```json
+{
+  "name": "use-camel-case",
+  "type": "rule",
+  "description": "用户要求使用 camelCase 命名文件",
+  "content": "...",
+  "supersedes": ["use-kebab-case"]
+}
+```
+
+`supersedes` 中的记忆会被自动移除，确保旧约定不会在未来的会话中与新约定冲突。如果新旧记忆使用相同的 `name`，框架会自动覆盖（upsert），无需额外指定 `supersedes`。
 
 ### System Prompt 自动注入
 
@@ -184,10 +203,14 @@ type: rule
 
 `[[name]]` 语法创建记忆之间的链接，帮助构建知识网络。
 
-## 存储限制
+## 存储限制与 LRU 淘汰
 
 - 索引文件（`MEMORY.md`）上限：**200 行** 且 **25 KB**
-- 超出限制时，最旧的条目会被静默移除
+- 超出限制时，框架按 **LRU（最近最少使用）** 策略自动淘汰：
+  - 从未被 `recall` 过的记忆优先淘汰
+  - 同一批未使用的记忆中，`lastRecalledAt` 最早的先删
+  - 同一时间戳时按插入顺序（先插入的先删）
+- 每次调用 `recall` 工具时，对应记忆的 `lastRecalledAt` 会自动更新
 - 单个记忆文件大小无硬性限制，但建议保持简洁
 
 ## 最佳实践

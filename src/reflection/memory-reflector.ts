@@ -47,7 +47,7 @@ interface MemoryExtractionResponse {
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
 const MEMORY_EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction agent. Your job is to review a completed agent session
-and identify explicit constraints and project decisions worth remembering for future sessions.
+and identify constraints, project decisions, and user preferences worth remembering for future sessions.
 
 You have access to read_file and grep_search tools to verify context against the codebase.
 
@@ -58,15 +58,19 @@ Categories of memory to extract:
 - **project**: A fact or decision about the project — what happened, why (constraint / deadline
   that drove it), and how the agent should apply it.
   Example: "We switched from MySQL to PostgreSQL because of JSONB support."
+- **preference**: A user habit or style preference observed during the conversation —
+  patterns the user consistently prefers but did NOT state as a hard requirement.
+  Example: "User prefers short, direct answers without boilerplate explanations."
+  Example: "User prefers pnpm over npm."
 
 What to look for:
-- Explicit user constraints ("must", "must not", "always", "never", "don't use X")
-- Project decisions (architecture choices, tool/library selections, migration decisions)
+- Explicit user constraints ("must", "must not", "always", "never", "don't use X") → rule
+- Project decisions (architecture choices, tool/library selections, migration decisions) → project
+- User style/habit patterns (communication style, tool preference, workflow habits) → preference
 - Patterns worth repeating or avoiding (successful or failed approaches in this project)
 
-Do NOT extract:
-- User preferences or habits (soft preferences like "I like pnpm" are not rules)
-- Workflow or communication style preferences (these are personal, not project memory)
+IMPORTANT: User habits and style preferences (communication style, tool preference, etc.) go in
+'preference', NOT in 'rule'. 'rule' is ONLY for explicit constraints the user stated as requirements.
 
 An existing memories list is provided below — do NOT duplicate any existing memory name.
 Only output genuinely new, useful memories. An empty list is fine if nothing new is found.
@@ -77,7 +81,7 @@ In your final answer, output a JSON object with this structure:
     {
       "name": "kebab-case-slug",
       "description": "one-line summary",
-      "type": "rule | project",
+      "type": "rule | project | preference",
       "content": "The fact.\\n\\n**Why:** ...\\n\\n**How to apply:** ..."
     }
   ]
@@ -86,9 +90,9 @@ In your final answer, output a JSON object with this structure:
 Rules:
 - "name" must be a kebab-case slug (lowercase letters, digits, dashes).
 - "description" must be a concise one-line summary (~5-15 words).
-- "type" must be either "rule" or "project".
-- "content" should include **Why:** and **How to apply:** sections for project memories,
-  or **Why:** and **When:** sections for rule memories.
+- "type" must be "rule", "project", or "preference".
+- "content": for rules include **Why:** + **When:**, for projects include **Why:** + **How to apply:**,
+  for preferences include **Observed pattern:** + **Evidence:** (what the user said or did).
 - Only output memories that provide lasting value across sessions.
 - Be specific and actionable — avoid vague statements.
 - Do NOT duplicate existing memory names.${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
@@ -284,7 +288,7 @@ export class MemoryReflector {
 
       if (!Array.isArray(parsed.memories)) return [];
 
-      const validTypes = new Set<string>(["rule", "project"]);
+      const validTypes = new Set<string>(["rule", "project", "preference"]);
       const memories: ExtractedMemory[] = [];
 
       for (const m of parsed.memories as Array<Record<string, unknown>>) {

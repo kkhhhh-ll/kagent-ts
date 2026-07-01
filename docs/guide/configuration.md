@@ -112,7 +112,7 @@ const contextConfig = {
   maxTokens: 128000,             // 上下文窗口最大 Token 数
   compressionThreshold: 0.8,     // 80% 阈值触发压缩
   keepTurns: 20,                 // 保留最近 N 轮对话
-  toolResultMaxAgeMs: 300000,    // 工具结果最大保留时间 (5分钟)
+  toolResultMaxAgeMs: 3600000,   // 工具结果最大保留时间 (60分钟)
 }
 ```
 
