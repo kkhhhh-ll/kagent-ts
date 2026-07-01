@@ -1393,16 +1393,24 @@ export abstract class Agent {
   }
 
   /**
-   * Gracefully shut down MCP connections.
+   * Gracefully shut down the agent.
    *
-   * Disconnects all servers and unregisters their tools. Safe to call
-   * even if init() was never called or no servers were configured.
+   * Aborts any in-flight LLM request, cancels running sub-agents, waits
+   * for them to finish, and disconnects all MCP servers. Safe to call
+   * even if init() was never called or nothing was configured.
    */
   async shutdown(): Promise<void> {
+    // Abort the in-flight LLM request so the process doesn't hang on an
+    // open HTTP connection that would otherwise outlive this call.
+    this._abortController?.abort();
+
+    // Cancel sub-agents first, then await cleanup. Cancel-before-await
+    // ensures sub-agents stuck on LLM calls resolve quickly instead of
+    // waiting for the full timeout / max iteration count.
+    this.subAgentManager?.cancelAll();
+    await this.subAgentManager?.awaitAll();
+
     await this.mcpClientManager?.disconnectAll();
-    if (this.subAgentManager) {
-      await this.subAgentManager.awaitAll();
-    }
   }
 
   // ─── Sub-Agent ────────────────────────────────────────────────────────

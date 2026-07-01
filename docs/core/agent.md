@@ -73,7 +73,7 @@ const answer = await agent.resume('session_abc123', '继续之前的任务')
 
 ### `shutdown(): Promise<void>`
 
-优雅关闭 Agent，断开 MCP 连接，保存最终状态。
+优雅关闭 Agent：中断正在进行的 LLM 请求、取消并等待所有子 Agent 完成、断开 MCP 连接。
 
 ```ts
 await agent.shutdown()
