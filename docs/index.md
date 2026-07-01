@@ -74,22 +74,65 @@ kagent-ts
 │   ├── agent.ts             # Agent 基类（共享基础设施）
 │   ├── react-agent.ts       # ReAct Agent (Thought → Action → Observation)
 │   ├── plan-solve-agent.ts  # Plan-Solve Agent (Plan → Execute → Answer)
-│   └── fusion-agent.ts      # Fusion Agent (路由 + 计划 + 执行 + 反思)
+│   ├── fusion-agent.ts      # Fusion Agent (路由 + 计划 + 执行 + 反思)
+│   ├── types.ts             # Agent 公共类型定义
+│   ├── hooks.ts             # Agent 生命周期钩子
+│   ├── system-prompts.ts    # 系统提示模板
+│   └── response-schema.ts   # LLM 结构化输出解析
 ├── orchestrator/   # Orchestrator Agent (DAG 任务分解 + 并行调度)
-├── llm/            # LLM Provider (OpenAI, Anthropic, Fallback, Router)
-├── tools/          # 工具系统 (Registry, Circuit Breaker, Validator)
-│   └── builtin/    # 15 个内置工具
-├── session/        # 会话持久化与恢复
-├── context/        # 上下文窗口管理
+│   ├── orchestrator-agent.ts      # 编排 Agent 主逻辑
+│   ├── orchestrator-response.ts   # 结构化响应解析（分解/综合/适配）
+│   ├── orchestrator-types.ts      # DAG 任务图类型定义
+│   └── json-extractor.ts          # JSON 提取工具
+├── llm/            # LLM Provider 体系
+│   ├── interface.ts          # LLM Provider 统一接口
+│   ├── openai-provider.ts    # OpenAI Provider
+│   ├── anthropic-provider.ts # Anthropic Provider
+│   ├── factory.ts            # Provider 工厂函数
+│   ├── fallback-provider.ts  # Fallback 降级 Provider
+│   ├── rate-limiter.ts       # Rate Limiter 限流
+│   ├── model-router.ts       # Model Router 路由
+│   ├── token-budget.ts       # Token Budget 预算控制
+│   ├── errors.ts             # 网络错误类型
+│   └── retry.ts              # 重试策略
+├── tools/          # 工具系统
+│   ├── types.ts                  # 工具类型 + Circuit Breaker 状态
+│   ├── tool-registry.ts          # 工具注册中心
+│   ├── circuit-breaker.ts        # Circuit Breaker 熔断器
+│   ├── tool-validator.ts         # JSON Schema 参数验证
+│   ├── tool-output-truncator.ts  # 大输出裁剪到磁盘
+│   ├── tool-filter.ts            # 子代理工具权限过滤
+│   ├── error-tracker.ts          # 工具错误追踪
+│   └── builtin/            # 15 个内置工具（bash, read_file, write_file, edit_file,
+│                            #   grep_search, glob_search, web_fetch, skill,
+│                            #   spawn_subagent, list_subagents, remember, recall, list_errors）
+├── session/        # 会话持久化与恢复（Checkpoint + 优雅关闭）
+├── context/        # 上下文窗口管理（Token 预算 + 智能裁剪）
 ├── compression/    # 4 步渐进式上下文压缩
-├── skills/         # 渐进式 Skill 系统 (SKILL.md)
-├── subagent/       # 子代理定义与调度
-├── mcp/            # MCP 协议客户端管理
-├── rag/            # RAG 知识检索（文档加载、文本切分、向量搜索）
-├── reflection/     # 反思代理 + 错误笔记本
-├── security/       # Prompt Injection 防御
+├── messages/       # 消息构造与类型定义
+├── skills/         # 渐进式 Skill 系统（SKILL.md, Lazy-loading）
+├── subagent/       # 子代理定义、加载与调度
+├── mcp/            # MCP 协议客户端管理（stdio / SSE）
+├── rag/            # RAG 知识检索
+│   ├── rag-manager.ts         # RAG 主管理器
+│   ├── document-loader.ts     # 文档加载器（Markdown, TXT, PDF）
+│   ├── text-splitter.ts       # 递归文本切分（token/chunk 双模式）
+│   ├── embedding-provider.ts  # Embedding 向量化（OpenAI）
+│   ├── vector-store.ts        # 向量存储接口
+│   ├── chroma-store.ts        # ChromaDB 向量存储实现
+│   ├── keyword-index.ts       # BM25 关键词索引
+│   ├── search-knowledge.ts    # 知识搜索工具
+│   ├── rrf.ts                 # RRF 融合算法
+│   ├── llm-reranker.ts        # LLM 重排序
+│   └── rag-types.ts           # 类型定义
+├── reflection/     # 反思代理 + 错误笔记本 (错题本)
+├── security/       # Prompt Injection 防御（边界标记 + 注入签名扫描）
+├── git/            # Git Worktree 隔离（子代理并行执行文件隔离）
 ├── memory/         # 长期记忆 (MEMORY.md)
-├── eval/           # 评估框架 (EvalRunner, Benchmark)
+├── preferences/    # 用户偏好注入
+├── rules/          # 项目规则注入 (CLAUDE.md)
+├── eval/           # 评估框架（EvalRunner, Benchmark 回归测试）
 ├── trace/          # 执行追踪 (HTML Trace Logger)
+├── logging/        # 结构化日志接口
 └── utils/          # Token 计数等工具
 ```
