@@ -181,12 +181,14 @@ export class SubAgentManager {
    * gets a unique run ID. This enables orchestrator patterns where the same
    * sub-agent type handles different inputs in parallel.
    *
-   * @param name  The registered sub-agent definition name.
-   * @param input The task description passed to the sub-agent.
+   * @param name    The registered sub-agent definition name.
+   * @param input   The task description passed to the sub-agent.
+   * @param options Optional overrides — workdir scopes the sub-agent to
+   *                a specific directory (e.g. a git worktree).
    * @returns The unique run ID (used to correlate results later).
    * @throws If the definition is unknown or the manager is not yet bound.
    */
-  spawn(name: string, input: string): string {
+  spawn(name: string, input: string, options?: { workdir?: string }): string {
     const definition = this.definitions.get(name);
     if (!definition) {
       const available = Array.from(this.definitions.keys()).join(", ") || "none";
@@ -213,7 +215,7 @@ export class SubAgentManager {
     };
 
     // Fire-and-forget: start the sub-agent run, store the result
-    pending.promise = this.executeRun(name, runId, definition, input, pending.startedAt)
+    pending.promise = this.executeRun(name, runId, definition, input, pending.startedAt, options)
       .then((r) => { pending.resolved = r; return r; })
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -377,8 +379,9 @@ export class SubAgentManager {
     definition: SubAgentDefinition,
     input: string,
     startedAt: number,
+    options?: { workdir?: string },
   ): Promise<SubAgentResult> {
-    const runPromise = this.doExecute(name, runId, definition, input, startedAt);
+    const runPromise = this.doExecute(name, runId, definition, input, startedAt, options);
 
     // Wrap with timeout
     const timeoutPromise = new Promise<SubAgentResult>((_, reject) => {
@@ -409,8 +412,9 @@ export class SubAgentManager {
     definition: SubAgentDefinition,
     input: string,
     startedAt: number,
+    options?: { workdir?: string },
   ): Promise<SubAgentResult> {
-    const agent = this.buildSubAgent(definition);
+    const agent = this.buildSubAgent(definition, options?.workdir);
 
     // Resolve and apply sub-agent hooks (static or factory).
     // Unsafe hooks (safeForSubAgent === false) are skipped — they could
@@ -454,7 +458,7 @@ export class SubAgentManager {
    * `filesystem_*` matches all tools whose names start with `filesystem_`
    * (e.g. MCP tools from the "filesystem" server).
    */
-  private buildSubAgent(definition: SubAgentDefinition): ReActAgent {
+  private buildSubAgent(definition: SubAgentDefinition, workdir?: string): ReActAgent {
     // Look up declared tools from the main agent's registry.
     // Supports wildcard patterns (e.g. "filesystem_*" matches all tools
     // from the "filesystem" MCP server). Uses a Map for deduplication.
@@ -530,16 +534,18 @@ export class SubAgentManager {
       return this.finishBuildSubAgent(
         definition,
         filteredRegistry,
+        workdir,
       );
     }
 
-    return this.finishBuildSubAgent(definition, toolRegistry);
+    return this.finishBuildSubAgent(definition, toolRegistry, workdir);
   }
 
   /** Shared tail of buildSubAgent: wire up skills and return the agent. */
   private finishBuildSubAgent(
     definition: SubAgentDefinition,
     toolRegistry: ToolRegistry,
+    workdir?: string,
   ): ReActAgent {
 
     // Build a dedicated SkillManager with declared skills pre-activated.
@@ -573,6 +579,7 @@ export class SubAgentManager {
       toolRegistry,
       skillManager,
       maxIterations: 10,
+      workdir,
     });
   }
 

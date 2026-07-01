@@ -1,4 +1,5 @@
 import type { SubAgentResult } from "../subagent/subagent-types";
+import type { WorktreeSessionState } from "../git/git-types";
 
 /**
  * Orchestrator Agent type definitions.
@@ -71,6 +72,19 @@ export interface TaskNode {
    * Set at dispatch time so hooks can correlate spawn → result.
    */
   runId?: string;
+
+  /**
+   * Git worktree ID if this node was assigned an isolated worktree.
+   * Set by the OrchestratorAgent when `enableWorktrees` is true.
+   */
+  worktreeId?: string;
+
+  /**
+   * Optional base ref for this node's worktree.
+   * Overrides the default from GitWorktreeConfig.
+   * Example: a node that should work on a specific feature branch.
+   */
+  worktreeBaseRef?: string;
 }
 
 /**
@@ -157,4 +171,6 @@ export interface OrchestratorSessionState {
   taskGraph: TaskGraph;
   /** How many dispatch rounds have completed. */
   completedRounds: number;
+  /** Git worktree state (present when `enableWorktrees` is true). */
+  worktreeState?: WorktreeSessionState;
 }

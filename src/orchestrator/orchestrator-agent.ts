@@ -6,6 +6,7 @@ import { LLMResponse } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { SubAgentManager } from "../subagent/subagent-manager";
+import { GitWorktreeManager } from "../git/git-worktree-manager";
 
 import type {
   TaskNode,
@@ -62,6 +63,53 @@ export interface OrchestratorAgentConfig extends AgentConfig {
    * Default: 20.
    */
   maxTotalNodes?: number;
+
+  // ── Git Worktree Isolation ────────────────────────────────────────────
+
+  /**
+   * Whether to create isolated git worktrees for each sub-agent task node.
+   *
+   * When true, each dispatched node gets its own git worktree so sub-agents
+   * can make file changes in isolation.  Results are merged back when the
+   * node completes (if `autoMergeWorktrees` is set).
+   *
+   * Requires `worktreeRepoPath` to be set.
+   * Default: false.
+   */
+  enableWorktrees?: boolean;
+
+  /**
+   * Path to the git repository root for worktree creation.
+   * Required when `enableWorktrees` is true.
+   */
+  worktreeRepoPath?: string;
+
+  /**
+   * Parent directory for worktrees.
+   * Default: `<worktreeRepoPath>/.kagent-worktrees/`
+   */
+  worktreesDir?: string;
+
+  /**
+   * Worktree branch prefix.
+   * Default: "kagent"
+   */
+  worktreeBranchPrefix?: string;
+
+  /**
+   * Merge worktree branches back on node completion and clean up
+   * the worktree.  When false, worktrees and their branches persist
+   * for manual review.
+   * Default: false.
+   */
+  autoMergeWorktrees?: boolean;
+
+  /**
+   * Clean up (force-remove) all remaining worktrees when the
+   * orchestration session completes or is cancelled.
+   * Default: true.
+   */
+  autoCleanupWorktrees?: boolean;
 }
 
 // ─── OrchestratorAgent ────────────────────────────────────────────────────
@@ -108,6 +156,15 @@ export class OrchestratorAgent extends Agent {
   private maxParallelNodes: number;
   private maxTotalNodes: number;
 
+  // ── Worktree config ─────────────────────────────────────────────────
+
+  private enableWorktrees: boolean;
+  private worktreeRepoPath?: string;
+  private worktreesDir?: string;
+  private worktreeBranchPrefix: string;
+  private autoMergeWorktrees: boolean;
+  private autoCleanupWorktrees: boolean;
+
   // ── Runtime state ───────────────────────────────────────────────────
 
   /** The current task graph. */
@@ -119,6 +176,9 @@ export class OrchestratorAgent extends Agent {
   /** Internal flag: when true, run() skips state reset (used by resume()). */
   private _skipStateReset = false;
 
+  /** Git worktree manager (created in init() when enableWorktrees is true). */
+  private worktreeManager?: GitWorktreeManager;
+
   constructor(config: OrchestratorAgentConfig) {
     const mergedConfig: OrchestratorAgentConfig = {
       ...config,
@@ -129,6 +189,13 @@ export class OrchestratorAgent extends Agent {
     this.maxRounds = config.maxRounds ?? 3;
     this.maxParallelNodes = config.maxParallelNodes ?? 5;
     this.maxTotalNodes = config.maxTotalNodes ?? 20;
+
+    this.enableWorktrees = config.enableWorktrees ?? false;
+    this.worktreeRepoPath = config.worktreeRepoPath;
+    this.worktreesDir = config.worktreesDir;
+    this.worktreeBranchPrefix = config.worktreeBranchPrefix ?? "kagent";
+    this.autoMergeWorktrees = config.autoMergeWorktrees ?? false;
+    this.autoCleanupWorktrees = config.autoCleanupWorktrees ?? true;
 
     this.rebuildSystemPrompt();
   }
@@ -176,6 +243,24 @@ export class OrchestratorAgent extends Agent {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error("Orchestrator", message);
       return message;
+    }
+
+    // Initialise worktree manager if enabled (lazy — survives resume).
+    if (this.enableWorktrees && this.worktreeRepoPath && !this.worktreeManager) {
+      try {
+        this.worktreeManager = new GitWorktreeManager({
+          repoPath: this.worktreeRepoPath,
+          worktreesDir: this.worktreesDir,
+          branchPrefix: this.worktreeBranchPrefix,
+          logger: this.logger,
+          autoCleanup: this.autoCleanupWorktrees,
+        });
+        this.logger.info("Orchestrator", "Git worktree isolation enabled.");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error("Orchestrator", `Failed to start worktree manager: ${message}`);
+        return message;
+      }
     }
 
     const userMessage = Message.user(input);
@@ -229,6 +314,9 @@ export class OrchestratorAgent extends Agent {
     for (let round = 0; round < this.maxRounds; round++) {
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");
+        if (this.autoCleanupWorktrees) {
+          await this.worktreeManager?.cleanup();
+        }
         const sid = this.sessionManager?.getSessionId() ?? "unknown";
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
@@ -429,11 +517,45 @@ export class OrchestratorAgent extends Agent {
         node.status = "running";
         node.startedAt = Date.now();
 
+        // ── Create isolated worktree (if enabled) ─────────────────────
+        let workdir: string | undefined;
+        if (this.worktreeManager) {
+          try {
+            const wt = await this.worktreeManager.createWorktree({
+              nodeId: node.id,
+              baseRef: node.worktreeBaseRef,
+            });
+            node.worktreeId = wt.id;
+            workdir = wt.path;
+            this.logger.info(
+              "Orchestrator",
+              `  Worktree "${wt.id}" created for [${node.id}] at ${wt.path}`,
+            );
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.logger.warn("Orchestrator", `  Failed to create worktree for [${node.id}]: ${message}`);
+            node.status = "failed";
+            node.result = {
+              subAgentId: `error_${node.id}`,
+              name: node.subAgentName,
+              success: false,
+              output: `Failed to create isolated worktree: ${message}`,
+              durationMs: 0,
+            };
+            node.durationMs = 0;
+            continue;
+          }
+        }
+
         // Resolve template variables in the input
         const resolvedInput = this.resolveInputTemplate(node);
 
         try {
-          const runId = this.getSubAgentManager().spawn(node.subAgentName, resolvedInput);
+          const runId = this.getSubAgentManager().spawn(
+            node.subAgentName,
+            resolvedInput,
+            workdir ? { workdir } : undefined,
+          );
           node.runId = runId;
           this.logger.info("Orchestrator", `  Spawned [${node.id}] → ${node.subAgentName} (${runId})`);
 
@@ -459,6 +581,33 @@ export class OrchestratorAgent extends Agent {
 
       // Poll until all dispatched nodes in this wave complete
       await this.pollUntilNodesComplete(readyNodes);
+
+      // ── Handle worktree lifecycle after node completion ────────────
+      if (this.worktreeManager) {
+        for (const node of readyNodes) {
+          if (!node.worktreeId) continue;
+          try {
+            if (node.status === "completed" && this.autoMergeWorktrees) {
+              await this.worktreeManager.removeWorktree(node.worktreeId, {
+                force: false,
+                mergeBack: true,
+                deleteBranch: true,
+              });
+            } else if (this.autoCleanupWorktrees) {
+              await this.worktreeManager.removeWorktree(node.worktreeId, {
+                force: true,
+                deleteBranch: true,
+              });
+            }
+            // else: leave worktree on disk for manual inspection
+          } catch (err: unknown) {
+            this.logger.warn(
+              "Orchestrator",
+              `  Failed to clean up worktree for [${node.id}]: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      }
 
       // Inject completed results into context
       for (const node of readyNodes) {
@@ -839,6 +988,7 @@ Rules:
       orchestratorState: {
         taskGraph: this.taskGraph,
         completedRounds: this.completedRounds,
+        worktreeState: this.worktreeManager?.buildSessionState(),
       },
     };
   }
@@ -853,6 +1003,11 @@ Rules:
       const os = state.orchestratorState as OrchestratorSessionState;
       this.taskGraph = os.taskGraph;
       this.completedRounds = os.completedRounds;
+
+      // Restore worktree state so we can resume managing active worktrees
+      if (os.worktreeState && this.worktreeManager) {
+        this.worktreeManager.restoreSessionState(os.worktreeState);
+      }
     }
 
     return state;

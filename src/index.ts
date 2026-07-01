@@ -9,6 +9,21 @@ export { FusionAgent } from "./core/fusion-agent";
 export type { FusionAgentConfig, PlanConfirmCallback } from "./core/fusion-agent";
 export { OrchestratorAgent } from "./orchestrator/orchestrator-agent";
 export type { OrchestratorAgentConfig } from "./orchestrator/orchestrator-agent";
+
+// Git — worktree isolation for sub-agent orchestration
+export { GitWorktreeManager } from "./git/index";
+export { GitWorktreeError } from "./git/index";
+export type {
+  GitWorktreeConfig,
+  GitWorktreeErrorCode,
+  WorktreeInfo,
+  WorktreeStatus,
+  CreateWorktreeOptions,
+  RemoveWorktreeOptions,
+  WorktreeStatusResult,
+  WorktreeSessionState,
+} from "./git/index";
+
 export type { Tool } from "./core/types";
 export type { AgentHooks } from "./core/hooks";
 

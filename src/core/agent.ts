@@ -342,6 +342,16 @@ export interface AgentConfig {
    * Set to `false` to always execute tools one at a time (legacy behaviour).
    */
   enableParallelToolExecution?: boolean;
+
+  /**
+   * Working directory for this agent.
+   *
+   * When set, sub-agents spawned by this agent receive this as their
+   * working directory so file operations and bash commands are scoped
+   * to the correct location.  Used by the OrchestratorAgent to point
+   * each sub-agent at its isolated git worktree.
+   */
+  workdir?: string;
 }
 
 /**
@@ -444,6 +454,9 @@ export abstract class Agent {
   /** Skills directory path (from AgentConfig). */
   protected skillsDir?: string;
 
+  /** Working directory for this agent (from AgentConfig). */
+  protected workdir?: string;
+
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
@@ -505,6 +518,7 @@ export abstract class Agent {
     this.subAgentsDir = config.subAgentsDir;
     this.subAgentHooks = config.subAgentHooks;
     this.skillsDir = config.skillsDir;
+    this.workdir = config.workdir;
     this.ragConfig = config.rag;
 
     // Resolve sub-agent LLM:

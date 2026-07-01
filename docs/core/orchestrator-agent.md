@@ -200,6 +200,71 @@ const agent = new OrchestratorAgent({
 - **主 trace** 显示 Decompose → Dispatch（🚀 spawn + 📬 result）→ Synthesize → Adapt 的完整时间线
 - **子 trace** 每个子 Agent 有独立的 `.html` 文件，记录其内部 ReAct 循环
 
+## Git Worktree 隔离
+
+当多个子 agent 并行修改同一仓库时，需要文件系统级别的隔离以避免互相踩踏。Orchestrator 支持为每个子 agent 任务节点创建独立的 [git worktree](https://git-scm.com/docs/git-worktree)。
+
+### 启用 Worktree
+
+```ts
+const agent = new OrchestratorAgent({
+  llm: provider,
+  subAgentsDir: "./subagents",
+
+  // Worktree 配置
+  enableWorktrees: true,                    // 开启 worktree 隔离
+  worktreeRepoPath: "/path/to/your/repo",   // 仓库根目录（必填）
+  autoMergeWorktrees: true,                 // 节点完成后自动 merge 回主分支
+  autoCleanupWorktrees: true,               // 会话结束后清理 worktree
+})
+```
+
+### 配置项
+
+```ts
+interface OrchestratorAgentConfig {
+  /** 是否启用 git worktree 隔离（默认 false） */
+  enableWorktrees?: boolean
+
+  /** 仓库根目录（enableWorktrees=true 时必填） */
+  worktreeRepoPath?: string
+
+  /** worktree 父目录（默认 .kagent-worktrees/） */
+  worktreesDir?: string
+
+  /** 分支名前缀（默认 "kagent"） */
+  worktreeBranchPrefix?: string
+
+  /** 节点完成后自动 merge 并清理 worktree（默认 false） */
+  autoMergeWorktrees?: boolean
+
+  /** 会话结束时强制清理所有 worktree（默认 true） */
+  autoCleanupWorktrees?: boolean
+}
+```
+
+### 执行流程
+
+启用 worktree 后，每个任务节点的执行变为：
+
+```
+[节点 N] → 创建 worktree → spawn 子 agent（工作目录 = worktree）
+                              ↓
+                         子 agent 修改文件、git commit 等
+                              ↓
+                         节点完成 → 可选 merge 回主分支 → 清理 worktree
+```
+
+子 agent 通过 `workdir` 参数自动将其工作目录限定在 worktree 内，文件操作均在隔离环境中进行。
+
+### 分支命名
+
+自动生成的分支名格式为 `{branchPrefix}/{nodeId}-{timestamp}`。可以通过 `worktreeBranchPrefix` 自定义前缀。也可在 `TaskNode` 层面指定 `worktreeBaseRef` 来基于特定分支创建 worktree。
+
+### 会话恢复
+
+Worktree 状态会随 session checkpoint 一起持久化。中断后恢复时，Orchestrator 会还原 worktree 注册表，使未完成的 worktree 可以被重新接管。
+
 ## 什么时候用 Orchestrator？
 
 ✅ **适合**:
