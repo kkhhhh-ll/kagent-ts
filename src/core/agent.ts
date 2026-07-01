@@ -162,23 +162,10 @@ export interface AgentConfig {
   // ─── User Preferences ───────────────────────────────────────────────
 
   /**
-   * Explicit user preferences: key-value pairs of plain-text directives
-   * injected into the system prompt so the LLM always honors them.
-   *
-   * Example:
-   * ```ts
-   * preferences: {
-   *   codeStyle: "Use TypeScript with functional style.",
-   *   language: "Always respond in Chinese.",
-   * }
-   * ```
-   */
-  preferences?: Preferences;
-
-  /**
    * A pre-configured PreferenceManager for file-based persistence.
-   * When provided, preferences auto-load on construction and persist
-   * on every set/delete operation.
+   * Preferences are loaded from the markdown file on construction
+   * and auto-reloaded before each run (so manual edits to the file
+   * take effect without restarting the agent).
    */
   preferenceManager?: PreferenceManager;
 
@@ -542,13 +529,10 @@ export abstract class Agent {
 
     // ── User Preferences ─────────────────────────────────────────────────
     this.preferenceManager = config.preferenceManager;
-    this.preferences = config.preferences ?? {};
 
-    // If a PreferenceManager is configured, load persisted prefs
-    // and merge with inline prefs (inline values take precedence)
+    // Preferences come exclusively from the markdown file
     if (this.preferenceManager) {
-      const persisted = this.preferenceManager.getAll();
-      this.preferences = { ...persisted, ...this.preferences };
+      this.preferences = this.preferenceManager.getAll();
     }
 
     // If preferences are non-empty, inject them into the system prompt

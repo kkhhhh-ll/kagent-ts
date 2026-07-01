@@ -48,9 +48,6 @@ interface AgentConfig {
   /** 子代理生命周期钩子（支持静态/数组/工厂函数） */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  /** 用户偏好 */
-  preferences?: Record<string, string>
-
   /** Memory 管理器配置 */
   memoryConfig?: MemoryConfig
 

@@ -204,8 +204,8 @@ async function safeRun(userInput: string) {
     systemPrompt: '你是一个安全的 AI 助手...',
     tools: [],
     // 以下内容会被自动加固后注入 system prompt:
-    rulesPath: './RULES.md',           // → wrapUserAuthored + 注入扫描
-    preferences: { codeStyle: '...' }, // → wrapUserAuthored + 注入扫描
+    rulesPath: './RULES.md',                            // → wrapUserAuthored + 注入扫描
+    preferenceManager: new PreferenceManager(),         // → 从 .kagent/preferences.md 加载，自动加固
   })
 
   return await agent.run(userInput)

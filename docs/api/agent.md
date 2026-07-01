@@ -141,7 +141,6 @@ interface AgentConfig {
    */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  preferences?: Record<string, string>
   memoryConfig?: MemoryConfig
   enableReflection?: boolean
   tokenBudget?: TokenBudgetConfig
