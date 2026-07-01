@@ -13,9 +13,9 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 export interface ReflectionHookConfig {
   /** LLM provider (shared with the main agent). */
   llm: LLMProvider;
-  /** ErrorNotebook for persisting error reflection findings. */
-  notebook: ErrorNotebook;
-  /** MemoryManager for persisting extracted memories. */
+  /** ErrorNotebook for persisting error reflection findings (optional — skip to disable error reflection). */
+  notebook?: ErrorNotebook;
+  /** MemoryManager for persisting extracted memories (optional — skip to disable memory extraction). */
   memoryManager?: MemoryManager;
   /** Max ReAct iterations for the error reflector sub-agent (default: 4). */
   maxErrorIterations?: number;
@@ -50,7 +50,7 @@ export interface ReflectionHookConfig {
  */
 export function createReflectionHook(
   config: ReflectionHookConfig,
-): AgentHooks & { readonly notebook: ErrorNotebook; readonly memoryManager: MemoryManager | null } {
+): AgentHooks & { readonly notebook: ErrorNotebook | null; readonly memoryManager: MemoryManager | null } {
   const { llm, notebook, memoryManager } = config;
   const logger = config.logger ?? new ConsoleLogger();
 
@@ -58,11 +58,13 @@ export function createReflectionHook(
   let userQuery: string | null = null;
   let lastConversation: MessageData[] = [];
 
-  const errorReflector = new ReflectionAgent({
-    llm,
-    notebook,
-    maxIterations: config.maxErrorIterations,
-  });
+  const errorReflector = notebook
+    ? new ReflectionAgent({
+        llm,
+        notebook,
+        maxIterations: config.maxErrorIterations,
+      })
+    : null;
 
   const memoryReflector = memoryManager
     ? new MemoryReflector({
@@ -105,8 +107,9 @@ export function createReflectionHook(
       // Run error reflector and memory reflector in parallel.
       // Both are best-effort — failures in one don't affect the other.
       const [errorEntries, memoryEntries] = await Promise.all([
-        // Error reflection
+        // Error reflection (skip if no notebook configured)
         (async () => {
+          if (!errorReflector) return [];
           try {
             const entries = await errorReflector.reflect({
               userQuery: query,
@@ -127,7 +130,7 @@ export function createReflectionHook(
           }
         })(),
 
-        // Memory extraction
+        // Memory extraction (skip if no memoryManager configured)
         (async () => {
           if (!memoryReflector) return [];
           try {
@@ -159,5 +162,5 @@ export function createReflectionHook(
     },
   };
 
-  return { ...hook, notebook, memoryManager: memoryManager ?? null };
+  return { ...hook, notebook: notebook ?? null, memoryManager: memoryManager ?? null };
 }

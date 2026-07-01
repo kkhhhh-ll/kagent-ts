@@ -148,7 +148,27 @@ describe("createReflectionHook", () => {
         logger: new SilentLogger(),
       });
 
+      expect(hook.notebook).toBe(notebook);
       expect(hook.memoryManager).toBeNull();
+    });
+
+    it("creates a hook with memoryManager only (no notebook)", () => {
+      const llm: LLMProvider = {
+        model: "mock",
+        chat: async () => ({ content: "{}" }),
+        chatStream: async function* () { yield { type: "done" as const }; },
+        getTokenCount: () => 10,
+      };
+
+      const hook = createReflectionHook({
+        llm,
+        memoryManager,
+        maxMemoryIterations: 1,
+        logger: new SilentLogger(),
+      });
+
+      expect(hook.notebook).toBeNull();
+      expect(hook.memoryManager).toBe(memoryManager);
     });
   });
 

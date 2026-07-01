@@ -29,7 +29,7 @@ ReflectionHook.onFinish()
 
 ## 通过 Hook 使用
 
-推荐方式——任何 Agent 类型都可以通过 `createReflectionHook` 添加反思：
+推荐方式——任何 Agent 类型都可以通过 `createReflectionHook` 添加反思。`notebook` 和 `memoryManager` **独立可选**，可以按需组合：
 
 ```ts
 import {
@@ -40,19 +40,24 @@ import {
   createReflectionHook,
 } from 'kagent-ts'
 
+// 两个都要
 const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
 const memory = new MemoryManager('.memory')
 
 const hook = createReflectionHook({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-  notebook,
-  memoryManager: memory,         // 可选：不传则只做错题本反思
-  maxErrorIterations: 4,         // 可选，默认 4
-  maxMemoryIterations: 5,        // 可选，默认 5
+  notebook,                       // 可选：不传则跳过错题本反思
+  memoryManager: memory,          // 可选：不传则跳过记忆提取
+  maxErrorIterations: 4,          // 可选，默认 4
+  maxMemoryIterations: 5,         // 可选，默认 5
   onReflectionComplete: (entryCount, memoryCount) => {
     console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
   },
 })
+
+// 也可以只启用一个：
+// createReflectionHook({ llm, notebook })            // 只要错题本
+// createReflectionHook({ llm, memoryManager: mem })  // 只要记忆提取
 
 const agent = new ReActAgent({
   llm: mainProvider,
