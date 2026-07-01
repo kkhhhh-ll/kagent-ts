@@ -91,6 +91,12 @@ function validateSkillName(name: string): void {
 export class FileSkillLoader {
   private directory: string;
   private logger: Logger;
+  /**
+   * Map from skill name (frontmatter `name`) to its directory basename.
+   * Directory names and frontmatter `name` may differ, so we record the
+   * mapping during `scan()` and use it in `loadSystemPrompt()`.
+   */
+  private skillDirs = new Map<string, string>();
 
   /**
    * @param directory Path to the skills root directory (default: `./skills`).
@@ -114,7 +120,10 @@ export class FileSkillLoader {
    */
   getSkillDir(name: string): string {
     validateSkillName(name);
-    return path.join(this.directory, name);
+    // Use the mapped directory basename so frontmatter `name` mismatches
+    // don't break resolution.
+    const dirName = this.skillDirs.get(name) ?? name;
+    return path.join(this.directory, dirName);
   }
 
   /**
@@ -181,6 +190,7 @@ export class FileSkillLoader {
         description: frontmatter.description?.trim() ?? "",
         systemPrompt: "", // Loaded lazily on activation
       });
+      this.skillDirs.set(name, entry.name);
     }
 
     return skills;

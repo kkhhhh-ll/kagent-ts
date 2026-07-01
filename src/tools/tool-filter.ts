@@ -27,7 +27,7 @@ export interface ToolFilter {
  *
  * @example
  * ```ts
- * const filter = allowlist(["read_file", "grep", "glob"]);
+ * const filter = allowlist("read_file", "grep", "glob");
  * ```
  */
 export function allowlist(...names: string[]): ToolFilter {
