@@ -13,6 +13,24 @@ MCP 是一种开放协议，允许 AI 应用安全地连接到外部数据源和
 
 ## 配置 MCP Server
 
+**推荐方式：使用 JSON 配置文件**（便于复用、分享，密钥不入 git）
+
+创建 `mcp.json`：
+
+```json
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  },
+  "weather": {
+    "url": "http://localhost:3001/sse"
+  }
+}
+```
+
+在 Agent 中引用：
+
 ```ts
 import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
@@ -20,43 +38,49 @@ const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
   provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
-  mcpServers: [
-    // 方式 1: stdio 传输 (本地进程)
-    {
-      name: 'filesystem',
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
-    },
-    // 方式 2: SSE 传输 (远程服务)
-    {
-      name: 'database',
-      transport: 'sse',
-      url: 'http://localhost:3001/sse',
-    },
-  ],
+  mcpConfigPath: './mcp.json',  // 从文件加载
 })
 ```
+
+也可以内联配置（优先级高于文件中的同名 server）：
+
+```ts
+const agent = new ReActAgent({
+  mcpConfigPath: './mcp.json',
+  mcpServers: {
+    filesystem: {                                // 覆盖 mcp.json 中的 filesystem
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "./project"],
+    },
+  },
+})
+```
+
+两种传输方式：
+- **stdio**：`command` + `args`（可选 `env`），启动本地进程
+- **SSE**：`url`，连接远程服务
 
 ## 连接配置
 
 ```ts
 interface McpServerConfig {
-  /** Server 名称 (工具前缀) */
-  name: string
+  /** stdio 传输：启动命令 */
+  command?: string
 
-  /** 传输类型 */
-  transport: 'stdio' | 'sse'
+  /** stdio 传输：命令参数 */
+  args?: string[]
 
-  /** stdio 配置 */
-  command?: string      // 启动命令
-  args?: string[]       // 命令参数
-  env?: Record<string, string>  // 环境变量
+  /** stdio 传输：进程环境变量 */
+  env?: Record<string, string>
 
-  /** SSE 配置 */
-  url?: string          // SSE 端点 URL
+  /** SSE 传输：远程端点 URL */
+  url?: string
 }
 ```
+
+- **stdio 模式**：设置 `command`（必填）和 `args`/`env`（选填）
+- **SSE 模式**：设置 `url`（选填）
+- `command` 和 `url` 互斥，至少提供一个
 
 ## 工具发现流程
 
@@ -139,6 +163,20 @@ interface McpConnectionStatus {
 
 ## 完整示例
 
+`mcp.json`：
+
+```json
+{
+  "fs": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "./project"]
+  },
+  "pg": {
+    "url": "http://localhost:3001/sse"
+  }
+}
+```
+
 ```ts
 import { ReActAgent, AnthropicProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
@@ -149,19 +187,7 @@ const agent = new ReActAgent({
     model: 'claude-sonnet-4-6',
   }),
   tools: BUILTIN_TOOLS,
-  mcpServers: [
-    {
-      name: 'fs',
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', './project'],
-    },
-    {
-      name: 'pg',
-      transport: 'sse',
-      url: 'http://localhost:3001/sse',
-    },
-  ],
+  mcpConfigPath: './mcp.json',
 })
 
 await agent.run('查询数据库中有多少用户，然后生成一份用户统计报告文件。')

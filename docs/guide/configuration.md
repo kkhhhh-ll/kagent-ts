@@ -36,8 +36,11 @@ interface AgentConfig {
   /** Session ID (用于会话持久化) */
   sessionId?: string
 
-  /** MCP Server 配置 */
-  mcpServers?: McpServerConfig[]
+  /** MCP Server 配置文件路径 (推荐) */
+  mcpConfigPath?: string
+
+  /** MCP Server 内联配置 (会覆盖文件中的同名 server) */
+  mcpServers?: Record<string, McpServerConfig>
 
   /** RAG 知识检索配置 */
   rag?: RAGConfig

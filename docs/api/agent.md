@@ -129,7 +129,8 @@ interface AgentConfig {
   onToolApproval?: ApprovalCallback
   allowParallelToolCalls?: boolean
   sessionId?: string
-  mcpServers?: McpServerConfig[]
+  mcpConfigPath?: string          // 推荐：从 JSON 文件加载 MCP 配置
+  mcpServers?: Record<string, McpServerConfig>  // 内联覆盖
   subAgents?: SubAgentDefinition[]
 
   /**
