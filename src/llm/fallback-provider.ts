@@ -65,6 +65,14 @@ export class FallbackProvider implements LLMProvider {
       const provider = this.providers[i];
       try {
         const response = await provider.chat(messages, tools, signal);
+
+        // Tag response with provider metadata so downstream consumers
+        // (e.g. Orchestrator synthesis) can account for model degradation.
+        response.providerMeta = {
+          model: provider.model,
+          isFallback: i > 0,
+        };
+
         if (i > 0) {
           this.logger.info(
             "Fallback",

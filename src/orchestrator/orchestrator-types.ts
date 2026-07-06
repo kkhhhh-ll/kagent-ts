@@ -23,6 +23,23 @@ export type TaskNodeStatus =
   | "failed";     // Sub-agent errored or timed out
 
 /**
+ * Failure handling strategy when a task node fails during dispatch.
+ *
+ * - `"retry-subtree"`: Retry the failed node and invalidate all downstream
+ *   dependents (direct and transitive) so they re-execute with fresh input.
+ *   This is the default — it maximises result correctness while avoiding
+ *   redundant re-execution of unrelated branches.
+ * - `"retry-all"`: Reset every node in the DAG and restart from scratch.
+ *   Useful when correctness is paramount and partial results are untrustworthy.
+ * - `"continue"`: Mark the node as failed but let downstream nodes proceed
+ *   with error information injected (current behaviour).
+ */
+export type FailureStrategy =
+  | "retry-subtree"
+  | "retry-all"
+  | "continue";
+
+/**
  * A single node in the orchestration task DAG.
  *
  * Each node represents one sub-agent invocation.  Dependencies are
@@ -85,6 +102,23 @@ export interface TaskNode {
    * Example: a node that should work on a specific feature branch.
    */
   worktreeBaseRef?: string;
+
+  // ── Retry tracking (populated during execution) ──────────────────
+
+  /**
+   * Number of times this node has been retried after failure.
+   * Starts at 0 (first attempt). Incremented by handleFailedNodes()
+   * before each retry.
+   */
+  retryCount: number;
+
+  /**
+   * Maximum number of retry attempts before giving up.
+   * Set from OrchestratorAgentConfig.maxRetriesPerNode.
+   * Optional for backward compatibility with sessions saved before
+   * this feature was added.
+   */
+  maxRetries?: number;
 }
 
 /**

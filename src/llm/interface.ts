@@ -66,6 +66,19 @@ export interface LLMResponse {
     code: LLMResponseErrorCode;
     message: string;
   };
+  /**
+   * Provider metadata — set by the LLM provider to communicate runtime
+   * information about which model actually handled the request.
+   *
+   * Consumers (e.g. Orchestrator synthesis) can use this to adjust their
+   * confidence in the response when a fallback / weaker model was used.
+   */
+  providerMeta?: {
+    /** The actual model ID that produced this response. */
+    model: string;
+    /** Whether this response came from a fallback (non-primary) provider. */
+    isFallback: boolean;
+  };
 }
 
 /**

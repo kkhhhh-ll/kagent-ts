@@ -46,6 +46,7 @@ export function parseDecomposeResponse(raw: string): OrchestrationPlan {
                 ? n.dependsOn.map(String)
                 : [],
               status: "pending" as const,
+              retryCount: 0,
             });
           }
         }
@@ -155,6 +156,7 @@ export function parseSynthesizeResponse(raw: string): SynthesisResult {
 export function buildSynthesizePrompt(
   userRequest: string,
   completedResults: string,
+  fallbackNotice?: string,
 ): string {
   return `You are a synthesiser. Review the results below from multiple sub-agents
 that were working on the user's request, and determine whether you have enough
@@ -162,7 +164,7 @@ information to provide a complete, high-quality answer.
 
 === User's Original Request ===
 ${userRequest}
-
+${fallbackNotice ?? ""}
 === Sub-Agent Results ===
 ${completedResults}
 
@@ -225,6 +227,7 @@ export function parseAdaptResponse(raw: string): AdaptResult {
                 ? n.dependsOn.map(String)
                 : [],
               status: "pending" as const,
+              retryCount: 0,
             });
           }
         }

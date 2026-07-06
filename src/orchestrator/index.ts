@@ -8,6 +8,7 @@ export type {
   SynthesisResult,
   AdaptResult,
   OrchestratorSessionState,
+  FailureStrategy,
 } from "./orchestrator-types";
 export {
   parseDecomposeResponse,

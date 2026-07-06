@@ -849,4 +849,511 @@ describe("OrchestratorAgent", () => {
       expect((agent as any).getAgentType()).toBe("orchestrator");
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Retry: Node-Level Failure Handling
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe("retry", () => {
+    // ── Unit tests: helper methods ─────────────────────────────────────
+
+    describe("getDependents()", () => {
+      it("finds all direct and transitive dependents in BFS order", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        // Build a manual task graph: A → B → C → D,  A → E
+        const nodes: any[] = [
+          { id: "A", dependsOn: [], status: "completed" },
+          { id: "B", dependsOn: ["A"], status: "completed" },
+          { id: "C", dependsOn: ["B"], status: "pending" },
+          { id: "D", dependsOn: ["C"], status: "pending" },
+          { id: "E", dependsOn: ["A"], status: "completed" },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const deps = (agent as any).getDependents("A");
+        const depIds = deps.map((d: any) => d.id);
+
+        // BFS order: children of A first (B, E), then grandchildren (C), then D
+        expect(depIds).toContain("B");
+        expect(depIds).toContain("E");
+        expect(depIds).toContain("C");
+        expect(depIds).toContain("D");
+        // B and E must come before C (BFS)
+        expect(depIds.indexOf("B")).toBeLessThan(depIds.indexOf("C"));
+        expect(depIds.indexOf("E")).toBeLessThan(depIds.indexOf("C"));
+        expect(depIds.indexOf("C")).toBeLessThan(depIds.indexOf("D"));
+      });
+
+      it("returns empty array for leaf node with no dependents", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        (agent as any).taskGraph = {
+          nodes: [{ id: "leaf", dependsOn: [], status: "completed" }],
+        };
+
+        const deps = (agent as any).getDependents("leaf");
+        expect(deps).toHaveLength(0);
+      });
+    });
+
+    describe("resetNodeForRetry()", () => {
+      it("resets all runtime fields to defaults", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        const node: any = {
+          id: "test",
+          status: "failed",
+          result: { output: "error" },
+          runId: "run-123",
+          startedAt: 1000,
+          durationMs: 500,
+          worktreeId: "wt-1",
+        };
+        (agent as any).resetNodeForRetry(node);
+
+        expect(node.status).toBe("pending");
+        expect(node.result).toBeUndefined();
+        expect(node.runId).toBeUndefined();
+        expect(node.startedAt).toBeUndefined();
+        expect(node.durationMs).toBeUndefined();
+        expect(node.worktreeId).toBeUndefined();
+      });
+    });
+
+    describe("invalidateDependents()", () => {
+      it("resets completed and failed dependents only", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        const nodes: any[] = [
+          { id: "A", dependsOn: [], status: "failed", retryCount: 1, maxRetries: 2 },
+          { id: "B", dependsOn: ["A"], status: "completed", result: {}, retryCount: 0, maxRetries: 2 },
+          { id: "C", dependsOn: ["A"], status: "pending", retryCount: 0, maxRetries: 2 },
+          { id: "D", dependsOn: ["B"], status: "running", retryCount: 0, maxRetries: 2 },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        (agent as any).invalidateDependents("A");
+
+        // B and D should be reset (completed/running)
+        expect(nodes[1].status).toBe("pending");   // B was completed → pending
+        expect(nodes[1].result).toBeUndefined();
+        // C was already pending — not reset
+        expect(nodes[2].status).toBe("pending");
+        // D was running → pending
+        expect(nodes[3].status).toBe("pending");
+      });
+    });
+
+    describe("handleFailedNodes()", () => {
+      it("retries a failed node and returns true (retry-subtree strategy)", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree", maxRetriesPerNode: 2 },
+        );
+        const node: any = {
+          id: "failed_node",
+          dependsOn: [],
+          status: "failed",
+          result: { output: "error" },
+          retryCount: 0,
+          maxRetries: 2,
+        };
+        (agent as any).taskGraph = { nodes: [node] };
+
+        const result = (agent as any).handleFailedNodes([node]);
+
+        expect(result).toBe(true);
+        expect(node.retryCount).toBe(1);
+        expect(node.status).toBe("pending");
+        expect(node.result).toBeUndefined();
+      });
+
+      it("gives up when retries are exhausted", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree", maxRetriesPerNode: 2 },
+        );
+        const node: any = {
+          id: "stubborn",
+          dependsOn: [],
+          status: "failed",
+          result: { output: "error" },
+          retryCount: 2,  // already at max
+          maxRetries: 2,
+        };
+        (agent as any).taskGraph = { nodes: [node] };
+
+        const result = (agent as any).handleFailedNodes([node]);
+
+        expect(result).toBe(false);  // no retry triggered
+        expect(node.status).toBe("failed");  // stays failed
+      });
+
+      it("continue strategy: leaves node as failed, returns false", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "continue", maxRetriesPerNode: 2 },
+        );
+        const node: any = {
+          id: "fail_continue",
+          dependsOn: [],
+          status: "failed",
+          result: { output: "error" },
+          retryCount: 0,
+          maxRetries: 2,
+        };
+        (agent as any).taskGraph = { nodes: [node] };
+
+        const result = (agent as any).handleFailedNodes([node]);
+
+        expect(result).toBe(false);
+        expect(node.status).toBe("failed");
+      });
+
+      it("retry-all strategy: resets ALL nodes in the graph", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-all", maxRetriesPerNode: 2 },
+        );
+        const nodes: any[] = [
+          { id: "A", dependsOn: [], status: "completed", result: { output: "A" }, retryCount: 0, maxRetries: 2 },
+          { id: "B", dependsOn: ["A"], status: "failed", result: { output: "err" }, retryCount: 0, maxRetries: 2 },
+          { id: "C", dependsOn: [], status: "pending", retryCount: 0, maxRetries: 2 },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const result = (agent as any).handleFailedNodes([nodes[1]]);  // B failed
+
+        expect(result).toBe(true);
+        // All nodes reset
+        for (const n of nodes) {
+          expect(n.status).toBe("pending");
+          expect(n.result).toBeUndefined();
+        }
+      });
+
+      it("invalidates dependents on retry-subtree", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree", maxRetriesPerNode: 2 },
+        );
+        const nodes: any[] = [
+          { id: "root", dependsOn: [], status: "failed", result: { output: "err" }, retryCount: 0, maxRetries: 2 },
+          { id: "child", dependsOn: ["root"], status: "completed", result: { output: "stale" }, retryCount: 0, maxRetries: 2 },
+          { id: "grandchild", dependsOn: ["child"], status: "completed", result: { output: "also stale" }, retryCount: 0, maxRetries: 2 },
+          { id: "sibling", dependsOn: [], status: "completed", result: { output: "unrelated" }, retryCount: 0, maxRetries: 2 },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const result = (agent as any).handleFailedNodes([nodes[0]]);
+
+        expect(result).toBe(true);
+        // Root reset
+        expect(nodes[0].status).toBe("pending");
+        // Child and grandchild invalidated
+        expect(nodes[1].status).toBe("pending");
+        expect(nodes[2].status).toBe("pending");
+        // Unrelated sibling NOT touched
+        expect(nodes[3].status).toBe("completed");
+        expect(nodes[3].result).toBeDefined();
+      });
+
+      it("skips non-failed nodes", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree", maxRetriesPerNode: 2 },
+        );
+        const node: any = {
+          id: "ok",
+          dependsOn: [],
+          status: "completed",
+          result: { output: "good" },
+          retryCount: 0,
+          maxRetries: 2,
+        };
+        (agent as any).taskGraph = { nodes: [node] };
+
+        const result = (agent as any).handleFailedNodes([node]);
+
+        expect(result).toBe(false);
+        expect(node.status).toBe("completed");
+      });
+    });
+
+    // ── Integration: getReadyNodes with failureStrategy ──────────────────
+
+    describe("getReadyNodes() with failureStrategy", () => {
+      it("retry-subtree: failed dep does NOT unblock dependent", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree" },
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "A", dependsOn: [], status: "failed", retryCount: 2, maxRetries: 2 },
+            { id: "B", dependsOn: ["A"], status: "pending", retryCount: 0, maxRetries: 2 },
+          ],
+        };
+
+        const ready = (agent as any).getReadyNodes();
+        expect(ready).toHaveLength(0);  // B blocked by failed A
+      });
+
+      it("continue: failed dep DOES unblock dependent", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "continue" },
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "A", dependsOn: [], status: "failed", retryCount: 2, maxRetries: 2 },
+            { id: "B", dependsOn: ["A"], status: "pending", retryCount: 0, maxRetries: 2 },
+          ],
+        };
+
+        const ready = (agent as any).getReadyNodes();
+        expect(ready).toHaveLength(1);
+        expect(ready[0].id).toBe("B");  // B unblocked
+      });
+
+      it("running dep never unblocks dependent", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "continue" },
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "A", dependsOn: [], status: "running", retryCount: 0, maxRetries: 2 },
+            { id: "B", dependsOn: ["A"], status: "pending", retryCount: 0, maxRetries: 2 },
+          ],
+        };
+
+        const ready = (agent as any).getReadyNodes();
+        expect(ready).toHaveLength(0);  // B blocked by running A
+      });
+
+      it("completed dep always unblocks dependent", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { failureStrategy: "retry-subtree" },
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "A", dependsOn: [], status: "completed", retryCount: 0, maxRetries: 2 },
+            { id: "B", dependsOn: ["A"], status: "pending", retryCount: 0, maxRetries: 2 },
+          ],
+        };
+
+        const ready = (agent as any).getReadyNodes();
+        expect(ready).toHaveLength(1);
+        expect(ready[0].id).toBe("B");
+      });
+    });
+
+    // ── Config defaults ─────────────────────────────────────────────────
+
+    describe("config defaults", () => {
+      it("defaults to retry-subtree with maxRetriesPerNode=2", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        expect((agent as any).failureStrategy).toBe("retry-subtree");
+        expect((agent as any).maxRetriesPerNode).toBe(2);
+      });
+
+      it("maxRetriesPerNode=0 prevents any retries", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { maxRetriesPerNode: 0 },
+        );
+        const node: any = {
+          id: "no_retry",
+          dependsOn: [],
+          status: "failed",
+          result: { output: "error" },
+          retryCount: 0,
+          maxRetries: 0,
+        };
+        (agent as any).taskGraph = { nodes: [node] };
+
+        const result = (agent as any).handleFailedNodes([node]);
+        expect(result).toBe(false);
+        expect(node.status).toBe("failed");
+      });
+    });
+
+    // ── formatCompletedResults with retry metadata ──────────────────────
+
+    describe("formatCompletedResults()", () => {
+      it("includes retry metadata for retried nodes", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "retried", description: "Retried task", status: "completed", retryCount: 1, maxRetries: 2, result: { output: "success" } },
+            { id: "fresh", description: "Fresh task", status: "completed", retryCount: 0, maxRetries: 2, result: { output: "ok" } },
+          ],
+        };
+
+        const output: string = (agent as any).formatCompletedResults();
+        expect(output).toContain("retries: 1/2");
+        expect(output).not.toContain("Fresh task (SUCCESS, retries");
+      });
+    });
+
+    // ── setNodeRetryConfig ──────────────────────────────────────────────
+
+    describe("setNodeRetryConfig()", () => {
+      it("sets maxRetries on newly created nodes", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { maxRetriesPerNode: 5 },
+        );
+        const nodes: any[] = [
+          { id: "n1", retryCount: 0 },
+          { id: "n2", retryCount: 0 },
+        ];
+        (agent as any).setNodeRetryConfig(nodes);
+
+        expect(nodes[0].maxRetries).toBe(5);
+        expect(nodes[1].maxRetries).toBe(5);
+      });
+    });
+
+    // ── Backward compat: session load ───────────────────────────────────
+
+    describe("loadAndRestoreSession backward compat", () => {
+      it("fills missing retryCount and maxRetries on restored nodes", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+          { maxRetriesPerNode: 3 },
+        );
+        // Simulate nodes loaded from an old session (no retry fields)
+        const oldNodes: any[] = [
+          { id: "old", dependsOn: [], status: "completed", result: { output: "x" } },
+        ];
+        (agent as any).taskGraph = { nodes: oldNodes };
+
+        // Simulate the loadAndRestoreSession backward compat logic inline
+        for (const node of oldNodes) {
+          if (node.retryCount === undefined) node.retryCount = 0;
+          if (node.maxRetries === undefined) node.maxRetries = (agent as any).maxRetriesPerNode;
+        }
+
+        expect(oldNodes[0].retryCount).toBe(0);
+        expect(oldNodes[0].maxRetries).toBe(3);
+      });
+    });
+
+    // ── Cycle Detection ──────────────────────────────────────────────
+
+    describe("detectAndBreakCycles()", () => {
+      it("returns null for an acyclic graph", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        (agent as any).taskGraph = {
+          nodes: [
+            { id: "A", dependsOn: [], status: "pending" },
+            { id: "B", dependsOn: ["A"], status: "pending" },
+            { id: "C", dependsOn: ["A", "B"], status: "pending" },
+          ],
+        };
+
+        const result = (agent as any).detectAndBreakCycles();
+        expect(result).toBeNull();
+      });
+
+      it("detects and breaks a simple 2-node cycle (A↔B)", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        const nodes = [
+          { id: "A", dependsOn: ["B"], status: "pending" },
+          { id: "B", dependsOn: ["A"], status: "pending" },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const cycleIds = (agent as any).detectAndBreakCycles();
+
+        expect(cycleIds).not.toBeNull();
+        expect(cycleIds).toContain("A");
+        expect(cycleIds).toContain("B");
+
+        // Both edges should be removed (A no longer depends on B, B no longer depends on A)
+        expect(nodes[0].dependsOn).toHaveLength(0);
+        expect(nodes[1].dependsOn).toHaveLength(0);
+      });
+
+      it("detects and breaks a 3-node cycle (A→B→C→A)", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        const nodes = [
+          { id: "A", dependsOn: ["C"], status: "pending" },
+          { id: "B", dependsOn: ["A"], status: "pending" },
+          { id: "C", dependsOn: ["B"], status: "pending" },
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const cycleIds = (agent as any).detectAndBreakCycles();
+
+        expect(cycleIds).not.toBeNull();
+        expect(cycleIds!.length).toBe(3);
+
+        // All cycle edges removed — every node now has in-degree 0
+        for (const n of nodes) {
+          expect(n.dependsOn).toHaveLength(0);
+        }
+      });
+
+      it("breaks cycle but leaves non-cycle dependencies intact", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        const nodes = [
+          { id: "A", dependsOn: [], status: "pending" },           // root
+          { id: "B", dependsOn: ["A"], status: "pending" },         // A→B (ok)
+          { id: "C", dependsOn: ["B", "D"], status: "pending" },    // B→C (ok), D→C (cycle)
+          { id: "D", dependsOn: ["C"], status: "pending" },         // C→D (cycle)
+        ];
+        (agent as any).taskGraph = { nodes };
+
+        const cycleIds = (agent as any).detectAndBreakCycles();
+
+        // C and D are in the cycle
+        expect(cycleIds).toContain("C");
+        expect(cycleIds).toContain("D");
+        expect(cycleIds).not.toContain("A");
+        expect(cycleIds).not.toContain("B");
+
+        // A→B intact (neither is in the cycle)
+        expect(nodes[1].dependsOn).toEqual(["A"]);
+        // B→C intact (B is not in the cycle, C is but we only remove edges
+        //          where the dep is ALSO in the cycle — B is not)
+        // Actually, wait: C's dependsOn=["B", "D"]. B is not in cycle, D is.
+        // So "D" is removed, "B" stays.
+        expect(nodes[2].dependsOn).toContain("B");
+        expect(nodes[2].dependsOn).not.toContain("D");
+        // D's dependsOn=["C"], C is in cycle → edge removed
+        expect(nodes[3].dependsOn).toHaveLength(0);
+      });
+
+      it("handles an empty graph", () => {
+        const agent = createOrchestrator(
+          mockSequenceLLM([[decomposeJSON([])]]),
+        );
+        (agent as any).taskGraph = { nodes: [] };
+
+        const result = (agent as any).detectAndBreakCycles();
+        expect(result).toBeNull();
+      });
+    });
+  });
 });

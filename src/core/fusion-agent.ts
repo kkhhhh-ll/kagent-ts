@@ -454,7 +454,7 @@ export class FusionAgent extends Agent {
       // ── Plan confirmation ──────────────────────────────────────────
       const shouldConfirm = this.shouldConfirmPlan(plan);
       if (shouldConfirm && this.onPlanConfirm) {
-        const confirmed = await this.onPlanConfirm(plan, this.routeReason);
+        const confirmed = await this.confirmPlanWithTimeout(plan);
         if (!confirmed) {
           // User rejected the plan — return it as the answer
           const planText =
@@ -512,6 +512,51 @@ export class FusionAgent extends Agent {
         return riskyKeywords.some((kw) => planText.includes(kw));
       default:
         return false;
+    }
+  }
+
+  /**
+   * Call the plan confirmation callback with a timeout, so the agent
+   * never hangs indefinitely waiting for human review.
+   *
+   * Uses the same {@link approvalTimeoutMs} / {@link approvalTimeoutStrategy}
+   * config inherited from {@link AgentConfig}.
+   */
+  private async confirmPlanWithTimeout(plan: string[]): Promise<boolean> {
+    try {
+      const result = await Promise.race([
+        this.onPlanConfirm!(plan, this.routeReason),
+        new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), (this as any).approvalTimeoutMs ?? 120_000),
+        ),
+        new Promise<"cancelled">((resolve) => {
+          const signal = (this as any)._abortController?.signal;
+          if (signal?.aborted) {
+            resolve("cancelled");
+          } else {
+            signal?.addEventListener("abort", () => resolve("cancelled"), { once: true });
+          }
+        }),
+      ]);
+
+      if (result === "timeout") {
+        this.logger.warn(
+          "Fusion",
+          `Plan confirmation timed out (${(this as any).approvalTimeoutMs ?? 120_000}ms) — ` +
+          `showing plan for manual review.`,
+        );
+        return false;
+      }
+
+      if (result === "cancelled") {
+        this.logger.info("Fusion", "Plan confirmation cancelled (agent aborted).");
+        return false;
+      }
+
+      return result;
+    } catch {
+      this.logger.warn("Fusion", "Plan confirmation callback threw — showing plan for review.");
+      return false;
     }
   }
 

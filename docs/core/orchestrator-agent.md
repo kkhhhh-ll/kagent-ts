@@ -18,6 +18,11 @@ Orchestrator Agent 是框架中最强大的范式，专为**大规模多agent协
   ├── Round 2: [Task C]           (依赖 A, B 完成)
   └── Round 3: [Task D]           (依赖 C 完成)
   ↓
+[RETRY] 检查失败节点 → 按 failureStrategy 重试
+  ├── retry-subtree: 只重跑失败的子树
+  ├── retry-all:     全图重跑
+  └── continue:      不重试，继续
+  ↓
 [SYNTHESIZE] 综合所有节点输出
   ↓
 [ADAPT] 检查是否有遗漏?
@@ -55,6 +60,8 @@ const agent = new OrchestratorAgent({
   maxRounds: 3,          // 最大编排轮次 (默认: 3)
   maxParallelNodes: 5,   // 最大并行节点数 (默认: 5)
   maxTotalNodes: 20,     // 最大总节点数 (默认: 20)
+  maxRetriesPerNode: 2,  // 单节点最大重试次数 (默认: 2)
+  failureStrategy: 'retry-subtree',  // 失败策略 (默认: "retry-subtree")
 })
 
 const answer = await agent.run(
@@ -75,6 +82,17 @@ interface OrchestratorAgentConfig extends AgentConfig {
 
   /** 整个编排过程中最大节点数 (默认: 20) */
   maxTotalNodes?: number
+
+  /** 单节点失败后最大重试次数 (默认: 2) */
+  maxRetriesPerNode?: number
+
+  /**
+   * 节点失败时的处理策略 (默认: "retry-subtree")
+   * - "retry-subtree": 重试失败节点 + 级联重跑所有下游依赖节点
+   * - "retry-all":     重置整个 DAG，从头开始
+   * - "continue":      保持失败，下游节点携带错误信息继续执行
+   */
+  failureStrategy?: FailureStrategy
 }
 ```
 
@@ -86,10 +104,13 @@ Orchestrator 使用 DAG（有向无环图）来组织任务之间的依赖关系
 interface TaskNode {
   id: string              // 节点 ID
   description: string     // 任务描述
-  dependencies: string[]  // 依赖的节点 ID 列表
-  agentType: string       // 执行该节点的子代理类型
+  dependsOn: string[]     // 依赖的节点 ID 列表
+  subAgentName: string    // 执行该节点的子代理类型
   input: string           // 子代理的输入
-  result?: string         // 执行结果 (完成后填充)
+  status: TaskNodeStatus  // 当前状态: pending | running | completed | failed
+  result?: SubAgentResult // 执行结果 (完成后填充)
+  retryCount: number      // 已重试次数 (从 0 开始)
+  maxRetries?: number     // 最大重试次数 (从配置继承)
 }
 ```
 
@@ -119,6 +140,136 @@ interface TaskNode {
 - Task E: 分析 src/tools/ 目录
 - Task F: 执行性能基准测试
 ```
+
+## 失败处理与重试
+
+当子 agent 任务节点执行失败时，Orchestrator 支持三种失败处理策略，通过 `failureStrategy` 配置。
+
+### 三种策略
+
+| 策略 | 行为 | 适用场景 |
+| ---- | ---- | -------- |
+| **`"retry-subtree"`** (默认) | 重试失败节点，同时失效化并重跑所有直接/间接下游依赖节点。未受影响的并行分支保持不变。 | 通用场景——高效且保证正确性 |
+| **`"retry-all"`** | 重置 DAG 中全部节点为 `pending`，从头开始重新执行整个任务图。 | 严格一致性要求，部分结果不可信时 |
+| **`"continue"`** | 保留失败状态，下游节点照常执行，通过模板变量获取错误信息。最终由 Synthesis 阶段判断结果是否可用。 | 探索性/容错任务 |
+
+### 重试流程 (`"retry-subtree"`)
+
+```
+[DISPATCH] Wave 1: [A] [B]  (并行)
+              ↓     ↓
+           A 失败  B 成功
+              ↓
+[RETRY]   A 重试 (retry 1/2)
+          ↓
+      失效化 A 的所有下游: C, D → reset 为 pending
+          ↓
+[DISPATCH] Wave 2: [A']         (重试 A)
+          ↓
+       A' 成功
+          ↓
+[DISPATCH] Wave 3: [C] [D]     (重跑下游)
+```
+
+- 被重置的节点会清除所有运行时状态（result、timing、worktree 等），以全新状态重新 dispatch
+- 如果重试次数耗尽（`retryCount >= maxRetries`），节点保持 `failed`，子树被放弃，最终由 `maxRounds` 兜底触发强制 synthesis
+- 与当前轮次无关的已完成节点不受影响，避免重复计算
+
+### 死锁防护
+
+- **每节点重试上限**：`retryCount >= maxRetries` 后放弃该节点
+- **`maxRounds` 兜底**：即使子树永久失败导致下游死锁，编排循环也会在达到最大轮次后触发强制 synthesis，用已有结果尽力回答
+- **`"retry-all"` 不会死锁**：全量重置后所有节点回到同一起跑线
+
+### 重试元数据
+
+被重试过的节点在 synthesis 上下文中会附带重试信息，帮助 LLM 做出更准确的完整性判断：
+
+```text
+=== [task_a] 分析核心模块 (SUCCESS, retries: 1/2) ===
+...输出内容...
+```
+
+## 环检测
+
+由于 DAG 由 LLM 生成，存在 LLM 意外生成循环依赖的可能（例如 A→B→C→A）。Orchestrator 在每次任务图更新后会自动检测并断开环。
+
+### 检测算法
+
+使用 **Kahn 拓扑排序**：从所有入度为 0 的节点开始 BFS 剥离，无法被剥离的节点即形成环。
+
+### 断环策略
+
+只删除环中节点之间的互相依赖，保留非环节点指向环中节点的合法边：
+
+```text
+检测前：  A → B → C → A  (环)
+          D → A           (合法)
+检测后：  A, B, C 各自独立（循环边全部移除）
+          D → A 保留
+```
+
+### 调用时机
+
+- **Decompose 之后**：检查初始 DAG 是否有环
+- **Adapt 追加新节点之后**：检查新节点是否与已有节点形成环
+
+检测到环时，Orchestrator 会打印 warn 日志告知涉及节点和断开的边数，然后继续执行——不影响正常流程。
+
+## 模型降级感知
+
+当使用 `FallbackProvider` 时，主模型（如 Opus）挂了会自动切换到备用模型（如 Haiku）。但弱模型产出的结果可能质量不足——Orchestrator 会自动感知并做出应对。
+
+### 工作原理
+
+`FallbackProvider` 在每次 LLM 调用后，会在响应中附加 `providerMeta` 元数据：
+
+```ts
+// LLMResponse 中自动设置
+response.providerMeta = {
+  model: "claude-haiku-4-5",  // 实际处理的模型
+  isFallback: true,            // 是否来自非主力模型
+};
+```
+
+Orchestrator 的每个阶段（Decompose / Synthesize / Adapt / ForceSynthesize）完成后，自动检查该元数据并记录降级事件。进入 Synthesis 阶段时，这些事件会注入到 prompt 中：
+
+```text
+=== Model Degradation Notice ===
+Some phases of this orchestration ran on a fallback (weaker) model:
+  - [Decompose] ran on fallback model "claude-haiku-4-5"
+Results from these phases may be less reliable. Please be more
+skeptical when evaluating completeness and quality.
+```
+
+Synthesis LLM 看到这段后会更倾向于判断 `isComplete: false`，从而触发 Adapt 阶段补做额外工作——用降级风险换执行鲁棒性。
+
+### 使用方式
+
+无需额外配置。只需将 Orchestrator 的 `llm` 设为 `FallbackProvider`：
+
+```ts
+import { FallbackProvider } from 'kagent-ts'
+
+const agent = new OrchestratorAgent({
+  llm: new FallbackProvider({
+    primary: new AnthropicProvider({ model: 'claude-opus-4-8' }),
+    fallbacks: [
+      new AnthropicProvider({ model: 'claude-sonnet-5' }),
+      new AnthropicProvider({ model: 'claude-haiku-4-5' }),
+    ],
+  }),
+  // ...
+})
+```
+
+### 适用范围
+
+| 场景 | 是否感知 | 说明 |
+| ---- | ---- | ---- |
+| Orchestrator 自身阶段（Decompose/Synthesize/Adapt） | ✅ 自动 | 降级事件注入后续 prompt |
+| 子 Agent 执行 | ⚠️ 需配置 | 将 `subAgentLLM` 也设为 `FallbackProvider` |
+| ReAct / PlanSolve / Fusion | ⚠️ 被动 | `LLMResponse.providerMeta` 已打标，范式自身可消费 |
 
 ## 完整示例
 

@@ -155,6 +155,28 @@ export interface AgentConfig {
   onToolApproval?: ApprovalCallback;
 
   /**
+   * Maximum time (ms) to wait for the `onToolApproval` callback before
+   * applying the timeout strategy. Prevents the agent from hanging
+   * indefinitely when the human reviewer is unavailable.
+   *
+   * Default: 120_000 (2 minutes).
+   */
+  approvalTimeoutMs?: number;
+
+  /**
+   * What to do when `onToolApproval` does not respond within
+   * `approvalTimeoutMs`.
+   *
+   * - `"deny"` (default): Treat the tool as denied. Safe for destructive
+   *   operations — the LLM must find a different approach.
+   * - `"allow"`: Execute the tool anyway. Use only for non-destructive
+   *   tools in trusted environments.
+   *
+   * Default: "deny".
+   */
+  approvalTimeoutStrategy?: "deny" | "allow";
+
+  /**
    * Logger instance for framework-internal messages.
    * Defaults to {@link ConsoleLogger} (writes to `console` with `[Tag]` prefix).
    * Pass a {@link SilentLogger} to suppress all framework output.
@@ -419,6 +441,12 @@ export abstract class Agent {
   /** Human-in-the-loop approval callback (from AgentConfig). */
   protected onToolApproval?: ApprovalCallback;
 
+  /** Max ms to wait for approval before applying timeout strategy. */
+  private approvalTimeoutMs: number;
+
+  /** Timeout strategy: "deny" (safe default) or "allow". */
+  private approvalTimeoutStrategy: "deny" | "allow";
+
   /** Whether to execute independent tool calls in parallel (default: true). */
   protected enableParallelToolExecution: boolean;
 
@@ -480,6 +508,8 @@ export abstract class Agent {
     this.llm = config.llm;
     this.logger = config.logger ?? new ConsoleLogger();
     this.onToolApproval = config.onToolApproval;
+    this.approvalTimeoutMs = config.approvalTimeoutMs ?? 120_000;
+    this.approvalTimeoutStrategy = config.approvalTimeoutStrategy ?? "deny";
     this.enableParallelToolExecution = config.enableParallelToolExecution ?? true;
     this.contextManager = config.contextManager ?? new ContextManager(undefined, this.logger);
 
@@ -867,18 +897,68 @@ export abstract class Agent {
    *
    * @returns `true` if approved, `false` if denied (or no callback configured).
    */
+  /**
+   * Check whether a tool requiring human approval should be executed.
+   *
+   * Waits for the {@link onToolApproval} callback, but enforces a timeout
+   * so the agent never hangs indefinitely waiting for a human who may be
+   * away. Also respects the agent-wide {@link AbortSignal} so cancelling
+   * the session interrupts any pending approval.
+   *
+   * @returns `true` if approved, `false` if denied / timed out / cancelled.
+   */
   protected async checkToolApproval(
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<boolean> {
     if (!this.onToolApproval) {
-      this.logger.warn("Approval", `Tool "${toolName}" requires approval but no onToolApproval configured — denied.`);
+      this.logger.warn(
+        "Approval",
+        `Tool "${toolName}" requires approval but no onToolApproval configured — denied.`,
+      );
       return false;
     }
+
     try {
-      return await this.onToolApproval(toolName, args);
+      const result = await Promise.race([
+        this.onToolApproval(toolName, args),
+        new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), this.approvalTimeoutMs),
+        ),
+        // Also race against cancellation: if the agent is aborted, stop waiting
+        new Promise<"cancelled">((resolve) => {
+          const signal = this._abortController?.signal;
+          if (signal?.aborted) {
+            resolve("cancelled");
+          } else {
+            signal?.addEventListener("abort", () => resolve("cancelled"), { once: true });
+          }
+        }),
+      ]);
+
+      if (result === "timeout") {
+        this.logger.warn(
+          "Approval",
+          `Timeout (${this.approvalTimeoutMs}ms) waiting for approval of "${toolName}" — ` +
+          `strategy: ${this.approvalTimeoutStrategy}.`,
+        );
+        return this.approvalTimeoutStrategy === "allow";
+      }
+
+      if (result === "cancelled") {
+        this.logger.info(
+          "Approval",
+          `Approval for "${toolName}" cancelled (agent aborted) — denied.`,
+        );
+        return false;
+      }
+
+      return result;
     } catch {
-      this.logger.warn("Approval", `Approval callback threw for "${toolName}" — denied.`);
+      this.logger.warn(
+        "Approval",
+        `Approval callback threw for "${toolName}" — denied.`,
+      );
       return false;
     }
   }
