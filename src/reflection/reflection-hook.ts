@@ -13,9 +13,9 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 export interface ReflectionHookConfig {
   /** LLM provider (shared with the main agent). */
   llm: LLMProvider;
-  /** ErrorNotebook for persisting error reflection findings (optional — skip to disable error reflection). */
+  /** ErrorNotebook for persisting error reflection findings. Independently configurable — omit to disable error reflection. */
   notebook?: ErrorNotebook;
-  /** MemoryManager for persisting extracted memories (optional — skip to disable memory extraction). */
+  /** MemoryManager for persisting extracted memories. Independently configurable — omit to disable memory extraction. */
   memoryManager?: MemoryManager;
   /** Max ReAct iterations for the error reflector sub-agent (default: 4). */
   maxErrorIterations?: number;
@@ -32,20 +32,26 @@ export interface ReflectionHookConfig {
 
 /**
  * Create an AgentHooks implementation that runs post-execution
- * self-reflection and memory extraction via two forked sub-agents.
+ * reflection. Error reflection and memory extraction are independently
+ * configurable — enable either, both, or neither.
  *
- * Both forks run in parallel with their own isolated contexts —
- * neither blocks the main agent's response to the user.
+ * When both are configured, the two forks run in parallel with their
+ * own isolated contexts — neither blocks the main agent's response.
  *
  * ```ts
+ * // Both error reflection and memory extraction
  * const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
  * const memory = new MemoryManager({ storageDir: ".memory" });
  * const hook = createReflectionHook({ llm, notebook, memoryManager: memory });
+ *
+ * // Memory extraction only (no error reflection)
+ * const hook2 = createReflectionHook({ llm, memoryManager: memory });
+ *
  * const agent = new ReActAgent({ llm, hooks: hook });
  * const answer = await agent.run("...");
- * // After answer is returned, two forks run in parallel:
- * //   1. Error reflector → finds mistakes → persists to notebook
- * //   2. Memory extractor → extracts memories → persists to .memory/
+ * // After answer is returned, configured forks run in parallel:
+ * //   1. Error reflector (if configured) → finds mistakes → persists to notebook
+ * //   2. Memory extractor (if configured) → extracts memories → persists to .memory/
  * ```
  */
 export function createReflectionHook(

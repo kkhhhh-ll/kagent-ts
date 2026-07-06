@@ -175,7 +175,7 @@ import { createReflectionHook, ErrorNotebook } from 'kagent-ts'
 const hook = createReflectionHook({
   llm,
   notebook: new ErrorNotebook(),
-  memoryManager: memory,      // 同时提取错题本和记忆
+  memoryManager: memory,      // 错题本和记忆可独立配置，按需启用
 })
 ```
 
