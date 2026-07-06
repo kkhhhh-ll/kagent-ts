@@ -143,6 +143,8 @@ const agent = new FusionAgent({
 
 在 `"auto"` 模式下，当计划中包含高风险关键词（如 `delete`, `rm`, `drop`, `format`）时，自动请求用户确认。
 
+计划确认同样受 `approvalTimeoutMs` 超时保护——超时后将计划以文本形式返回给用户，等待手动恢复。详见 [HITL 审批](/tools/approval)。
+
 ## 完整示例
 
 ```ts

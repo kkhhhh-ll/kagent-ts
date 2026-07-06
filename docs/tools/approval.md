@@ -22,6 +22,44 @@ const agent = new ReActAgent({
 })
 ```
 
+## 超时配置
+
+审批通过 `onToolApproval` 回调实现，但如果用户不在电脑前，Agent 就会一直挂起。框架内置了超时保护，避免无限等待。
+
+### 配置参数
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  onToolApproval: async (toolName, args) => {
+    // 弹出 UI 或等待用户响应
+    return await askUser(toolName, args);
+  },
+  approvalTimeoutMs: 120_000,           // 默认 2 分钟
+  approvalTimeoutStrategy: "deny",      // "deny"（默认）| "allow"
+})
+```
+
+### 超时策略
+
+| 策略 | 超时后行为 | 适用场景 |
+| ---- | ---- | ---- |
+| `"deny"` (默认) | 拒绝工具执行，返回 `APPROVAL_DENIED`，LLM 必须找其他方法 | 通用场景——安全优先 |
+| `"allow"` | 放行工具执行 | 非破坏性工具 + 可信环境 |
+
+### 三种超时路径
+
+```
+onToolApproval() 被调用
+  ├── 正常返回 true/false → 按返回值执行/拒绝
+  ├── 超时（approvalTimeoutMs 内无响应）→ 按 approvalTimeoutStrategy 处理
+  └── Agent 被 cancel() → 一律拒绝
+```
+
+与 `AbortController` 集成：调用 `agent.cancel()` 会立即中断挂起的审批等待，无需等到超时。
+
+> **Fusion Agent 的计划确认**也使用同一套 `approvalTimeoutMs` 配置。计划确认超时时，Agent 会将计划以文本形式返回给用户，等待用户手动恢复执行。
+
 ## 审批回调
 
 ```ts
@@ -57,9 +95,10 @@ LLM 发起 tool_call
   ↓
 1. 检查 requireApproval 标记
   ├── false → 跳过审批
-  └── true  → 调用 onToolApproval()
+  └── true  → 调用 onToolApproval()（带超时 + abort 保护）
        ├── 用户确认 → 继续
-       └── 用户拒绝 → 返回 APPROVAL_DENIED
+       ├── 用户拒绝 → 返回 APPROVAL_DENIED
+       └── 超时/cancel → 按 approvalTimeoutStrategy 处理
   ↓
 2. validateToolArgs() → 参数验证
   ↓
@@ -115,7 +154,7 @@ rl.close()
 1. **高风险工具默认启用审批**: BashTool、WriteFileTool、EditFileTool
 2. **使用审批标记**: 在自定义工具上合理设置 `requireApproval`
 3. **结合白名单**: 审批模式下使用 `allowlist` 限制工具可用性
-4. **超时处理**: 在审批回调中设置合理的超时机制
+4. **配置超时**: 通过 `approvalTimeoutMs` 设置合理的等待上限（框架已内置超时保护，无需在回调中手动实现）
 
 ## 下一步
 
