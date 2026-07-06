@@ -103,6 +103,7 @@ describe("AnthropicProvider.convertMessages", () => {
     expect(trBlocks).toHaveLength(1);
     expect(trBlocks[0].tool_use_id).toBe("orphan_1");
     expect(trBlocks[0].content).toContain("skipped");
+    expect(trBlocks[0].is_error).toBe(true);
   });
 
   it("handles compression-style consecutive user messages", async () => {
@@ -211,6 +212,7 @@ describe("AnthropicProvider.convertMessages", () => {
     // Each should contain the "skipped" message
     for (const tr of trBlocks) {
       expect(tr.content).toContain("skipped");
+      expect(tr.is_error).toBe(true);
     }
   });
 });

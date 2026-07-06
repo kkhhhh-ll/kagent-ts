@@ -603,6 +603,7 @@ export class AnthropicProvider implements LLMProvider {
       const syntheticResults = missing.map((tu) => ({
         type: "tool_result" as const,
         tool_use_id: tu.id,
+        is_error: true,
         content: `[Tool "${tu.name ?? "unknown"}" was skipped due to an internal message-ordering error and was not executed. ` +
           `Please retry the tool call or use an alternative approach.]`,
       }));
