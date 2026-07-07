@@ -1,6 +1,6 @@
 import { SubAgentDefinition, SubAgentResult, PendingRun } from "./subagent-types";
 import { SubAgentLoader } from "./subagent-loader";
-import { ReActAgent } from "../core/react-agent";
+import type { ReActAgent } from "../core/react-agent";
 import { LLMProvider } from "../llm/interface";
 import { ToolRegistry } from "../tools/tool-registry";
 import { Tool } from "../tools/types";
@@ -414,7 +414,7 @@ export class SubAgentManager {
     startedAt: number,
     options?: { workdir?: string },
   ): Promise<SubAgentResult> {
-    const agent = this.buildSubAgent(definition, options?.workdir);
+    const agent = await this.buildSubAgent(definition, options?.workdir);
 
     // Resolve and apply sub-agent hooks (static or factory).
     // Unsafe hooks (safeForSubAgent === false) are skipped — they could
@@ -458,7 +458,7 @@ export class SubAgentManager {
    * `filesystem_*` matches all tools whose names start with `filesystem_`
    * (e.g. MCP tools from the "filesystem" server).
    */
-  private buildSubAgent(definition: SubAgentDefinition, workdir?: string): ReActAgent {
+  private async buildSubAgent(definition: SubAgentDefinition, workdir?: string): Promise<ReActAgent> {
     // Look up declared tools from the main agent's registry.
     // Supports wildcard patterns (e.g. "filesystem_*" matches all tools
     // from the "filesystem" MCP server). Uses a Map for deduplication.
@@ -531,22 +531,22 @@ export class SubAgentManager {
       }
       // Replace with the doubly-filtered registry
       // (reuse the variable for the rest of the method)
-      return this.finishBuildSubAgent(
+      return await this.finishBuildSubAgent(
         definition,
         filteredRegistry,
         workdir,
       );
     }
 
-    return this.finishBuildSubAgent(definition, toolRegistry, workdir);
+    return await this.finishBuildSubAgent(definition, toolRegistry, workdir);
   }
 
   /** Shared tail of buildSubAgent: wire up skills and return the agent. */
-  private finishBuildSubAgent(
+  private async finishBuildSubAgent(
     definition: SubAgentDefinition,
     toolRegistry: ToolRegistry,
     workdir?: string,
-  ): ReActAgent {
+  ): Promise<ReActAgent> {
 
     // Build a dedicated SkillManager with declared skills pre-activated.
     // Use registerFromDirectory when skillsDir is available so lazy-loading
@@ -573,7 +573,10 @@ export class SubAgentManager {
     // subAgentLLM (from AgentConfig) takes priority over the main model.
     const effectiveLLM = this.subAgentLLM ?? this.llmProvider!;
 
-    return new ReActAgent({
+    // Dynamic import to break CJS circular dependency:
+    // agent.ts → subagent-manager.ts → react-agent.ts → agent.ts
+    const { ReActAgent: ReActAgentCtor } = await import("../core/react-agent.js");
+    return new ReActAgentCtor({
       llm: effectiveLLM,
       systemPrompt,
       toolRegistry,
