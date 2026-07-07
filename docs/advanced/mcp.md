@@ -118,47 +118,51 @@ MCP Server: "database"
 ## 连接管理
 
 ```ts
-import { McpClientManager } from 'kagent-ts'
+import { McpClientManager, ToolRegistry } from 'kagent-ts'
 
-const mcpManager = new McpClientManager()
+const toolRegistry = new ToolRegistry()
+const mcpManager = new McpClientManager(toolRegistry)
 
 // 连接所有 Server
-await mcpManager.connectAll([
-  {
-    name: 'filesystem',
-    transport: 'stdio',
+await mcpManager.connectAll({
+  filesystem: {
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
   },
-])
-
-// 获取所有已发现的工具
-const mcpTools = mcpManager.getAllTools()
+})
 
 // 检查连接状态
-const status = mcpManager.getConnectionStatus('filesystem')
-// { connected: true, error?: McpConnectionError }
+const status = mcpManager.getStatus()
+// [{ serverName: 'filesystem', connected: true, toolCount: 5 }]
 
 // 断开连接
 await mcpManager.disconnect('filesystem')
 await mcpManager.disconnectAll()
 ```
 
-## 错误处理
+## 超时配置
+
+可以通过构造函数配置连接超时和工具调用超时（毫秒）：
 
 ```ts
-interface McpConnectionError {
-  serverName: string
-  phase: 'startup' | 'list_tools' | 'tool_call' | 'disconnect'
-  message: string
-  retryable: boolean
-}
+const mcpManager = new McpClientManager(toolRegistry, undefined, {
+  connectTimeoutMs: 15_000,  // 连接 + 工具发现超时 (默认: 15000)
+  toolTimeoutMs: 30_000,     // 单次工具调用超时 (默认: 30000)
+})
+```
 
-interface McpConnectionStatus {
-  connected: boolean
-  toolsCount: number
-  lastError?: McpConnectionError
-}
+- `connectTimeoutMs` — 覆盖 `transport.start()` 和 JSON-RPC 初始化握手
+- `toolTimeoutMs` — 覆盖单次 `callTool()` 调用，防止工具死循环或等待外部资源导致 agent 循环永久阻塞
+
+超时时底层连接和资源会被自动清理（`client.close()`），不会泄漏子进程或 SSE socket。
+
+## 错误处理
+
+连接失败时会抛出 `McpConnectionError`，可通过 `connectAll()` 的返回值收集各 server 的错误：
+
+```ts
+const errors = await mcpManager.connectAll(servers)
+// errors: { serverName: string; error: string }[]
 ```
 
 ## 完整示例

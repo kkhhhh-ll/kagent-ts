@@ -63,7 +63,9 @@ interface PlanSolveAgentConfig extends AgentConfig {
 
 ## 计划修订
 
-当 LLM 在执行过程中遇到意外情况时，可以通过输出 `revised_plan` 来修正剩余步骤：
+当 LLM 在执行过程中遇到意外情况时，可以通过输出 `revised_plan` 来修正剩余步骤。支持两种格式：
+
+**JSON 格式：**
 
 ```json
 {
@@ -74,6 +76,38 @@ interface PlanSolveAgentConfig extends AgentConfig {
   ]
 }
 ```
+
+**方括号标记格式（兼容更多模型）：**
+
+```text
+[Thought] 当前步骤遇到问题，需要调整计划
+[Revised Plan]
+1. 分析 src/core/ 目录的代码结构
+2. 使用 tsc --noEmit 检查编译错误
+3. 检查每个文件的导入依赖
+```
+
+## 响应格式
+
+Plan-Solve Agent 支持两种响应格式，解析器按优先级依次尝试：
+
+| 优先级 | 格式 | 示例 |
+|--------|------|------|
+| 1 | JSON | `{"thought": "...", "plan": [...]}` |
+| 2 | 方括号标记 | `[Thought] ...` / `[Plan]` / `[Final Answer]` |
+| 3 | 自然语言 | `Final Answer: ...` |
+
+**方括号标记列表：**
+
+| 标记 | 用途 |
+|------|------|
+| `[Thought]` | 每轮必填 — 当前分析/推理 |
+| `[Plan]` | 初始计划（编号列表） |
+| `[Current Step]` | 即将执行的步骤号（1-based） |
+| `[Revised Plan]` | 修正后的剩余步骤（编号列表） |
+| `[Final Answer]` | 任务完成时的最终答案 |
+
+如果模型只输出 `[Thought]` 而没有其他标记，解析器会将其作为最终答案返回。这确保弱模型（不严格遵守格式）也能正常结束循环。
 
 ## 会话状态
 
