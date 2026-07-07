@@ -30,36 +30,44 @@ const agent = new ReActAgent({
 await agent.run('分析项目结构')
 
 // 查看统计
-const stats = evaluator.getStats()
-console.log('成功率:', (stats.successRate * 100).toFixed(1) + '%')
+const stats = evaluator.getScorecard()
+console.log('成功率:', (stats.overallSuccessRate * 100).toFixed(1) + '%')
 console.log('平均延迟:', stats.avgLatencyMs + 'ms')
 console.log('工具调用分布:')
-for (const [tool, count] of Object.entries(stats.toolCallCounts)) {
-  console.log(`  ${tool}: ${count} 次`)
+for (const tool of stats.perTool) {
+  console.log(`  ${tool.toolName}: ${tool.totalCalls} 次`)
 }
 ```
 
 ### 指标
 
+`getScorecard()` 返回 `ToolCallScorecard`（总体评分卡），其中 `perTool` 字段为各工具的 `ToolCallStats`：
+
 ```ts
+interface ToolCallScorecard {
+  totalCalls: number              // 总调用次数
+  totalSuccesses: number          // 成功次数
+  totalFailures: number           // 失败次数
+  overallSuccessRate: number      // 总体成功率 (0–1)
+  avgLatencyMs: number            // 平均延迟 (ms)
+  uniqueToolsUsed: number         // 不同工具数量
+  circuitBreakerTrips: number     // 熔断器触发次数
+  perTool: ToolCallStats[]        // 按调用次数降序排列
+}
+
 interface ToolCallStats {
-  /** 总调用次数 */
-  totalCalls: number
-
-  /** 成功率 */
-  successRate: number
-
-  /** 平均延迟 (ms) */
-  avgLatencyMs: number
-
-  /** 各工具调用次数 */
-  toolCallCounts: Record<string, number>
-
-  /** 各工具失败次数 */
-  toolFailureCounts: Record<string, number>
-
-  /** 错误码分布 */
-  errorCodeDistribution: Record<string, number>
+  toolName: string                // 工具名称
+  totalCalls: number              // 调用总次数
+  successCount: number            // 成功次数
+  failureCount: number            // 失败次数
+  successRate: number             // 成功率 (0–1)
+  avgLatencyMs: number            // 平均延迟 (ms)
+  p50LatencyMs: number            // P50 延迟 (ms)
+  p99LatencyMs: number            // P99 延迟 (ms)
+  avgRetries: number              // 平均重试次数
+  circuitBreakerTrips: number     // 熔断器触发次数
+  errorDistribution: Record<string, number>  // 错误码分布
+  latencySamples: number[]        // 延迟样本（内部用）
 }
 ```
 

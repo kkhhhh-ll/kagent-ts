@@ -187,8 +187,8 @@ const agent = new ReActAgent({
 })
 
 // 执行后查看统计
-const stats = evaluator.getStats()
-console.log(`工具调用成功率: ${(stats.successRate * 100).toFixed(1)}%`)
+const stats = evaluator.getScorecard()
+console.log(`工具调用成功率: ${(stats.overallSuccessRate * 100).toFixed(1)}%`)
 ```
 
 详见 [Eval 评估](/advanced/eval)。
