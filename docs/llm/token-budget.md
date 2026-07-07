@@ -14,7 +14,7 @@ const budget = new TokenBudget({
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [],
   tokenBudget: budget,
 })
@@ -53,7 +53,7 @@ import { ReActAgent, OpenAIProvider } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [],
   tokenBudget: {
     maxTokens: 50000,

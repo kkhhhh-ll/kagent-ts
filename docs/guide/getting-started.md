@@ -40,7 +40,7 @@ async function main() {
   // 2. 创建 Agent
   const agent = new ReActAgent({
     systemPrompt: '你是一个乐于助人的 AI 助手。回答问题时请简洁明了。',
-    provider,
+    llm: provider,
     tools: [],
     maxIterations: 10,
   })

@@ -22,7 +22,7 @@ const evaluator = new ToolCallEvaluator()
 
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   hooks: [evaluator],
 })
@@ -71,7 +71,7 @@ interface ToolCallStats {
 import { EvalRunner } from 'kagent-ts'
 
 const runner = new EvalRunner({
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
 })
 
@@ -135,7 +135,7 @@ console.log('LLM 评分:', result.judgeScore)
 import { Benchmark } from 'kagent-ts'
 
 const benchmark = new Benchmark({
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   baselinePath: './benchmark-baseline.json',
 })
@@ -189,7 +189,7 @@ const evaluator = new ToolCallEvaluator()
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   hooks: [evaluator],
 })
@@ -197,22 +197,30 @@ const agent = new ReActAgent({
 await agent.run('分析项目结构')
 
 // ── 端到端评估 ──
-const runner = new EvalRunner({ provider, tools: BUILTIN_TOOLS })
+const runner = new EvalRunner({ judgeLLM: provider })
 
-const caseResult = await runner.run({
-  name: '文件分析',
-  input: '找出项目中使用 any 类型的文件',
-  expectedTools: ['GrepSearchTool'],
-  expectedKeywords: ['any'],
-  judgePrompt: '评估搜索结果是否准确且完整 (0-10)',
-})
+const results = await runner.run(
+  (evaluator) => new ReActAgent({
+    systemPrompt: '你是一个有用的 AI 助手。',
+    llm: provider,
+    tools: BUILTIN_TOOLS,
+    hooks: [evaluator],
+  }),
+  [{
+    name: '文件分析',
+    input: '找出项目中使用 any 类型的文件',
+    expectedTools: ['GrepSearchTool'],
+    expectedKeywords: ['any'],
+    judgePrompt: '评估搜索结果是否准确且完整 (0-10)',
+  }],
+)
 
-console.log('测试通过:', caseResult.passed)
+console.log('测试通过:', results[0].passed)
 console.log('LLM 评分:', caseResult.judgeScore)
 
 // ── 基准回归 ──
 const benchmark = new Benchmark({
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   baselinePath: './benchmark-baseline.json',
 })

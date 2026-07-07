@@ -80,7 +80,7 @@ import { ReActAgent, OpenAIProvider, ToolRegistry, BUILTIN_TOOLS } from 'kagent-
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,  // 使用所有内置工具
 })
 ```

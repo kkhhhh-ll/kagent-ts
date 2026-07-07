@@ -721,7 +721,7 @@ export class FusionAgent extends Agent {
 
         const mcpWarnedServers = new Set<string>();
         const { hadFailure } = await this.executeToolCallsBatch(
-          response.tool_calls,
+          response.tool_calls!,
           mcpWarnedServers,
         );
 

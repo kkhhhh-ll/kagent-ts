@@ -25,7 +25,7 @@ Agent 执行循环
 ```ts
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   sessionId: 'my-task-001',  // 指定 Session ID 以启用持久化
 })
@@ -174,7 +174,7 @@ import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 async function runWithRetry() {
   const agent = new ReActAgent({
     systemPrompt: '你是一个有用的 AI 助手。',
-    provider: new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, model: 'gpt-4o' }),
+    llm: new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, model: 'gpt-4o' }),
     tools: BUILTIN_TOOLS,
     sessionId: 'important-task',
   })

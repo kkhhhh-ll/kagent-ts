@@ -35,7 +35,7 @@ import { FusionAgent, OpenAIProvider } from 'kagent-ts'
 
 const agent = new FusionAgent({
   systemPrompt: '你是一个全能 AI 助手。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),
@@ -152,7 +152,7 @@ import { FusionAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new FusionAgent({
   systemPrompt: '你是一个经验丰富的软件工程师。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),

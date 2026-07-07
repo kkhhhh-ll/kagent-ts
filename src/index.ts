@@ -41,8 +41,6 @@ export {
 } from "./core/response-schema";
 export type {
   ReActResponse,
-  ReActReasoning,
-  ReActFinalAnswer,
   PlanSolveResponse,
   FusionRouteResponse,
   FusionResponse,

@@ -26,7 +26,7 @@ import { PlanSolveAgent, OpenAIProvider } from 'kagent-ts'
 
 const agent = new PlanSolveAgent({
   systemPrompt: '你是一个擅长规划的 AI 助手。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),

@@ -210,7 +210,7 @@ const restored = new GitWorktreeManager(config, state)
 
 ```ts
 const agent = new OrchestratorAgent({
-  provider,
+  llm: provider,
   enableWorktrees: true,
   worktreeRepoPath: '/path/to/repo',
   autoMergeWorktrees: true,

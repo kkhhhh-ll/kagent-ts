@@ -84,7 +84,7 @@ const skillPrompt = skillManager.buildAvailableSkillsHint()
 const agent = new ReActAgent({
   systemPrompt: `你是一个多才多艺的 AI 助手。
 ${skillManager.buildAvailableSkillsHint()}`,
-  provider,
+  llm: provider,
   tools: [
     ...BUILTIN_TOOLS,
     createSkillTool(skillManager),  // LLM 可调用的 Skill 激活工具
@@ -152,7 +152,7 @@ const agent = new ReActAgent({
 ${skillManager.buildAvailableSkillsHint()}
 
 当你需要使用某个技能时，调用 activate_skill 工具激活它。`,
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [
     ...BUILTIN_TOOLS,
     createSkillTool(skillManager),

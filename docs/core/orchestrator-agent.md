@@ -37,7 +37,7 @@ import { OrchestratorAgent, OpenAIProvider } from 'kagent-ts'
 
 const agent = new OrchestratorAgent({
   systemPrompt: '你是一个高级任务编排器。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),
@@ -284,7 +284,7 @@ const agent = new OrchestratorAgent({
 3. 并行执行无依赖的子任务
 4. 综合所有结果生成最终报告`,
 
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),
@@ -339,7 +339,7 @@ Orchestrator Agent 在执行过程中会触发完整的生命周期钩子，可�
 const mainTrace = new TraceLogger({ sessionId: 'orch-run' })
 
 const agent = new OrchestratorAgent({
-  provider: provider,
+  llm: provider,
   hooks: mainTrace,
   subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
   subAgentsDir: './subagents',
@@ -359,7 +359,7 @@ const agent = new OrchestratorAgent({
 
 ```ts
 const agent = new OrchestratorAgent({
-  provider: provider,
+  llm: provider,
   subAgentsDir: "./subagents",
 
   // Worktree 配置

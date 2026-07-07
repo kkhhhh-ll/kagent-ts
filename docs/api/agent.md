@@ -120,7 +120,7 @@ interface OrchestratorAgentConfig extends AgentConfig {
 ```ts
 interface AgentConfig {
   systemPrompt: string
-  provider: LLMProvider
+  llm: LLMProvider
   tools: Tool[]
   maxIterations?: number
   contextConfig?: Partial<ContextConfig>

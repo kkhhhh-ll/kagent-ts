@@ -9,63 +9,100 @@
 // ─── Response Types ─────────────────────────────────────────────────────
 
 /**
- * Intermediate reasoning step (no final answer yet).
+ * Parsed ReAct response.
+ *
+ * The `thought` field contains the LLM's reasoning (or the full content
+ * for NL models). The optional `answer` field is set when:
+ * - A legacy JSON `{"answer": "..."}` is detected, or
+ * - A natural-language "Final Answer:" marker is found.
+ *
+ * The agent determines finality based on the presence of `tool_calls`
+ * in the LLM response — NOT on whether `answer` is present.
  */
-export interface ReActReasoning {
-  /** Step-by-step reasoning about what to do next. */
+export interface ReActResponse {
+  /** Step-by-step reasoning (or the full response content for NL models). */
   thought: string;
+  /** Explicit final answer (from legacy JSON or NL markers). */
+  answer?: string;
 }
-
-/**
- * Final answer from the agent.
- */
-export interface ReActFinalAnswer {
-  /** Final reasoning before answering. */
-  thought: string;
-  /** The complete answer for the user. */
-  answer: string;
-}
-
-/**
- * Union of all possible ReAct response shapes.
- */
-export type ReActResponse = ReActReasoning | ReActFinalAnswer;
 
 // ─── Response Parser ────────────────────────────────────────────────────
 
 /**
  * Parse a raw LLM content string into a structured ReActResponse.
  *
- * Handles:
- * - Raw JSON:     {"thought": "...", "answer": "..."}
- * - Code blocks:  ```json\n{"thought": "..."}\n```
- * - Extra text:   Let me think... {"thought": "..."}
+ * The caller determines whether the response is a final answer based on
+ * the presence of tool_calls in the LLM response — no JSON format required.
  *
- * Falls back to wrapping the raw text as a thought when JSON parsing fails.
+ * Handles:
+ * - Natural language text (default for modern models like DeepSeek, Claude, GPT)
+ * - Legacy JSON:     {"thought": "...", "answer": "..."}
+ * - NL markers:      "Final Answer: ..." → treated as answer
  */
 export function parseReActResponse(raw: string): ReActResponse {
+  // Try legacy JSON format first (backward compatible)
   const json = extractJSON(raw);
 
   if (json) {
     try {
       const parsed = JSON.parse(json);
-
-      // Must be an object with at least "thought"
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
         const thought = String(parsed.thought ?? "");
-
         if ("answer" in parsed && parsed.answer !== undefined && parsed.answer !== null) {
           return { thought, answer: String(parsed.answer) };
         }
-
         return { thought };
       }
     } catch {
-      // JSON parse failed — fall through to fallback
+      // JSON parse failed — fall through
     }
   }
 
-  // Fallback: treat the entire raw string as the thought
+  // Try NL answer detection (Final Answer: markers)
+  return parseNLFallback(raw);
+}
+
+/**
+ * Detect whether a natural-language response is a final answer.
+ *
+ * Strategy (in priority order):
+ * 1. Explicit markers: "Final Answer:", "最终回答：", "回答：", etc.
+ * 2. If the response has no tool-call-like patterns (Action:, Thought:)
+ *    and reads as a complete answer, treat it as one.
+ * 3. Otherwise treat as pure thought.
+ */
+function parseNLFallback(raw: string): ReActResponse {
+  const trimmed = raw.trim();
+  if (!trimmed) return { thought: raw };
+
+  // 1. Try explicit "Final Answer:" markers (case-insensitive, multiline)
+  const finalAnswerPatterns = [
+    /\bFinal\s+Answer\s*:\s*/i,
+    /\b最终回答\s*[：:]\s*/,
+    /\b回答\s*[：:]\s*/,
+    /\bAnswer\s*:\s*/i,
+  ];
+
+  for (const pattern of finalAnswerPatterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      const after = trimmed.slice(match.index! + match[0].length).trim();
+      if (after) {
+        return {
+          thought: trimmed.slice(0, match.index).trim() || after,
+          answer: after,
+        };
+      }
+    }
+  }
+
+  // 2. If the text contains classic ReAct action patterns, it's not a final answer
+  const actionPattern = /\b(Action|Action\s*Input)\s*:\s*/i;
+  if (actionPattern.test(trimmed)) {
+    return { thought: raw };
+  }
+
+  // 3. Treat as thought (caller decides based on context — no tool calls + no JSON)
   return { thought: raw };
 }
 
@@ -202,28 +239,18 @@ function isValidJSON(text: string): boolean {
  * the JSON response format.
  */
 export const STRUCTURED_OUTPUT_INSTRUCTIONS = `
-=== Response Format ===
-You MUST respond with a valid JSON object in the "content" field of your message.
-Do NOT wrap the JSON in markdown code blocks.
-
-When you have the FINAL ANSWER for the user:
-{"thought": "...step-by-step reasoning...", "answer": "...complete answer for the user..."}
-
-When you are REASONING (intermediate step, before or after using tools):
-{"thought": "...step-by-step reasoning..."}
-
-Rules:
-- "thought" is REQUIRED in every response — it contains your step-by-step reasoning.
-- "answer" is ONLY included in your final response, when you have the complete answer.
-- The JSON must be valid and parseable — no trailing commas, no comments.
-- If you need to use a tool, put your reasoning in "thought" as JSON, and send the tool call via the function calling mechanism.`;
+=== Response Guidelines ===
+- When you need information or need to take an action, use the available tools.
+- When you have the complete answer, respond directly with your final answer.
+- Always think step by step before acting or answering.
+- You do NOT need to wrap your response in JSON — just write naturally.`;
 
 /**
  * Compact one-line reminder appended to each assistant message
  * to reinforce the JSON format.
  */
 export const STRUCTURED_OUTPUT_REMINDER =
-  "\n\nRemember: Respond with a JSON object: {\"thought\": \"...\", \"answer\": \"...\"} (answer only for final response).";
+  "\n\nRemember: Use tools when you need information, respond directly when you have the answer.";
 
 // ─── Plan-and-Solve Response Types ────────────────────────────────────────
 
@@ -297,8 +324,8 @@ export function parsePlanSolveResponse(raw: string): PlanSolveResponse {
     }
   }
 
-  // Fallback: treat the entire raw string as thought
-  return { thought: raw };
+  // Fallback: try natural-language answer detection before treating as pure thought.
+  return parseNLFallback(raw) as PlanSolveResponse;
 }
 
 /**
@@ -361,6 +388,54 @@ Rules:
 
 IMPORTANT: Replanning is a normal part of problem-solving. If in doubt,
 output a "revised_plan" rather than retrying the same failing approach.`;
+
+/**
+ * Text-mode instructions for the Plan-and-Solve paradigm.
+ *
+ * The classic plan format uses numbered lists instead of JSON arrays,
+ * and uses text ReAct patterns (Thought/Action/Action Input/Final Answer).
+ * Plans and revisions are expressed as numbered lists prefixed with markers.
+ */
+export const TEXT_PLAN_SOLVE_INSTRUCTIONS = `
+=== Plan-and-Resolve Paradigm (Text Mode) ===
+You follow a structured two-phase approach to solve tasks:
+
+Phase 1 — PLAN: Analyze the user's request and create a detailed, numbered plan.
+Phase 2 — RESOLVE: Execute each step. Revise remaining steps if needed.
+
+=== Response Format ===
+You MUST use the text ReAct format. Do NOT output JSON.
+
+Creating the INITIAL PLAN:
+Thought: <analysis of the task>
+Plan:
+1. First step description
+2. Second step description
+...
+
+Executing steps:
+Thought: <reasoning about the current step>
+Action: <tool_name>
+Action Input: <JSON arguments>
+
+REVISING the plan (replaces REMAINING steps, mark with "Revised Plan:"):
+Thought: <why the plan needs to change>
+Revised Plan:
+1. Updated step A
+2. Updated step B
+...
+
+Final answer:
+Thought: <summary of what was accomplished>
+Final Answer: <complete answer for the user>
+
+Rules:
+- ALWAYS include "Thought:" before any action or final answer.
+- "Plan:" is ONLY for the initial plan creation.
+- "Revised Plan:" replaces REMAINING steps — do NOT re-list already done steps.
+- "Action:" and "Action Input:" MUST appear together.
+- "Final Answer:" signals that the task is COMPLETE.
+- If in doubt, output a "Revised Plan:" rather than retrying a failing approach.`;
 
 // ─── Fusion Agent Response Types ──────────────────────────────────────────
 
@@ -472,7 +547,8 @@ export function parseFusionResponse(raw: string): FusionResponse {
     }
   }
 
-  return { thought: raw };
+  // Fallback: try natural-language answer detection
+  return parseNLFallback(raw) as FusionResponse;
 }
 
 // ─── Fusion Agent System Prompt Templates ─────────────────────────────────
@@ -586,4 +662,178 @@ Respond with a JSON object:
 }
 
 Then resume execution normally — do NOT include "answer" unless you are truly done.`;
+
+// ─── Text-Based ReAct Parsing ──────────────────────────────────────────────
+
+import type { ToolCall } from "../messages/types";
+
+/**
+ * Extended response type for text-based ReAct parsing,
+ * which can extract tool calls from natural language in addition
+ * to thought/answer.
+ */
+export interface TextReActResponse {
+  /** Step-by-step reasoning. */
+  thought: string;
+  /** Final answer (only present when the model signals completion). */
+  answer?: string;
+  /** Tool calls extracted from text (Action + Action Input patterns). */
+  toolCalls?: ToolCall[];
+}
+
+/**
+ * Parse a raw LLM response using classic text-based ReAct format.
+ *
+ * Supports the following patterns (case-insensitive):
+ * ```
+ * Thought: <reasoning>
+ * Action: <tool_name>
+ * Action Input: <json_args>
+ *
+ * Final Answer: <answer>
+ * ```
+ *
+ * Multiple Action/Action Input pairs within a single response are collected
+ * and returned as an array of synthetic tool calls.
+ *
+ * If no patterns are matched, the entire raw text is treated as thought.
+ */
+export function parseTextReActResponse(raw: string): TextReActResponse {
+  const trimmed = raw.trim();
+  if (!trimmed) return { thought: raw };
+
+  const tc = parseTextToolCalls(trimmed);
+  const thought = extractThought(trimmed);
+  const answer = extractFinalAnswer(trimmed);
+
+  return {
+    thought,
+    ...(answer ? { answer } : {}),
+    ...(tc.length > 0 ? { toolCalls: tc } : {}),
+  };
+}
+
+/**
+ * Extract tool calls from classic ReAct text patterns:
+ * ```
+ * Action: tool_name
+ * Action Input: {"key": "value"}
+ * ```
+ *
+ * Handles multi-line Action Input by reading until the next Action:,
+ * Final Answer:, or end-of-text marker.
+ */
+function parseTextToolCalls(text: string): ToolCall[] {
+  const results: ToolCall[] = [];
+  // Match Action: <name> followed by Action Input: <json>
+  const actionRegex = /\bAction\s*:\s*([^\n]+)\s*\n\s*\bAction\s+Input\s*:\s*(\{[\s\S]*?\})\s*(?=\n\s*(?:Action|Final\s+Answer|Thought)|$)/gi;
+
+  let match;
+  let idx = 0;
+  while ((match = actionRegex.exec(text)) !== null) {
+    const name = match[1].trim();
+    let args = match[2].trim();
+
+    // Validate JSON
+    try {
+      JSON.parse(args);
+    } catch {
+      // Try to fix common issues: unescaped newlines, trailing commas
+      args = args
+        .replace(/\n/g, "\\n")
+        .replace(/,\s*}/g, "}");
+      try {
+        JSON.parse(args);
+      } catch {
+        // Still invalid — skip this tool call
+        continue;
+      }
+    }
+
+    results.push({
+      id: `text_tc_${idx++}_${Date.now()}`,
+      type: "function",
+      function: { name, arguments: args },
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Extract the "Thought:" content from text. If no explicit Thought marker,
+ * returns the text before the first Action: or Final Answer: marker.
+ */
+function extractThought(text: string): string {
+  const thoughtMatch = text.match(/\bThought\s*:\s*([\s\S]*?)(?=\n\s*(?:Action|Final\s+Answer)|\s*$)/i);
+  if (thoughtMatch) {
+    return thoughtMatch[1].trim();
+  }
+
+  // No explicit Thought: — use text before any action/answer patterns
+  const beforeAction = text.match(/^([\s\S]*?)(?=\n\s*\b(?:Action|Final\s+Answer)\s*:)/i);
+  if (beforeAction) {
+    return beforeAction[1].trim() || text;
+  }
+
+  return text;
+}
+
+/**
+ * Extract the "Final Answer:" content from text.
+ */
+function extractFinalAnswer(text: string): string | undefined {
+  const patterns = [
+    /\bFinal\s+Answer\s*:\s*([\s\S]*?)$/i,
+    /\b最终回答\s*[：:]\s*([\s\S]*?)$/,
+    /\b回答\s*[：:]\s*([\s\S]*?)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const answer = match[1].trim();
+      if (answer) return answer;
+    }
+  }
+
+  return undefined;
+}
+
+// ─── Text ReAct System Prompt ──────────────────────────────────────────────
+
+/**
+ * System prompt instructions for models that use classic text-based
+ * ReAct format instead of JSON. Use this with {@link AgentConfig.responseFormat}
+ * set to `"text"` or as a base prompt for models that don't support
+ * native function calling.
+ *
+ * The format mirrors the original ReAct paper pattern:
+ * Thought → Action → Action Input → Observation → ... → Final Answer
+ */
+export const TEXT_REACT_INSTRUCTIONS = `
+=== Response Format (Text Mode) ===
+You MUST follow this exact format for every response. Do NOT output JSON.
+
+When using a tool, write:
+Thought: <your step-by-step reasoning about what to do>
+Action: <tool_name>
+Action Input: <JSON arguments for the tool>
+
+Example:
+Thought: I need to read the config file to understand the settings.
+Action: read_file
+Action Input: {"path": "/app/config.json"}
+
+When you have the COMPLETE FINAL ANSWER for the user, write:
+Thought: <summary of what you did and why the answer is complete>
+Final Answer: <your complete answer to the user>
+
+Rules:
+- "Thought:" is REQUIRED before every Action or Final Answer.
+- "Action:" and "Action Input:" MUST appear together — one Action per pair.
+- "Action Input:" MUST be valid JSON (no trailing commas, no comments).
+- "Final Answer:" signals that the task is COMPLETE — only use it when truly done.
+- Never output both "Action:" and "Final Answer:" in the same response.
+- If you realize you're done, output Final Answer: immediately — do not take unnecessary actions.`;
 

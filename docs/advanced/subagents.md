@@ -109,7 +109,7 @@ const manager = new SubAgentManager(definitions)
 ```ts
 const agent = new OrchestratorAgent({
   systemPrompt: '你是一个高级任务编排器。',
-  provider: mainProvider,
+  llm: mainProvider,
   tools: BUILTIN_TOOLS,
   subAgents: definitions,
 })
@@ -120,7 +120,7 @@ const agent = new OrchestratorAgent({
 ```ts
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider: mainProvider,
+  llm: mainProvider,
   tools: [
     ...BUILTIN_TOOLS,
     createSpawnSubagentTool(subAgentManager),
@@ -242,7 +242,7 @@ import {
 
 const agent = new OrchestratorAgent({
   systemPrompt: '你是一个项目管理专家，可以分解并委派任务给专业的子代理。',
-  provider: new ModelRouter({
+  llm: new ModelRouter({
     routes: {
       main: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
       subAgent: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),

@@ -79,7 +79,7 @@ WriteFileTool 结果  → 保留 (副作用不可逆)
 ```ts
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   contextConfig: {
     maxTokens: 100000,

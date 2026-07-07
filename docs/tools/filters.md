@@ -71,7 +71,7 @@ const filter = any(
 ```ts
 const agent = new OrchestratorAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   subAgents: [
     {

@@ -90,7 +90,7 @@ import { FusionAgent, AnthropicProvider } from 'kagent-ts'
 
 const agent = new FusionAgent({
   systemPrompt: '你是一个经验丰富的软件工程师。',
-  provider: new AnthropicProvider({
+  llm: new AnthropicProvider({
     apiKey: process.env.ANTHROPIC_API_KEY!,
     model: 'claude-sonnet-4-6',
     cacheSystemPrompt: true,

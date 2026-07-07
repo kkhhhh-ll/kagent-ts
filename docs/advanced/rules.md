@@ -52,7 +52,7 @@ const rules = new ProjectRules('.rules/')
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),

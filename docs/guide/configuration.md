@@ -10,7 +10,7 @@ interface AgentConfig {
   systemPrompt: string
 
   /** LLM Provider 实例 */
-  provider: LLMProvider
+  llm: LLMProvider
 
   /** 工具列表 */
   tools: Tool[]

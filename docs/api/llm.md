@@ -122,7 +122,7 @@ new RateLimitedProvider(config: RateLimitedProviderConfig)
 
 ```ts
 interface RateLimitedProviderConfig {
-  provider: LLMProvider
+  llm: LLMProvider
   maxCallsPerMinute: number
   windowSizeMs?: number             // 默认: 60000
 }

@@ -3,7 +3,6 @@ import { Message } from "../messages/message";
 import { Role } from "../messages/types";
 import {
   STRUCTURED_OUTPUT_INSTRUCTIONS,
-  STRUCTURED_OUTPUT_REMINDER,
   parseReActResponse,
 } from "./response-schema";
 import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
@@ -12,10 +11,8 @@ import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 
 /**
- * Default system prompt for ReAct-style reasoning with structured JSON output.
- *
- * The LLM is instructed to respond with JSON so the agent can reliably
- * parse thoughts and final answers — no free-text format ambiguity.
+ * Default system prompt for ReAct-style reasoning.
+ * Explains the tool-use loop without requiring JSON format.
  */
 const DEFAULT_REACT_SYSTEM_PROMPT = `You are a helpful AI assistant powered by a ReAct (Reasoning + Acting) loop.
 You have access to a set of tools you can use to answer the user's question.
@@ -41,12 +38,14 @@ export interface ReActAgentConfig extends AgentConfig {
 }
 
 /**
- * ReAct Agent implementing a structured Thought → Action → Observation → Final Answer loop.
+ * ReAct Agent implementing a Thought → Action → Observation → Final Answer loop.
  *
- * The agent uses structured JSON output from the LLM:
- * - Intermediate steps:  {"thought": "..."}
- * - Final answer:        {"thought": "...", "answer": "..."}
- * - Tool calls via native function calling (OpenAI tool_calls)
+ * The agent uses `tool_calls` as the sole signal for loop control:
+ * - Has tool_calls → execute tools, continue loop
+ * - No tool_calls → response content IS the final answer
+ *
+ * Compatible with any model that supports native function calling
+ * (GPT-4, Claude, DeepSeek, etc.). No JSON output format required.
  *
  * Session persistence:
  * When `enableCheckpointing` is set, the agent auto-saves checkpoints after
@@ -57,7 +56,6 @@ export class ReActAgent extends Agent {
   private maxIterations: number;
 
   constructor(config: ReActAgentConfig) {
-    // Set default ReAct system prompt if none provided
     const mergedConfig: ReActAgentConfig = {
       ...config,
       systemPrompt: config.systemPrompt ?? DEFAULT_REACT_SYSTEM_PROMPT,
@@ -96,9 +94,9 @@ export class ReActAgent extends Agent {
       this.saveCheckpoint("active");
     }
 
-    // Track consecutive unproductive iterations (no tool calls, no answer)
-    let consecutiveEmptyIterations = 0;
-    const EMPTY_ITERATION_LIMIT = 5;
+    // Track consecutive empty/short responses (safety valve)
+    let consecutiveEmptyResponses = 0;
+    const MAX_EMPTY_RESPONSES = 3;
 
     // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
     let consecutiveTruncations = 0;
@@ -144,7 +142,7 @@ export class ReActAgent extends Agent {
         return budgetError;
       }
 
-      // Call the LLM with all registered tools — with network error handling
+      // Call the LLM with all registered tools
       for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
       let response: LLMResponse;
       try {
@@ -177,9 +175,9 @@ export class ReActAgent extends Agent {
         this.tokenBudget?.recordUsage(response.usage.prompt_tokens, response.usage.completion_tokens);
       }
 
-      // Parse the response content as structured JSON
-      const parsed = parseReActResponse(response.content);
+      // Parse the response content (for logging / error analysis)
       const rawContent = response.content;
+      const parsed = parseReActResponse(response.content);
 
       // Capture LLM analysis of any active tool error traces
       if (parsed.thought) {
@@ -218,18 +216,17 @@ export class ReActAgent extends Agent {
         consecutiveTruncations = 0;
       }
 
-      // Check if LLM wants to call tools
-      if (response.tool_calls && response.tool_calls.length > 0) {
-        consecutiveEmptyIterations = 0;
+      const toolCalls = response.tool_calls ?? [];
 
-        // Log the reasoning thought
+      // ── Tool calls → still executing, loop back after running tools ──
+      if (toolCalls.length > 0) {
+        // Log reasoning if present
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
 
         // If the LLM response shows non-truncation quality issues, warn
-        // before executing tool calls. (max_tokens truncation is handled above.)
         if (response.responseError &&
             response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS &&
             response.responseError.code !== LLMResponseErrorCode.OK) {
@@ -240,13 +237,9 @@ export class ReActAgent extends Agent {
         }
 
         const mcpWarnedServers = new Set<string>();
-        await this.executeToolCallsBatch(response.tool_calls, mcpWarnedServers);
+        await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
-        // Inject the continuation instruction AFTER tool execution so it
-        // does not sit between the assistant's tool_use blocks and their
-        // tool_result blocks (which would violate the Anthropic API's
-        // requirement that tool_results appear in the immediately next
-        // message after tool_use blocks).
+        // Inject continuation AFTER tool execution (Anthropic API pairing)
         if (isTruncated) {
           const continueMsg = Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -255,99 +248,53 @@ export class ReActAgent extends Agent {
           this.contextManager.addMessage(continueMsg.toDict());
         }
 
-        // Save checkpoint after complete tool execution round
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("active");
         }
 
-        // Continue the loop for the next Thought
         continue;
       }
 
-      // No tool calls — extract the final answer from the JSON
-      if ("answer" in parsed && parsed.answer) {
-        // If truncated, don't return — inject a continuation instruction
-        // so the LLM knows to pick up where it left off.
-        if (isTruncated) {
-          consecutiveEmptyIterations = 0;
-          if (parsed.thought) {
-            this.logger.info("Thought", parsed.thought);
-            for (const h of this.hooks) h.onThought?.(parsed.thought);
-          }
-          // If this is the last iteration we can't continue — return
-          // what we have instead of the generic "max iterations" message.
-          if (iteration === this.maxIterations - 1) {
-            const fallback = parsed.answer +
-              "\n\n[Note: Response may be incomplete due to output length constraints.]";
-            for (const h of this.hooks) h.onFinish?.(fallback);
-            return fallback;
-          }
-          // Inject continuation instruction so the LLM knows to complete
-          // its truncated response (no tool calls were present).
-          const continueMsg = Message.user(
-            "Your previous response was cut off (max output tokens reached). " +
-            "Continue exactly where you left off — do NOT repeat any content already written."
-          );
-          this.contextManager.addMessage(continueMsg.toDict());
-          this.logger.info("ReAct", "Answer truncated (max_tokens) — continuing in next iteration.");
-          continue;
+      // ── No tool calls → this IS the final answer ────────────────────
+      // Prefer explicit answer field (legacy JSON), fall back to raw content.
+      const answer = parsed.answer || rawContent;
+
+      // If truncated, don't return yet — inject continuation
+      if (isTruncated) {
+        if (iteration === this.maxIterations - 1) {
+          const fallback = answer +
+            "\n\n[Note: Response may be incomplete due to output length constraints.]";
+          for (const h of this.hooks) h.onFinish?.(fallback);
+          return fallback;
         }
-        for (const h of this.hooks) h.onFinish?.(parsed.answer);
-        // Save final checkpoint as completed
-        if (this.checkpointingEnabled) {
-          this.saveCheckpoint("completed");
-        }
-        return parsed.answer;
+        const continueMsg = Message.user(
+          "Your previous response was cut off (max output tokens reached). " +
+          "Continue exactly where you left off — do NOT repeat any content already written."
+        );
+        this.contextManager.addMessage(continueMsg.toDict());
+        this.logger.info("ReAct", "Answer truncated (max_tokens) — continuing in next iteration.");
+        continue;
       }
 
-      // JSON has "thought" but no "answer" — continue the loop
-      // (the agent is still reasoning)
-      if (parsed.thought) {
-        consecutiveEmptyIterations++;
-
-        this.logger.info("Thought", parsed.thought);
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
-
-        // If stuck in unproductive thought-only loop, inject format reminder
-        if (consecutiveEmptyIterations >= 3) {
-          this.logger.info(
-            "ReAct",
-            `${consecutiveEmptyIterations} consecutive thought-only iterations — ` +
-            `injecting format reminder.`,
-          );
-          const reminderMsg = Message.assistant(STRUCTURED_OUTPUT_REMINDER);
-          this.contextManager.addMessage(reminderMsg.toDict());
-        }
-
-        // If exceeded limit, bail out
-        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
+      // Check for empty / extremely short response (safety valve)
+      if (!rawContent || rawContent.trim().length < 5) {
+        consecutiveEmptyResponses++;
+        if (consecutiveEmptyResponses >= MAX_EMPTY_RESPONSES) {
           const stuckMsg =
-            "I apologize, but I'm having difficulty making progress on your request. " +
-            "Please try rephrasing or breaking it down into smaller, more specific steps.";
-          const stuckAssistantMessage = Message.assistant(stuckMsg);
-          this.contextManager.addMessage(stuckAssistantMessage.toDict());
+            "I apologize, but I'm having difficulty responding. " +
+            "Please try rephrasing your request.";
+          const stuckMsgObj = Message.assistant(stuckMsg);
+          this.contextManager.addMessage(stuckMsgObj.toDict());
           for (const h of this.hooks) h.onFinish?.(stuckMsg);
           return stuckMsg;
         }
-
-        // Save checkpoint after a thought-only iteration
-        if (this.checkpointingEnabled) {
-          this.saveCheckpoint("active");
-        }
         continue;
       }
 
-      // Empty response (no thought, no answer, no tool calls)
-      consecutiveEmptyIterations++;
-      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-        const stuckMsg =
-          "I apologize, but I'm having difficulty making progress on your request. " +
-          "Please try rephrasing or breaking it down into smaller, more specific steps.";
-        const stuckAssistantMessage = Message.assistant(stuckMsg);
-        this.contextManager.addMessage(stuckAssistantMessage.toDict());
-        for (const h of this.hooks) h.onFinish?.(stuckMsg);
-        return stuckMsg;
-      }
+      // Normal answer — return content
+      for (const h of this.hooks) h.onFinish?.(answer);
+      if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+      return answer;
     }
 
     // ── Max iterations reached without final answer ───────────────────

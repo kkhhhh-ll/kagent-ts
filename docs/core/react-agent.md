@@ -24,8 +24,7 @@ Observation (观察): 解析工具返回的结果
 import { ReActAgent, OpenAIProvider } from 'kagent-ts'
 
 const agent = new ReActAgent({
-  systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({
+  llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),
@@ -39,14 +38,14 @@ const answer = await agent.run('帮我查找当前目录下最大的 5 个文件
 console.log(answer)
 ```
 
-## 结构化 JSON 输出
+## 响应格式
 
-ReAct Agent 使用结构化 JSON 格式与 LLM 交互：
+ReAct Agent **不要求模型输出 JSON**。判定逻辑非常简单：
 
-- **中间步骤**: `{"thought": "我需要先用 ls 查看文件列表..."}`
-- **最终答案**: `{"thought": "已经获取了所有需要的信息", "answer": "最大的 5 个文件是..."}`
+- **有 `tool_calls`** → 执行工具，继续循环
+- **没有 `tool_calls`** → 当前响应内容就是最终答案
 
-框架会自动解析这些 JSON 响应，并对噪声数据（如 code fences、未转义换行符）做容错处理。
+这与大多数 Agent 框架一致，兼容 DeepSeek、Claude、GPT 等各类支持 function calling 的模型。
 
 ## 配置参数
 
@@ -61,7 +60,7 @@ interface ReActAgentConfig extends AgentConfig {
 
 ReAct Agent 内置以下保护机制：
 
-- **连续空迭代检测**: 如果 LLM 连续返回空响应，Agent 会提前终止以防止卡死
+- **空响应检测**: 连续 3 次空/极短响应（< 5 字符）后自动终止
 - **Token 截断处理**: 当 LLM 响应被 `max_tokens` 截断时，Agent 会注入续写提示
 - **自动 Checkpoint**: 每个迭代步骤后自动保存会话检查点
 - **网络错误恢复**: 网络中断时自动保存 `interrupted` 状态的检查点

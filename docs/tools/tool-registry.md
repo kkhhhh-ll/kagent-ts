@@ -11,7 +11,7 @@ import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
 })
 ```
@@ -34,7 +34,7 @@ registry.registerAllBuiltinTools()
 
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: registry.getAll(),  // 获取所有已注册的工具
 })
 ```

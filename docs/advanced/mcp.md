@@ -36,7 +36,7 @@ import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   mcpConfigPath: './mcp.json',  // 从文件加载
 })
@@ -182,7 +182,7 @@ import { ReActAgent, AnthropicProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个全栈开发者 AI 助手，可以操作文件系统和查询数据库。',
-  provider: new AnthropicProvider({
+  llm: new AnthropicProvider({
     apiKey: process.env.ANTHROPIC_API_KEY!,
     model: 'claude-sonnet-4-6',
   }),

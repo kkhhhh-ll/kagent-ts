@@ -59,7 +59,7 @@ const provider = new RateLimitedProvider({
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider,
+  llm: provider,
   tools: [],
 })
 ```

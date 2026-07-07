@@ -13,7 +13,7 @@ const traceLogger = new TraceLogger({
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   hooks: [traceLogger],
 })
@@ -75,7 +75,7 @@ const traceLogger = new TraceLogger({
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   hooks: [traceLogger],
 })
@@ -94,7 +94,7 @@ await agent.run('查找所有 TODO 注释')
 ```ts
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   hooks: [
     traceLogger,       // HTML 追踪

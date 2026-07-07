@@ -183,43 +183,54 @@ describe("ReActAgent", () => {
 
   describe("loop termination", () => {
     it("returns a timeout message when max iterations are reached", async () => {
-      // Every response has thought-only (no answer, no tool calls) —
-      // the loop never terminates naturally.
+      // The model keeps calling tools every iteration — never gives a final answer.
+      const echoTool: Tool = {
+        name: "echo",
+        description: "Echo",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: "echoed" }),
+      };
+      const toolRegistry = new ToolRegistry();
+      toolRegistry.register(echoTool);
+
       const llm = mockSequenceLLM(
         Array.from({ length: 10 }, () => [
-          JSON.stringify({ thought: "Still thinking..." }),
+          "Need to check...",
+          [
+            {
+              id: "call_1",
+              type: "function" as const,
+              function: { name: "echo", arguments: "{}" },
+            },
+          ],
         ]),
       );
 
       const agent = new ReActAgent({
         llm,
-        toolRegistry: new ToolRegistry(),
+        toolRegistry,
         logger: new SilentLogger(),
         maxIterations: 3,
       });
 
       const result = await agent.run("something");
       expect(result).toContain("unable to complete");
-      expect(result).toContain("3 iterations");
     });
 
-    it("bails out after consecutive empty thought-only iterations", async () => {
-      // 5 consecutive thought-only responses should trigger the stuck bailout
-      const llm = mockSequenceLLM(
-        Array.from({ length: 10 }, () => [
-          JSON.stringify({ thought: "Hmm, let me think more..." }),
-        ]),
-      );
+    it("returns content as answer immediately when model doesn't call tools", async () => {
+      // No tool_calls → the response content IS the final answer.
+      const llm = mockSequenceLLM([
+        ["Let me think about this... The answer is 42."],
+      ]);
 
       const agent = new ReActAgent({
         llm,
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
-        maxIterations: 10,
       });
 
-      const result = await agent.run("help");
-      expect(result).toContain("difficulty making progress");
+      const result = await agent.run("what is the answer?");
+      expect(result).toBe("Let me think about this... The answer is 42.");
     });
 
     it("returns answer immediately when no tools are needed", async () => {
@@ -626,18 +637,14 @@ describe("ReActAgent", () => {
   // ── Retry counter reset ─────────────────────────────────────────────
 
   describe("loop counters", () => {
-    it("resets consecutive empty counter after a tool call", async () => {
+    it("returns answer after tool calls complete and model stops calling tools", async () => {
       const toolRegistry = new ToolRegistry();
       toolRegistry.register(echoTool);
 
       const llm = mockSequenceLLM([
-        // Thought only (empty iteration 1)
-        [JSON.stringify({ thought: "Let me analyze..." })],
-        // Thought only (empty iteration 2)
-        [JSON.stringify({ thought: "Still analyzing..." })],
-        // Tool call — should reset the empty counter
+        // Tool call — executable
         [
-          JSON.stringify({ thought: "I'll use echo." }),
+          "Let me use echo.",
           [
             {
               id: "call_1",
@@ -646,10 +653,8 @@ describe("ReActAgent", () => {
             },
           ],
         ],
-        // Thought only — counter is now 1 (was reset after tool call)
-        [JSON.stringify({ thought: "Echo worked." })],
-        // Answer
-        [answerContent("All good.")],
+        // No tool calls → final answer
+        ["All good."],
       ]);
 
       const agent = new ReActAgent({

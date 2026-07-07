@@ -95,7 +95,6 @@ export class PlanSolveAgent extends Agent {
   private _skipPlanReset = false;
 
   constructor(config: PlanSolveAgentConfig) {
-    // Set default Plan-Solve system prompt if none provided
     const mergedConfig: PlanSolveAgentConfig = {
       ...config,
       systemPrompt: config.systemPrompt ?? DEFAULT_PLAN_SOLVE_SYSTEM_PROMPT,
@@ -294,7 +293,7 @@ export class PlanSolveAgent extends Agent {
 
         const mcpWarnedServers = new Set<string>();
         const { hadFailure: roundHadFailure } = await this.executeToolCallsBatch(
-          response.tool_calls,
+          response.tool_calls!,
           mcpWarnedServers,
         );
 

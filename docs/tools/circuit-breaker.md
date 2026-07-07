@@ -46,7 +46,7 @@ Circuit Breaker 默认集成在 `ToolRegistry` 中，通过 `AgentConfig` 配置
 ```ts
 const agent = new ReActAgent({
   systemPrompt: '...',
-  provider,
+  llm: provider,
   tools: BUILTIN_TOOLS,
   breakerConfig: {
     retryCount: 2,             // 首次失败后的重试次数 (默认: 2 → 共 3 次尝试)
@@ -98,7 +98,7 @@ import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。如果工具熔断了，请尝试其他方式。',
-  provider: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
   breakerConfig: {
     retryCount: 2,
