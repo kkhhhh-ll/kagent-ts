@@ -51,8 +51,9 @@ const agent = new FusionAgent({
   // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── 反思配置 ──
-  reflection: 'both',         // "off" | "post-hoc" | "inline" | "both"
-  inlineReflectionInterval: 5, // 每 N 次迭代触发内省反思
+  reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
+  reflectionInterval: 3,       // 每 N 次迭代触发内省反思 (默认: 3)
+  // notebook: new ErrorNotebook(),  // post-hoc / both 模式必填
 })
 ```
 
@@ -75,11 +76,13 @@ interface FusionAgentConfig extends AgentConfig {
 
   // ── 反思配置 ──
   reflection?: 'off' | 'post-hoc' | 'inline' | 'both'
-  inlineReflectionInterval?: number  // (默认: 5)
+  reflectionInterval?: number         // (默认: 3)
+  notebook?: ErrorNotebook            // post-hoc / both 模式必填
 
   // ── 循环控制 ──
   maxIterations?: number              // (默认: 15)
   maxPlanSteps?: number               // (默认: 12)
+  replanThreshold?: number            // (默认: 2，设为 0 禁用)
 }
 ```
 
@@ -161,7 +164,7 @@ const agent = new FusionAgent({
   routing: 'auto',
   planConfirmation: 'auto',
   reflection: 'both',
-  inlineReflectionInterval: 5,
+  reflectionInterval: 3,
   maxIterations: 20,
 })
 

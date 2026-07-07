@@ -402,9 +402,14 @@ export class FusionAgent extends Agent {
 
     let response: LLMResponse;
     try {
+      // The planning phase should NOT have access to tools — the LLM is
+      // supposed to generate a plan, not execute actions.  Passing tools
+      // can cause the model (especially weaker ones) to emit tool_calls
+      // that are never executed, producing orphaned tool_calls in context
+      // that break subsequent API calls.
       response = await this.llm.chat(
         contextMessages,
-        this.toolRegistry.getTools(),
+        [],
         this._abortController?.signal,
       );
     } catch (err: unknown) {

@@ -72,14 +72,20 @@ interface FusionAgentConfig extends AgentConfig {
   /** 反思模式 (默认: "off") */
   reflection?: "off" | "post-hoc" | "inline" | "both"
 
-  /** 内省反思间隔 (默认: 5) */
-  inlineReflectionInterval?: number
+  /** 内省反思间隔（迭代次数，默认: 3；首次工具失败也会触发） */
+  reflectionInterval?: number
+
+  /** ErrorNotebook 实例，用于持久化反思结果（post-hoc / both 模式必填） */
+  notebook?: ErrorNotebook
 
   /** 最大迭代次数 (默认: 15) */
   maxIterations?: number
 
   /** 计划最大步骤数 (默认: 12) */
   maxPlanSteps?: number
+
+  /** 连续工具失败 N 次后注入 replan 提示 (默认: 2，设为 0 禁用) */
+  replanThreshold?: number
 }
 
 type PlanConfirmCallback = (
@@ -110,6 +116,12 @@ interface OrchestratorAgentConfig extends AgentConfig {
 
   /** 最大总节点数 (默认: 20) */
   maxTotalNodes?: number
+
+  /** 单节点最大重试次数 (默认: 2) */
+  maxRetriesPerNode?: number
+
+  /** 失败处理策略 (默认: "retry-subtree") */
+  failureStrategy?: "retry-subtree" | "retry-all" | "continue"
 }
 ```
 
@@ -142,8 +154,8 @@ interface AgentConfig {
    */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  memoryConfig?: MemoryConfig
-  enableReflection?: boolean
+  memoryDir?: string
+  rulesPath?: string
   tokenBudget?: TokenBudgetConfig
 }
 

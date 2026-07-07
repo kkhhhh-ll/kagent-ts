@@ -35,7 +35,7 @@ const agent = new ReActAgent({
 
 // 方式 2: 手动注册到 Registry
 const registry = new ToolRegistry()
-registry.registerAllBuiltinTools()
+registerAllBuiltinTools(registry)
 
 // BUILTIN_TOOL_NAMES 包含所有内置工具名称
 console.log(BUILTIN_TOOL_NAMES)

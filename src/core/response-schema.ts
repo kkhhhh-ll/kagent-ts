@@ -102,8 +102,9 @@ function parseNLFallback(raw: string): ReActResponse {
     return { thought: raw };
   }
 
-  // 3. Treat as thought (caller decides based on context — no tool calls + no JSON)
-  return { thought: raw };
+  // 3. Pure content with no action markers — treat as both thought and answer.
+  //    (The caller may have already determined there are no tool_calls.)
+  return { thought: raw, answer: trimmed };
 }
 
 /**
@@ -684,7 +685,12 @@ export function parseFusionResponse(raw: string): FusionResponse {
     }
   }
 
-  // Fallback: try natural-language answer detection
+  // Fallback 1: try bracket-delimited markers ([Thought], [Plan], etc.)
+  // PlanSolveResponse and FusionResponse are structurally identical
+  const bracketResult = parseBracketMarkers(raw);
+  if (bracketResult) return bracketResult as FusionResponse;
+
+  // Fallback 2: try natural-language answer detection
   return parseNLFallback(raw) as FusionResponse;
 }
 

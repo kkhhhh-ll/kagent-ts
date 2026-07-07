@@ -65,13 +65,14 @@ const registry = new ToolRegistry()
 ```ts
 class ToolRegistry {
   register(tool: Tool): void
-  registerAll(tools: Tool[]): void
-  registerAllBuiltinTools(): void
-  lookup(name: string): Tool | undefined
-  getAll(): Tool[]
+  registerMany(tools: Tool[]): void
+  getTool(name: string): Tool | undefined
+  getTools(): Tool[]
   remove(name: string): boolean
+  removeMany(names: string[]): void
+  has(name: string): boolean
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
-  forSubAgent(filter: ToolFilter): ToolRegistry
+  filter(filter: ToolFilter): ToolRegistry
 }
 ```
 

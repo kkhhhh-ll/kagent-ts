@@ -27,15 +27,12 @@ const registry = new ToolRegistry()
 registry.register(myCustomTool)
 
 // 批量注册
-registry.registerAll([tool1, tool2, tool3])
-
-// 注册所有内置工具
-registry.registerAllBuiltinTools()
+registry.registerMany([tool1, tool2, tool3])
 
 const agent = new ReActAgent({
   systemPrompt: '...',
   llm: provider,
-  tools: registry.getAll(),  // 获取所有已注册的工具
+  tools: registry.getTools(),  // 获取所有已注册的工具
 })
 ```
 
@@ -47,25 +44,28 @@ class ToolRegistry {
   register(tool: Tool): void
 
   /** 批量注册 */
-  registerAll(tools: Tool[]): void
-
-  /** 注册所有内置工具 */
-  registerAllBuiltinTools(): void
+  registerMany(tools: Tool[]): void
 
   /** 按名称查找工具 */
-  lookup(name: string): Tool | undefined
+  getTool(name: string): Tool | undefined
 
   /** 获取所有工具 */
-  getAll(): Tool[]
+  getTools(): Tool[]
+
+  /** 检查工具是否已注册 */
+  has(name: string): boolean
 
   /** 移除工具 */
   remove(name: string): boolean
+
+  /** 批量移除工具 */
+  removeMany(names: string[]): void
 
   /** 执行工具 (带熔断保护) */
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
 
   /** 创建子代理的过滤 Registry */
-  forSubAgent(filter: ToolFilter): ToolRegistry
+  filter(filter: ToolFilter): ToolRegistry
 }
 ```
 
@@ -108,7 +108,7 @@ const weatherTool: Tool = {
 import { allowlist } from 'kagent-ts'
 
 // 创建只读工具的子代理 Registry
-const readonlyRegistry = registry.forSubAgent(
+const readonlyRegistry = registry.filter(
   allowlist('ReadFileTool', 'GrepSearchTool', 'GlobSearchTool')
 )
 ```

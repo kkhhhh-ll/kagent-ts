@@ -191,7 +191,7 @@ const agent = new FusionAgent({
   llm: mainProvider,
   // ...
   reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
-  inlineReflectionInterval: 5, // 每 5 轮触发内省
+  reflectionInterval: 3,       // 每 N 轮触发内省 (默认: 3)
   notebook,                    // ErrorNotebook 实例
 })
 ```

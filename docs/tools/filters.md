@@ -91,7 +91,7 @@ const agent = new OrchestratorAgent({
 })
 ```
 
-框架使用 `ToolRegistry.forSubAgent(filter)` 为每个子代理创建独立的工具注册表。
+框架使用 `ToolRegistry.filter(filter)` 为每个子代理创建独立的工具注册表。
 
 ## 下一步
 

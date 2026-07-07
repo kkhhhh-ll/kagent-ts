@@ -5,6 +5,14 @@ import {
   buildUserContentInjectionWarning,
   wrapUserAuthored,
 } from "../security/boundaries";
+import { Logger, ConsoleLogger } from "../logging/logger";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Narrow type guard for NodeJS.ErrnoException */
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err;
+}
 
 // ─── ProjectRules ────────────────────────────────────────────────────────────
 
@@ -27,14 +35,25 @@ export class ProjectRules {
   private filePath: string | null = null;
   private dirPath: string | null = null;
   private lastLoadedMtime = 0;
+  /**
+   * Per-file mtimes for directory mode.
+   * Tracks each file's mtime individually so a change to ANY file is
+   * detected — a single aggregate max would miss edits to files with
+   * lower timestamps.
+   */
+  private lastLoadedMtimes: Map<string, number> = new Map();
+  /** Snapshot of file names when dir was last loaded; used to detect deletions */
+  private lastFileList = "";
   private cachedContent = "";
+  private logger: Logger;
 
   /**
    * @param rulesPath  Path to a rules file (e.g. "RULES.md") or a
    *                   directory of rule files (e.g. ".rules/").
    *                   When omitted, neither is loaded.
    */
-  constructor(rulesPath?: string) {
+  constructor(rulesPath?: string, logger?: Logger) {
+    this.logger = logger ?? new ConsoleLogger();
     if (!rulesPath) return;
 
     const resolved = path.resolve(rulesPath);
@@ -45,8 +64,11 @@ export class ProjectRules {
       } else if (stat.isFile()) {
         this.filePath = resolved;
       }
-    } catch {
-      // Path doesn't exist — silently skip, rules are optional
+    } catch (err: unknown) {
+      // 只静默处理"文件不存在"的情况（规则是可选的）
+      if (isNodeError(err) && err.code === "ENOENT") return;
+      // 其他错误（权限不足、磁盘满等）暴露给开发者
+      this.logger.error("Rules", `Unexpected error accessing ${resolved}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -95,6 +117,23 @@ export class ProjectRules {
 
   // ─── Internals ──────────────────────────────────────────────────────────
 
+  /**
+   * Shared error handler for file/dir read failures.
+   * Logs non-ENOENT errors, clears cached content so the caller sees a
+   * change (empty content → no rules injected).
+   */
+  private handleLoadError(err: unknown, context: string): boolean {
+    if (!(isNodeError(err) && err.code === "ENOENT")) {
+      this.logger.error("Rules",
+        `Unexpected error reading ${context}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (this.cachedContent !== "") {
+      this.cachedContent = "";
+      return true;
+    }
+    return false;
+  }
+
   private reloadFile(): boolean {
     try {
       const stat = fs.statSync(this.filePath!);
@@ -102,28 +141,59 @@ export class ProjectRules {
       this.lastLoadedMtime = stat.mtimeMs;
       this.cachedContent = fs.readFileSync(this.filePath!, "utf-8").trim();
       return true;
-    } catch {
-      if (this.cachedContent !== "") {
-        this.cachedContent = "";
-        return true;
-      }
-      return false;
+    } catch (err: unknown) {
+      return this.handleLoadError(err, `file ${this.filePath}`);
     }
+  }
+
+  /**
+   * Detect if any files in the directory have changed since last load.
+   * Updates internal mtime tracking records as a side effect.
+   * @returns true if at least one file has been modified or the file list has changed.
+   */
+  private detectDirChanged(files: string[]): boolean {
+    const fileListKey = files.join(",");
+    if (fileListKey === this.lastFileList) {
+      // 逐文件比较 mtime —— 避免聚合最大值导致的遗漏编辑
+      let changed = false;
+      for (const file of files) {
+        const fp = path.join(this.dirPath!, file);
+        const stat = fs.statSync(fp);
+        const prev = this.lastLoadedMtimes.get(file) ?? 0;
+        if (stat.mtimeMs > prev) changed = true;
+        this.lastLoadedMtimes.set(file, stat.mtimeMs);
+      }
+      return changed;
+    }
+    // 文件列表变了（新增/删除），重建 mtime 记录并视为变更
+    this.lastLoadedMtimes.clear();
+    this.lastFileList = fileListKey;
+    return true;
+  }
+
+  /**
+   * Read all .md files from the directory and concatenate their trimmed content.
+   * Mtime tracking is handled by {@link detectDirChanged} — no stat here.
+   */
+  private readDirFiles(files: string[]): string {
+    const sections: string[] = [];
+    for (const file of files) {
+      const content = fs.readFileSync(
+        path.join(this.dirPath!, file),
+        "utf-8",
+      ).trim();
+      if (content) sections.push(content);
+    }
+    return sections.join("\n\n");
   }
 
   private reloadDir(): boolean {
     try {
-      let latestMtime = 0;
       const files = fs.readdirSync(this.dirPath!)
         .filter((f) => f.endsWith(".md"))
         .sort();
 
-      for (const file of files) {
-        const fp = path.join(this.dirPath!, file);
-        const stat = fs.statSync(fp);
-        latestMtime = Math.max(latestMtime, stat.mtimeMs);
-      }
-
+      // 空目录处理
       if (files.length === 0) {
         if (this.cachedContent !== "") {
           this.cachedContent = "";
@@ -132,22 +202,12 @@ export class ProjectRules {
         return false;
       }
 
-      if (latestMtime <= this.lastLoadedMtime) return false;
-      this.lastLoadedMtime = latestMtime;
+      if (!this.detectDirChanged(files)) return false;
 
-      const sections: string[] = [];
-      for (const file of files) {
-        const content = fs.readFileSync(path.join(this.dirPath!, file), "utf-8").trim();
-        if (content) sections.push(content);
-      }
-      this.cachedContent = sections.join("\n\n");
+      this.cachedContent = this.readDirFiles(files);
       return true;
-    } catch {
-      if (this.cachedContent !== "") {
-        this.cachedContent = "";
-        return true;
-      }
-      return false;
+    } catch (err: unknown) {
+      return this.handleLoadError(err, `directory ${this.dirPath}`);
     }
   }
 }
