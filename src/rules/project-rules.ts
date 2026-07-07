@@ -9,6 +9,11 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Maximum size per rule file in directory mode (50 KB). */
+const MAX_RULE_FILE_BYTES = 50 * 1024;
+/** Maximum total size for all rule files in directory mode (100 KB). */
+const MAX_RULES_TOTAL_BYTES = 100 * 1024;
+
 /** Narrow type guard for NodeJS.ErrnoException */
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
@@ -135,6 +140,14 @@ export class ProjectRules {
   private reloadFile(): boolean {
     try {
       const stat = fs.statSync(this.filePath!);
+      if (stat.size > MAX_RULE_FILE_BYTES) {
+        this.logger.warn(
+          "Rules",
+          `File "${this.filePath}" exceeds ${MAX_RULE_FILE_BYTES / 1024} KB limit (${(stat.size / 1024).toFixed(1)} KB) — skipped.`,
+        );
+        if (this.cachedContent !== "") { this.cachedContent = ""; return true; }
+        return false;
+      }
       if (stat.mtimeMs === this.lastLoadedMtime) return false;
       this.lastLoadedMtime = stat.mtimeMs;
       this.cachedContent = fs.readFileSync(this.filePath!, "utf-8").trim();
@@ -180,12 +193,29 @@ export class ProjectRules {
    */
   private readDirFiles(files: string[]): string {
     const sections: string[] = [];
+    let totalBytes = 0;
     for (const file of files) {
-      const content = fs.readFileSync(
-        path.join(this.dirPath!, file),
-        "utf-8",
-      ).trim();
-      if (content) sections.push(content);
+      const fp = path.join(this.dirPath!, file);
+      const stat = fs.statSync(fp);
+      if (stat.size > MAX_RULE_FILE_BYTES) {
+        this.logger.warn(
+          "Rules",
+          `"${file}" exceeds ${MAX_RULE_FILE_BYTES / 1024} KB limit (${(stat.size / 1024).toFixed(1)} KB) — skipped.`,
+        );
+        continue;
+      }
+      if (totalBytes + stat.size > MAX_RULES_TOTAL_BYTES) {
+        this.logger.warn(
+          "Rules",
+          `Total rules size exceeds ${MAX_RULES_TOTAL_BYTES / 1024} KB limit — skipping remaining files.`,
+        );
+        break;
+      }
+      const content = fs.readFileSync(fp, "utf-8").trim();
+      if (content) {
+        sections.push(content);
+        totalBytes += stat.size;
+      }
     }
     return sections.join("\n\n");
   }

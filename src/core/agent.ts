@@ -588,9 +588,10 @@ export abstract class Agent {
     this.hooks = Array.isArray(rawHooks) ? rawHooks : [rawHooks];
 
     // ── User Preferences ─────────────────────────────────────────────────
-    this.preferenceManager = new PreferenceManager({
-      filePath: config.preferencesPath ?? ".kagent/preferences.md",
-    });
+    this.preferenceManager = new PreferenceManager(
+      { filePath: config.preferencesPath ?? ".kagent/preferences.md" },
+      this.logger,
+    );
   }
 
   /**

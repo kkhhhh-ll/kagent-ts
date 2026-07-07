@@ -22,8 +22,8 @@ describe("ProjectRules", () => {
   // ── buildPrompt() with clean content ───────────────────────────────────
 
   describe("buildPrompt() — clean content", () => {
-    it("returns empty string when no rules are loaded (no path configured)", () => {
-      const rules = new ProjectRules();
+    it("returns empty string when no rules are loaded (path does not exist)", () => {
+      const rules = new ProjectRules(path.join(tmpDir, "nonexistent"));
       expect(rules.isConfigured).toBe(false);
       expect(rules.buildPrompt()).toBe("");
     });

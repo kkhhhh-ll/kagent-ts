@@ -6,6 +6,10 @@ import {
   buildUserContentInjectionWarning,
   wrapUserAuthored,
 } from "../security/boundaries";
+import { Logger, ConsoleLogger } from "../logging/logger";
+
+/** Maximum file size for preferences (10 KB). */
+const MAX_PREFERENCES_BYTES = 10 * 1024;
 
 /**
  * Manages user preferences loaded from a Markdown file.
@@ -21,8 +25,10 @@ export class PreferenceManager {
   private filePath: string;
   private lastLoadedMtime: number = 0;
   private cachedContent: string = "";
+  private logger: Logger;
 
-  constructor(config?: PreferenceManagerConfig) {
+  constructor(config?: PreferenceManagerConfig, logger?: Logger) {
+    this.logger = logger ?? new ConsoleLogger();
     this.filePath = path.resolve(config?.filePath ?? ".kagent/preferences.md");
   }
 
@@ -45,6 +51,22 @@ export class PreferenceManager {
   reloadIfChanged(): boolean {
     try {
       const stat = fs.statSync(this.filePath);
+
+      // Reject oversized files — preferences are user-authored and should
+      // be small. Large files are likely accidental and would bloat the
+      // system prompt.
+      if (stat.size > MAX_PREFERENCES_BYTES) {
+        this.logger.warn(
+          "Preferences",
+          `File exceeds ${MAX_PREFERENCES_BYTES / 1024} KB limit (${(stat.size / 1024).toFixed(1)} KB) — skipped.`,
+        );
+        if (this.cachedContent !== "") {
+          this.cachedContent = "";
+          return true;
+        }
+        return false;
+      }
+
       if (stat.mtimeMs === this.lastLoadedMtime && this.cachedContent !== "") {
         // Same mtime — double-check content hasn't changed (handles
         // filesystems with coarse mtime resolution).
