@@ -584,6 +584,10 @@ export class FusionAgent extends Agent {
     const MAX_TRUNCATION_CONTINUES = 3;
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      // Fresh AbortController per iteration so the signal's listener
+      // count doesn't accumulate across LLM calls and retries.
+      this._abortController = new AbortController();
+
       // ── Check cancellation ──────────────────────────────────────────
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");

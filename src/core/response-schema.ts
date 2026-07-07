@@ -286,6 +286,115 @@ export interface PlanSolveResponse {
  * Reuses the same multi-strategy JSON extraction as parseReActResponse
  * but handles the Plan-and-Solve shapes (plan/revised_plan arrays).
  */
+// ─── Bracket-marker parsing (fallback for models that ignore JSON) ──────────
+
+/**
+ * Bracketed section from a model's natural-language response.
+ * Matches markers like [Thought], [Plan], [Final Answer], etc.
+ */
+interface BracketSection {
+  marker: string;
+  content: string;
+}
+
+/** Split text at bracket-marker boundaries like `[Thought]`, `[Plan]`, etc. */
+function splitByBracketMarkers(text: string): BracketSection[] {
+  const sections: BracketSection[] = [];
+  const regex = /^\[(Thought|Plan|Revised Plan|Current Step|Final Answer)\]\s*/gim;
+
+  let lastIndex = 0;
+  let lastMarker = "";
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (lastMarker) {
+      sections.push({
+        marker: lastMarker,
+        content: text.slice(lastIndex, match.index).trim(),
+      });
+    }
+    lastMarker = match[1];
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Final section
+  if (lastMarker) {
+    sections.push({
+      marker: lastMarker,
+      content: text.slice(lastIndex).trim(),
+    });
+  }
+
+  return sections;
+}
+
+/** Extract numbered-list items from plan / revised-plan content. */
+function parseNumberedList(text: string): string[] {
+  const items: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.trim().match(/^\d+[.)]\s+(.+)/);
+    if (m) items.push(m[1].trim());
+  }
+  return items;
+}
+
+/**
+ * Try to parse a Plan-Solve response from bracket-delimited markers.
+ *
+ * Accepts:  [Thought] ... [Plan] / [Revised Plan] / [Current Step] /
+ *           [Final Answer]
+ *
+ * Returns null if the text doesn't contain any recognized bracket markers.
+ */
+function parseBracketMarkers(raw: string): PlanSolveResponse | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const sections = splitByBracketMarkers(trimmed);
+  if (sections.length === 0) return null;
+
+  const result: PlanSolveResponse = { thought: "" };
+  const thoughts: string[] = [];
+
+  for (const sec of sections) {
+    const marker = sec.marker.toLowerCase();
+    switch (marker) {
+      case "thought":
+        if (sec.content) thoughts.push(sec.content);
+        break;
+      case "plan":
+        result.plan = parseNumberedList(sec.content);
+        break;
+      case "revised plan":
+        result.revised_plan = parseNumberedList(sec.content);
+        break;
+      case "final answer":
+        result.answer = sec.content || trimmed;
+        break;
+      case "current step": {
+        const n = parseInt(sec.content, 10);
+        if (!isNaN(n) && n >= 1) result.currentStep = n;
+        break;
+      }
+    }
+  }
+
+  result.thought = thoughts.join("\n") || trimmed;
+
+  // If nothing actionable was found (no plan, no answer, no step),
+  // promote the thought to the answer. This handles models that write
+  // [Thought] <conclusion> without using [Final Answer] — without this
+  // promotion the main loop treats it as an empty iteration and spins.
+  if (!result.plan && !result.revised_plan && !result.answer && result.currentStep === undefined) {
+    result.answer = result.thought;
+    return result;
+  }
+
+  return result;
+}
+
+// ─── Plan-Solve Response Parsing ────────────────────────────────────────────
+
 export function parsePlanSolveResponse(raw: string): PlanSolveResponse {
   const json = extractJSON(raw);
 
@@ -324,7 +433,11 @@ export function parsePlanSolveResponse(raw: string): PlanSolveResponse {
     }
   }
 
-  // Fallback: try natural-language answer detection before treating as pure thought.
+  // Fallback 1: try bracket-delimited markers ([Thought], [Plan], etc.)
+  const bracketResult = parseBracketMarkers(raw);
+  if (bracketResult) return bracketResult;
+
+  // Fallback 2: natural-language answer detection (Final Answer:, etc.)
   return parseNLFallback(raw) as PlanSolveResponse;
 }
 
@@ -369,6 +482,30 @@ Rules:
 - "currentStep" is the 1-based index of the step you are about to execute next.
 - "answer" is ONLY for the final response, when ALL steps are complete.
 - The JSON must be valid and parseable — no trailing commas, no comments.
+
+ALTERNATIVELY, you may use bracket-delimited markers (especially if JSON escaping is difficult):
+[Thought] <analysis of the task>
+[Plan]
+1. First step description
+2. Second step description
+
+[Thought] <reasoning>
+[Current Step] 2
+
+[Thought] <why the plan needs to change>
+[Revised Plan]
+1. Updated step A
+2. Updated step B
+
+[Thought] <summary>
+[Final Answer] <complete answer for the user>
+
+Bracket format rules:
+- Every response MUST start with [Thought].
+- [Plan] is ONLY for the initial plan (numbered list follows).
+- [Revised Plan] replaces REMAINING steps.
+- [Current Step] is the 1-based step index you are about to execute.
+- [Final Answer] signals task completion — only use when truly done.
 
 === When to Replan — output "revised_plan" when: ===
 1. REPEATED TOOL FAILURES: A tool fails 2+ consecutive times on the same step.

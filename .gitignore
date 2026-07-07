@@ -1,5 +1,7 @@
 node_modules/
 dist/
+test/
+temp/
 .kagent/
 .kagent-sessions/
 .error-traces/

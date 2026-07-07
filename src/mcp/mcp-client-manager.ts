@@ -58,9 +58,26 @@ export class McpClientManager {
   private toolRegistry: ToolRegistry;
   private logger: Logger;
 
-  constructor(toolRegistry: ToolRegistry, logger?: Logger) {
+  /**
+   * Timeout (ms) for individual MCP server connection (connect + listTools).
+   * Covers transport.start() which is NOT covered by the SDK's RequestOptions.timeout.
+   */
+  private connectTimeoutMs: number;
+
+  /**
+   * Timeout (ms) for individual MCP tool calls.
+   * Uses the SDK's built-in RequestOptions.timeout mechanism.
+   */
+  private toolTimeoutMs: number;
+
+  constructor(toolRegistry: ToolRegistry, logger?: Logger, options?: {
+    connectTimeoutMs?: number;
+    toolTimeoutMs?: number;
+  }) {
     this.toolRegistry = toolRegistry;
     this.logger = logger ?? new ConsoleLogger();
+    this.connectTimeoutMs = options?.connectTimeoutMs ?? 15_000;
+    this.toolTimeoutMs = options?.toolTimeoutMs ?? 30_000;
   }
 
   // ─── Connection Management ────────────────────────────────────────────────
@@ -99,20 +116,49 @@ export class McpClientManager {
       { capabilities: {} },
     );
 
-    try {
-      await client.connect(transport);
-    } catch (err) {
-      throw new McpConnectionError(
-        `Failed to connect to MCP server "${serverName}": ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
+      // The SDK's RequestOptions.timeout only covers the JSON-RPC init
+      // handshake, NOT transport.start() (child-process spawn / SSE open).
+      // Promise.race acts as an outer safety net for the full connect flow.
+      // timeoutPromise has .catch(() => {}) to swallow late rejections that
+      // fire after connect() already won the race (avoids unhandled rejection).
+      const ac = new AbortController();
 
-    // Discover tools
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(
+          new McpConnectionError(
+            `Timed out connecting to MCP server "${serverName}" after ${this.connectTimeoutMs}ms`,
+          ),
+        ), this.connectTimeoutMs);
+      });
+      // Prevent unhandled rejection when connect() wins the race
+      timeoutPromise.catch(() => {});
+
+      try {
+        await Promise.race([
+          client.connect(transport, { signal: ac.signal, timeout: this.connectTimeoutMs }),
+          timeoutPromise,
+        ]);
+      } catch (err) {
+        // On timeout or failure, abort the signal first to inform the SDK
+        // that the operation should be cancelled immediately, then close
+        // the underlying connection to prevent resource leaks (orphaned
+        // child processes, dangling SSE sockets).
+        ac.abort();
+        await client.close().catch(() => {});
+        throw new McpConnectionError(
+          `Failed to connect to MCP server "${serverName}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+    // Discover tools — SDK's RequestOptions.timeout protects this call
     let mcpToolDescriptors: MCPToolDescriptor[];
     try {
-      const result = await client.listTools();
+      const result = await client.listTools(undefined, { timeout: this.connectTimeoutMs });
       mcpToolDescriptors = result.tools as MCPToolDescriptor[];
     } catch (err) {
       await client.close().catch(() => {});
@@ -126,15 +172,17 @@ export class McpClientManager {
     // Adapt and register tools
     const adaptedTools: Tool[] = [];
     for (const mcpTool of mcpToolDescriptors) {
-      const adapted = this.adaptTool(serverName, mcpTool, client);
-      if (this.toolRegistry.has(adapted.name)) {
+      // Check for name collision before creating the closure in adaptTool()
+      const prefixedName = `${serverName}_${mcpTool.name}`;
+      if (this.toolRegistry.has(prefixedName)) {
         this.logger.warn(
           "MCP",
-          `Tool "${adapted.name}" is already registered. ` +
+          `Tool "${prefixedName}" is already registered. ` +
           `Skipping MCP tool "${serverName}/${mcpTool.name}".`,
         );
         continue;
       }
+      const adapted = this.adaptTool(serverName, mcpTool, client);
       adaptedTools.push(adapted);
     }
 
@@ -179,10 +227,8 @@ export class McpClientManager {
     const conn = this.connections.get(serverName);
     if (!conn) return;
 
-    // Unregister tools
-    for (const tool of conn.tools) {
-      this.toolRegistry.remove(tool.name);
-    }
+    // Unregister tools in batch (single pass through the map)
+    this.toolRegistry.removeMany(conn.tools.map((t) => t.name));
 
     // Close the client
     try {
@@ -272,17 +318,26 @@ export class McpClientManager {
         }
 
         try {
-          const result = await client.callTool({
-            name: mcpTool.name,
-            arguments: args,
-          });
+          const result = await client.callTool(
+            {
+              name: mcpTool.name,
+              arguments: args,
+            },
+            undefined,
+            { timeout: this.toolTimeoutMs },
+          );
 
           // MCP results carry an array of content items (text, image, etc.)
+          // Extract text parts in a single pass — skip non-text blobs
+          // instead of JSON.stringify-ing them (expensive and useless for e.g. images).
           let output = "(MCP tool returned no content)";
           if (result.content && Array.isArray(result.content)) {
-            const textParts = result.content
-              .map((c: any) => (c.text ? c.text : JSON.stringify(c)))
-              .filter(Boolean);
+            const textParts: string[] = [];
+            for (const c of result.content) {
+              if (c && typeof c === "object" && "text" in c && typeof (c as any).text === "string") {
+                textParts.push((c as any).text as string);
+              }
+            }
             if (textParts.length > 0) {
               output = textParts.join("\n");
             }

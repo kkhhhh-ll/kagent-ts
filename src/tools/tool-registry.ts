@@ -85,6 +85,16 @@ export class ToolRegistry {
   }
 
   /**
+   * Remove multiple tools and their circuit breakers in batch.
+   */
+  removeMany(names: string[]): void {
+    for (const name of names) {
+      this.breakers.delete(name);
+      this.tools.delete(name);
+    }
+  }
+
+  /**
    * Check if a tool is registered.
    */
   has(name: string): boolean {

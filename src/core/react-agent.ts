@@ -293,6 +293,7 @@ export class ReActAgent extends Agent {
       }
 
       // Normal answer — return content
+      this.logger.info("Answer", answer);
       for (const h of this.hooks) h.onFinish?.(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
       return answer;
