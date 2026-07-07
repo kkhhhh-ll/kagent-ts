@@ -109,7 +109,7 @@ import { allowlist } from 'kagent-ts'
 
 // 创建只读工具的子代理 Registry
 const readonlyRegistry = registry.filter(
-  allowlist('ReadFileTool', 'GrepSearchTool', 'GlobSearchTool')
+  allowlist('read_file', 'grep_search', 'glob_search')
 )
 ```
 

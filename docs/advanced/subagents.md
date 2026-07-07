@@ -96,7 +96,7 @@ const definitions = [
     name: 'code-reviewer',
     description: '审查 TypeScript 代码质量',
     systemPrompt: '你是一个资深的 TypeScript 代码审查专家...',
-    tools: ['ReadFileTool', 'GrepSearchTool', 'GlobSearchTool'],
+    tools: ['read_file', 'grep_search', 'glob_search'],
   },
 ]
 
@@ -197,7 +197,7 @@ enum SubAgentStatus {
 // 子代理只能使用 ReadFileTool 和 GrepSearchTool
 {
   name: 'code-reviewer',
-  tools: ['ReadFileTool', 'GrepSearchTool'],
+  tools: ['read_file', 'grep_search'],
 }
 
 // 使用通配符，引入整个 MCP Server 的工具
@@ -254,19 +254,19 @@ const agent = new OrchestratorAgent({
       name: 'code-reviewer',
       description: '审查代码质量，发现潜在问题',
       systemPrompt: '你是 TypeScript 代码审查专家...',
-      tools: ['ReadFileTool', 'GrepSearchTool', 'GlobSearchTool'],
+      tools: ['read_file', 'grep_search', 'glob_search'],
     },
     {
       name: 'test-writer',
       description: '编写单元测试',
       systemPrompt: '你是测试开发专家，擅长编写高质量测试...',
-      tools: ['ReadFileTool', 'GrepSearchTool', 'WriteFileTool'],
+      tools: ['read_file', 'grep_search', 'write_file'],
     },
     {
       name: 'doc-writer',
       description: '生成 API 文档',
       systemPrompt: '你是技术文档写作专家...',
-      tools: ['ReadFileTool', 'WriteFileTool'],
+      tools: ['read_file', 'write_file'],
     },
   ],
   maxRounds: 3,

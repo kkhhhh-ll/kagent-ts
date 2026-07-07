@@ -39,7 +39,7 @@ registerAllBuiltinTools(registry)
 
 // BUILTIN_TOOL_NAMES 包含所有内置工具名称
 console.log(BUILTIN_TOOL_NAMES)
-// ['ReadFileTool', 'WriteFileTool', 'EditFileTool', ...]
+// ['read_file', 'write_file', 'edit_file', 'grep_search', ...]
 ```
 
 ## 文件操作工具

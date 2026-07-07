@@ -47,13 +47,13 @@ const agent = new OrchestratorAgent({
       name: 'code-reviewer',
       description: '审查代码质量',
       systemPrompt: '你是代码审查专家...',
-      tools: ['ReadFileTool', 'GrepSearchTool'],
+      tools: ['read_file', 'grep_search'],
     },
     {
       name: 'test-writer',
       description: '编写单元测试',
       systemPrompt: '你是测试专家...',
-      tools: ['ReadFileTool', 'WriteFileTool'],
+      tools: ['read_file', 'write_file'],
     },
   ],
 
@@ -294,19 +294,19 @@ const agent = new OrchestratorAgent({
       name: 'code-analyzer',
       description: '分析代码结构和质量',
       systemPrompt: '你是一个代码分析专家...',
-      tools: ['ReadFileTool', 'GrepSearchTool', 'GlobSearchTool'],
+      tools: ['read_file', 'grep_search', 'glob_search'],
     },
     {
       name: 'dep-checker',
       description: '检查依赖关系',
       systemPrompt: '你是一个依赖分析专家...',
-      tools: ['ReadFileTool', 'BashTool'],
+      tools: ['read_file', 'bash'],
     },
     {
       name: 'report-writer',
       description: '生成分析报告',
       systemPrompt: '你是一个技术写作专家...',
-      tools: ['WriteFileTool'],
+      tools: ['write_file'],
     },
   ],
 

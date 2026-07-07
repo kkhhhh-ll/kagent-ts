@@ -13,7 +13,7 @@ import { allowlist, denylist, pattern, all, any, filterTools } from 'kagent-ts'
 白名单：只允许指定的工具：
 
 ```ts
-const filter = allowlist('ReadFileTool', 'GrepSearchTool', 'GlobSearchTool')
+const filter = allowlist('read_file', 'grep_search', 'glob_search')
 
 const readonlyTools = filterTools(allTools, filter)
 // 结果: 只有 ReadFileTool, GrepSearchTool, GlobSearchTool
@@ -24,7 +24,7 @@ const readonlyTools = filterTools(allTools, filter)
 黑名单：排除指定的工具：
 
 ```ts
-const filter = denylist('BashTool', 'WriteFileTool', 'EditFileTool')
+const filter = denylist('bash', 'write_file', 'edit_file')
 
 const safeTools = filterTools(allTools, filter)
 // 结果: 除了 BashTool, WriteFileTool, EditFileTool 之外的所有工具
@@ -50,7 +50,7 @@ const readTools = filterTools(allTools, filter)
 // 名称匹配 'Tool' 且不在黑名单中
 const filter = all(
   pattern(/Tool$/),
-  denylist('BashTool'),
+  denylist('bash'),
 )
 ```
 
@@ -61,7 +61,7 @@ const filter = all(
 ```ts
 // 允许 ReadFileTool 或任何以 'Search' 结尾的工具
 const filter = any(
-  allowlist('ReadFileTool'),
+  allowlist('read_file'),
   pattern(/Search$/),
 )
 ```
@@ -78,14 +78,14 @@ const agent = new OrchestratorAgent({
       name: 'code-reviewer',
       description: '审查代码质量',
       systemPrompt: '你是代码审查专家...',
-      tools: ['ReadFileTool', 'GrepSearchTool', 'GlobSearchTool'],
+      tools: ['read_file', 'grep_search', 'glob_search'],
       // 框架内部使用 allowlist 过滤
     },
     {
       name: 'code-writer',
       description: '编写和修改代码',
       systemPrompt: '你是代码编写专家...',
-      tools: ['ReadFileTool', 'WriteFileTool', 'EditFileTool', 'BashTool'],
+      tools: ['read_file', 'write_file', 'edit_file', 'bash'],
     },
   ],
 })
