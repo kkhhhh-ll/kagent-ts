@@ -919,20 +919,24 @@ export abstract class Agent {
       return false;
     }
 
+    const signal = this._abortController?.signal;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+
     try {
       const result = await Promise.race([
         this.onToolApproval(toolName, args),
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), this.approvalTimeoutMs),
-        ),
+        new Promise<"timeout">((resolve) => {
+          timeoutId = setTimeout(() => resolve("timeout"), this.approvalTimeoutMs);
+        }),
         // Also race against cancellation: if the agent is aborted, stop waiting
         new Promise<"cancelled">((resolve) => {
-          const signal = this._abortController?.signal;
           if (signal?.aborted) {
             resolve("cancelled");
-          } else {
-            signal?.addEventListener("abort", () => resolve("cancelled"), { once: true });
+            return;
           }
+          onAbort = () => resolve("cancelled");
+          signal?.addEventListener("abort", onAbort, { once: true });
         }),
       ]);
 
@@ -960,6 +964,11 @@ export abstract class Agent {
         `Approval callback threw for "${toolName}" — denied.`,
       );
       return false;
+    } finally {
+      // Clean up listeners to prevent accumulation on the shared AbortSignal
+      // across many tool-approval calls in a single agent run (Node.js warns at >10).
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (onAbort && signal) signal.removeEventListener("abort", onAbort);
     }
   }
 

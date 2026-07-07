@@ -523,19 +523,23 @@ export class FusionAgent extends Agent {
    * config inherited from {@link AgentConfig}.
    */
   private async confirmPlanWithTimeout(plan: string[]): Promise<boolean> {
+    const signal = (this as any)._abortController?.signal as AbortSignal | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+
     try {
       const result = await Promise.race([
         this.onPlanConfirm!(plan, this.routeReason),
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), (this as any).approvalTimeoutMs ?? 120_000),
-        ),
+        new Promise<"timeout">((resolve) => {
+          timeoutId = setTimeout(() => resolve("timeout"), (this as any).approvalTimeoutMs ?? 120_000);
+        }),
         new Promise<"cancelled">((resolve) => {
-          const signal = (this as any)._abortController?.signal;
           if (signal?.aborted) {
             resolve("cancelled");
-          } else {
-            signal?.addEventListener("abort", () => resolve("cancelled"), { once: true });
+            return;
           }
+          onAbort = () => resolve("cancelled");
+          signal?.addEventListener("abort", onAbort, { once: true });
         }),
       ]);
 
@@ -557,6 +561,9 @@ export class FusionAgent extends Agent {
     } catch {
       this.logger.warn("Fusion", "Plan confirmation callback threw — showing plan for review.");
       return false;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (onAbort && signal) signal.removeEventListener("abort", onAbort);
     }
   }
 
