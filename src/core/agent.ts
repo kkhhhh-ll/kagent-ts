@@ -1071,8 +1071,9 @@ export abstract class Agent {
 
     // ── Step 4: Execute ────────────────────────────────────────────────
     if (shouldParallelize) {
-      // Fire onToolStart for all executable tools before concurrent execution
+      // Log and fire hooks before concurrent execution
       for (const slot of executable) {
+        this.logger.info("Action", slot.toolCall.function.name);
         for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
       }
 
@@ -1098,6 +1099,7 @@ export abstract class Agent {
     } else {
       // Serial path (legacy behaviour or forced by sequential tools)
       for (const slot of executable) {
+        this.logger.info("Action", slot.toolCall.function.name);
         for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
 
         slot.result = await this.toolRegistry.execute(
