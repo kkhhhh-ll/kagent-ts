@@ -79,6 +79,8 @@ Preferences 和 [Rules](/advanced/rules) 共享同一套实现模式：读取文
 | `reloadIfChanged()` | 检查磁盘文件是否变化，如有则重新加载 |
 | `buildPrompt()` | 生成注入系统提示词的文本片段 |
 
+文件大小限制为 **10 KB**，超大文件会被跳过并在日志中警告。
+
 通常你不需要直接调用它们——Agent 在每次 `run()` 时自动处理。
 
 ## 下一步

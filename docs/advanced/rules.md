@@ -86,11 +86,13 @@ if (rules.reloadIfChanged()) {
 
 ```ts
 class ProjectRules {
-  constructor(rulesPath?: string)  // 不传默认 .kagent/rules/，文件不存在则静默空载
+  constructor(rulesPath?: string)  // 不传默认 .kagent/rules/
   isConfigured: boolean           // 是否已配置规则源
-  reloadIfChanged(): boolean      // 磁盘有变化则重载，返回是否实际重载
-  buildPrompt(): string            // 生成系统提示词片段（空则返回 ""）
+  reloadIfChanged(): boolean      // 磁盘有变化则重载
+  buildPrompt(): string            // 生成系统提示词片段（超限返回 ""）
 }
+
+// 大小限制：单文件 50 KB，目录总计 100 KB，超大文件跳过并 warn
 ```
 
 ## 下一步
