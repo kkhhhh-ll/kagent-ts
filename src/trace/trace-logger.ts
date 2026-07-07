@@ -512,7 +512,7 @@ ${eventCards}
           // Inline badge for the card header
           const pts = usage.prompt_tokens ?? 0;
           const cts = usage.completion_tokens ?? 0;
-          const tokensBadge = `<span class="badge badge-tokens">${this.fmtNum(pts)}+${this.fmtNum(cts)} tok</span>`;
+          const tokensBadge = `<span class="badge badge-tokens">in ${this.fmtNum(pts)} / out ${this.fmtNum(cts)} tok</span>`;
           let costBadge = "";
           if (this.pricing) {
             const cost = (pts / 1000) * this.pricing.inputPricePer1K + (cts / 1000) * this.pricing.outputPricePer1K;
