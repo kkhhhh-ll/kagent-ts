@@ -54,9 +54,7 @@ export class ProjectRules {
    */
   constructor(rulesPath?: string, logger?: Logger) {
     this.logger = logger ?? new ConsoleLogger();
-    if (!rulesPath) return;
-
-    const resolved = path.resolve(rulesPath);
+    const resolved = path.resolve(rulesPath ?? ".kagent/rules/");
     try {
       const stat = fs.statSync(resolved);
       if (stat.isDirectory()) {
@@ -167,6 +165,11 @@ export class ProjectRules {
     }
     // 文件列表变了（新增/删除），重建 mtime 记录并视为变更
     this.lastLoadedMtimes.clear();
+    for (const file of files) {
+      const fp = path.join(this.dirPath!, file);
+      const stat = fs.statSync(fp);
+      this.lastLoadedMtimes.set(file, stat.mtimeMs);
+    }
     this.lastFileList = fileListKey;
     return true;
   }

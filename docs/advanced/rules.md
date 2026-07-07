@@ -7,65 +7,62 @@
 | | Preferences | Rules |
 | --- | --- | --- |
 | **范围** | 用户个人偏好（跨项目） | 项目级规则（单项目） |
-| **存储** | `.kagent/preferences.md` | `RULES.md` 或 `.rules/` 目录 |
+| **存储** | `.kagent/preferences.md` | `.kagent/rules/` 目录（默认） |
 | **内容** | 风格、语言、简洁度 | 架构约定、编码规范、项目约束 |
 | **编辑** | 用户手工编辑 | 用户手工编辑 |
 
-## 两种模式
+## 默认目录结构
 
-### 单文件模式
-
-指定一个 Markdown 文件，所有规则写在一起：
-
-```ts
-import { ProjectRules } from 'kagent-ts'
-
-const rules = new ProjectRules('RULES.md')
-```
-
-### 目录模式
-
-指定一个目录，每个 `.md` 文件作为一个规则 section：
+Agent 默认从 `.kagent/rules/` 目录加载规则，每个 `.md` 文件作为一个规则 section：
 
 ```
-.rules/
-├── architecture.md    # "使用 Clean Architecture 分层"
-├── coding-style.md    # "使用函数式风格，禁止 class"
-├── testing.md         # "所有模块必须有单元测试"
-└── git.md             # "commit message 使用 conventional commits"
+.kagent/
+├── preferences.md       # 用户偏好
+└── rules/
+    ├── architecture.md  # "使用 Clean Architecture 分层"
+    ├── coding-style.md  # "使用函数式风格，禁止 class"
+    ├── testing.md       # "所有模块必须有单元测试"
+    └── git.md           # "commit message 使用 conventional commits"
 ```
 
-```ts
-const rules = new ProjectRules('.rules/')
-```
+文件按字母序加载，内容用 `\n\n` 拼接。
 
-目录模式下，文件按字母序加载，内容用 `\n\n` 拼接。
+也支持单文件模式（通过 `rulesPath` 指定 `.md` 文件路径）。
 
 ## 配置 Agent
 
-在 Agent 构造时传入 `projectRules`：
+在 Agent 构造时传入 `rulesPath`（可选），默认自动加载 `.kagent/rules/` 目录：
 
 ```ts
-import { ReActAgent, OpenAIProvider, ProjectRules } from 'kagent-ts'
+import { ReActAgent, OpenAIProvider } from 'kagent-ts'
 
-const rules = new ProjectRules('.rules/')
-
+// 默认读取 .kagent/rules/（无需配置）
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
-  llm: new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    model: 'gpt-4o',
-  }),
-  projectRules: rules,
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [],
+})
+
+// 或自定义路径
+const agent2 = new ReActAgent({
+  // ...
+  rulesPath: '.rules/',  // 目录模式
+  // rulesPath: 'RULES.md',  // 单文件模式
 })
 ```
 
 ## 自动热更新
 
-Agent 在每次 `run()` 开始时自动调用 `reloadIfChanged()`，所以你编辑规则文件后**无需重启 Agent**，下次对话自动生效：
+Agent 在每次 `run()` 开始时自动调用 `reloadIfChanged()`，所以编辑规则文件后**无需重启 Agent**，下次对话自动生效。
+
+如果需要手动管理 `ProjectRules` 实例（例如检查配置状态）：
 
 ```ts
+import { ProjectRules } from 'kagent-ts'
+
+const rules = new ProjectRules('.kagent/rules/')
+console.log(rules.isConfigured)  // true
+
 // 手动检查并重载
 if (rules.reloadIfChanged()) {
   console.log('规则已更新')
@@ -89,7 +86,7 @@ if (rules.reloadIfChanged()) {
 
 ```ts
 class ProjectRules {
-  constructor(rulesPath?: string)  // 可选，不传则空载
+  constructor(rulesPath?: string)  // 不传默认 .kagent/rules/，文件不存在则静默空载
   isConfigured: boolean           // 是否已配置规则源
   reloadIfChanged(): boolean      // 磁盘有变化则重载，返回是否实际重载
   buildPrompt(): string            // 生成系统提示词片段（空则返回 ""）

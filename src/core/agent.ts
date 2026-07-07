@@ -18,7 +18,6 @@ import { SessionManager } from "../session/session-manager";
 import { SessionState, SessionStatus, AgentType } from "../session/session-types";
 import { countTokens } from "../utils/token-counter";
 import { PreferenceManager } from "../preferences/preference-manager";
-import { Preferences } from "../preferences/types";
 import { AgentHooks } from "./hooks";
 import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
@@ -186,12 +185,11 @@ export interface AgentConfig {
   // ─── User Preferences ───────────────────────────────────────────────
 
   /**
-   * A pre-configured PreferenceManager for file-based persistence.
-   * Preferences are loaded from the markdown file on construction
-   * and auto-reloaded before each run (so manual edits to the file
-   * take effect without restarting the agent).
+   * Path to the preferences markdown file.
+   * Default: ".kagent/preferences.md". Preferences are loaded
+   * automatically and auto-reloaded before each run.
    */
-  preferenceManager?: PreferenceManager;
+  preferencesPath?: string;
 
   // ─── Session Persistence ─────────────────────────────────────────────
 
@@ -423,11 +421,8 @@ export abstract class Agent {
   /** The original core system prompt (before skill sections are appended). */
   protected coreSystemPrompt: string;
 
-  /** User preferences — plain-text directives injected into the system prompt. */
-  protected preferences: Preferences = {};
-
-  /** Preference manager for file-based persistence (optional). */
-  protected preferenceManager?: PreferenceManager;
+  /** Preference manager for loading and injecting user preferences. */
+  protected preferenceManager: PreferenceManager;
 
   /** Lifecycle hooks for observing agent execution. */
   protected hooks: AgentHooks[] = [];
@@ -546,7 +541,7 @@ export abstract class Agent {
     this.memoryManager = new MemoryManager(config.memoryDir);
 
     // Project rules — user-authored, always injected
-    this.projectRules = new ProjectRules(config.rulesPath);
+    this.projectRules = new ProjectRules(config.rulesPath, this.logger);
 
     // Store core system prompt and set it
     this.coreSystemPrompt = config.systemPrompt ?? "";
@@ -593,17 +588,9 @@ export abstract class Agent {
     this.hooks = Array.isArray(rawHooks) ? rawHooks : [rawHooks];
 
     // ── User Preferences ─────────────────────────────────────────────────
-    this.preferenceManager = config.preferenceManager;
-
-    // Preferences come exclusively from the markdown file
-    if (this.preferenceManager) {
-      this.preferences = this.preferenceManager.getAll();
-    }
-
-    // If preferences are non-empty, inject them into the system prompt
-    if (Object.keys(this.preferences).length > 0) {
-      this.rebuildSystemPrompt();
-    }
+    this.preferenceManager = new PreferenceManager({
+      filePath: config.preferencesPath ?? ".kagent/preferences.md",
+    });
   }
 
   /**
@@ -694,7 +681,7 @@ export abstract class Agent {
       SECURITY_GUIDANCE,
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.projectRules.buildPrompt(),
-      PreferenceManager.toPrompt(this.preferences),
+      this.preferenceManager.buildPrompt(),
       this.memoryManager.buildPromptHint(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
@@ -721,8 +708,7 @@ export abstract class Agent {
    * change mid-run behavior.
    */
   protected reloadPreferencesIfChanged(): boolean {
-    if (this.preferenceManager?.hasFileChanged()) {
-      this.preferences = this.preferenceManager.reload();
+    if (this.preferenceManager?.reloadIfChanged()) {
       this.rebuildSystemPrompt();
       return true;
     }
@@ -1232,62 +1218,6 @@ export abstract class Agent {
     return this._cancelled;
   }
 
-  // ─── User Preferences ──────────────────────────────────────────────────
-
-  /**
-   * Set a single user preference and rebuild the system prompt.
-   * If a PreferenceManager is configured, the change is persisted to disk.
-   */
-  setPreference(key: string, value: string): void {
-    this.preferences[key] = value;
-    this.preferenceManager?.set(key, value);
-    this.rebuildSystemPrompt();
-  }
-
-  /**
-   * Replace all user preferences and rebuild the system prompt.
-   * If a PreferenceManager is configured, the change is persisted to disk.
-   */
-  setPreferences(prefs: Preferences): void {
-    this.preferences = { ...prefs };
-    this.preferenceManager?.setAll(prefs);
-    this.rebuildSystemPrompt();
-  }
-
-  /**
-   * Get a single preference by key.
-   */
-  getPreference(key: string): string | undefined {
-    return this.preferences[key];
-  }
-
-  /**
-   * Get all current preferences.
-   */
-  getPreferences(): Preferences {
-    return { ...this.preferences };
-  }
-
-  /**
-   * Remove a single preference by key and rebuild the system prompt.
-   * If a PreferenceManager is configured, the change is persisted to disk.
-   */
-  removePreference(key: string): void {
-    delete this.preferences[key];
-    this.preferenceManager?.delete(key);
-    this.rebuildSystemPrompt();
-  }
-
-  /**
-   * Clear all user preferences and rebuild the system prompt.
-   * If a PreferenceManager is configured, the change is persisted to disk.
-   */
-  clearPreferences(): void {
-    this.preferences = {};
-    this.preferenceManager?.clear();
-    this.rebuildSystemPrompt();
-  }
-
   // ─── Session Persistence ─────────────────────────────────────────────
 
   /**
@@ -1481,7 +1411,6 @@ export abstract class Agent {
     this._cancelled = false;
     this.contextManager.clear();
     this.coreSystemPrompt = "";
-    this.preferences = {};
     this.tokenBudget?.reset();
     this.subAgentManager?.cancelAll();
     if (this.sessionManager) {
