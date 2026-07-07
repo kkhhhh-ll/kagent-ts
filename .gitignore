@@ -9,7 +9,6 @@ temp/
 .npmrc
 .rules/
 traces/
-interview.md
 .vscode/
 .memory/
 .claude/
