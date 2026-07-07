@@ -155,7 +155,10 @@ export class OpenAIProvider implements LLMProvider {
             max_tokens: this.maxTokens,
             tools: openaiTools,
           },
-          { timeout: this.timeout, signal }
+          {
+            signal,
+            ...(this.timeout !== undefined ? { timeout: this.timeout } : {}),
+          },
         ),
       this.retryConfig,
       { isRetryable: isNetworkError, classifyError },
@@ -233,7 +236,10 @@ export class OpenAIProvider implements LLMProvider {
             stream: true,
             stream_options: { include_usage: true },
           },
-          { timeout: this.timeout, signal }
+          {
+            signal,
+            ...(this.timeout !== undefined ? { timeout: this.timeout } : {}),
+          },
         )) as unknown as Stream<OpenAI.Chat.ChatCompletionChunk>
       ,
       this.retryConfig,

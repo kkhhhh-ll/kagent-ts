@@ -73,9 +73,6 @@ export class ReActAgent extends Agent {
     const sizeError = this.validateInputSize(input);
     if (sizeError) return sizeError;
 
-    // ── Create fresh abort controller for this run ───────────────────
-    this._abortController = new AbortController();
-
     // ── Async initialization (MCP connections, sub-agents, etc.) ────────
     await this.init();
 
@@ -104,6 +101,10 @@ export class ReActAgent extends Agent {
 
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      // Fresh AbortController per iteration so the signal's listener
+      // count doesn't accumulate across LLM calls and retries.
+      this._abortController = new AbortController();
+
       // Check if user cancelled (SIGINT)
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");
