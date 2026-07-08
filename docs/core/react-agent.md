@@ -38,6 +38,25 @@ const answer = await agent.run('帮我查找当前目录下最大的 5 个文件
 console.log(answer)
 ```
 
+## 流式输出
+
+ReAct Agent 支持流式输出——`stream()` 方法使用 `chatStream` 实时输出 LLM 生成的文本，工具调用阶段透明处理：
+
+```ts
+for await (const chunk of agent.stream('请分析这个项目的代码结构')) {
+  process.stdout.write(chunk)  // 逐字输出，无等待
+}
+```
+
+内部逻辑：有 `tool_calls` → 执行工具 → 继续流式循环；无 `tool_calls` → 流式内容即最终答案。也可以通过 `onChunk` 钩子接收：
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  hooks: [{ onChunk: (chunk) => process.stdout.write(chunk) }],
+})
+```
+
 ## 响应格式
 
 ReAct Agent **不要求模型输出 JSON**。判定逻辑非常简单：

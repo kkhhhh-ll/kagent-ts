@@ -539,6 +539,12 @@ export class PlanSolveAgent extends Agent {
    * @param sessionId The session ID to resume.
    * @param input     New user input to continue the conversation.
    */
+  protected async *executeStream(input: string): AsyncIterable<string> {
+    // Plan-solve is inherently multi-phase — stream the final answer.
+    const answer = await this.run(input);
+    yield answer;
+  }
+
   async resume(sessionId: string, input: string): Promise<string> {
     this.loadAndRestoreSession(sessionId);
     // Signal run() to preserve the restored plan state

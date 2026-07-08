@@ -42,6 +42,16 @@ const answer = await agent.run('请审查 src/ 目录下的所有 TypeScript 文
 console.log(answer)
 ```
 
+### 流式输出
+
+`stream()` 方法可用但最终答案为一次性输出（Plan-Solve 多阶段推理不适合逐 token 流）：
+
+```ts
+for await (const chunk of agent.stream('请审查项目代码')) {
+  process.stdout.write(chunk)
+}
+```
+
 ## 配置参数
 
 ```ts

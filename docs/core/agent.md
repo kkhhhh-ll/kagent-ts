@@ -23,6 +23,16 @@ import { Agent } from 'kagent-ts'
 const answer = await agent.run('请帮我分析这个项目的代码结构。')
 ```
 
+### `stream(input: string): AsyncIterable<string>`
+
+流式执行 Agent，实时输出 LLM 生成的文本块。ReAct 模式下工具调用透明处理；Plan-Solve / Fusion 模式最终答案一次性输出。
+
+```ts
+for await (const chunk of agent.stream('你好，请帮我分析项目结构。')) {
+  process.stdout.write(chunk)
+}
+```
+
 ### `chat(input: string): Promise<string>`
 
 单轮对话，不触发 Agent 循环（不调用工具，仅 LLM 回复）。

@@ -40,6 +40,9 @@ interface AgentHooks {
   /** 计划修订时触发 */
   onPlanRevised?: (plan: string[]) => void
 
+  /** 流式输出文本块时触发 (配合 agent.stream()) */
+  onChunk?: (chunk: string) => void
+
   /** Agent 执行完成时触发 */
   onFinish?: (answer: string) => void
 }
@@ -122,6 +125,24 @@ const agent = new OrchestratorAgent({
 > ⚠️ **安全防护**：标记了 `safeForSubAgent: false` 的 hook（如 `ReflectionHook`——它在 `onFinish` 中又会 spawn 子 Agent）会被 `SubAgentManager` 自动过滤，并打印警告日志。这样可以防止无限递归。
 
 ## 内置 Hook 实现
+
+### onChunk — 流式输出
+
+配合 `agent.stream()` 使用，在每个文本块到达时触发：
+
+```ts
+const agent = new ReActAgent({
+  // ...
+  hooks: [{
+    onChunk: (chunk) => process.stdout.write(chunk),
+  }],
+})
+
+// stream() 内部自动调用 onChunk
+for await (const chunk of agent.stream('你好')) {
+  // 也可以通过 async iterator 消费
+}
+```
 
 ### TraceLogger
 

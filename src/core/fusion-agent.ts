@@ -1149,6 +1149,11 @@ export class FusionAgent extends Agent {
    * @param sessionId The session ID to resume.
    * @param input     New user input to continue the conversation.
    */
+  protected async *executeStream(input: string): AsyncIterable<string> {
+    const answer = await this.run(input);
+    yield answer;
+  }
+
   async resume(sessionId: string, input: string): Promise<string> {
     this.loadAndRestoreSession(sessionId);
     this._skipStateReset = true;

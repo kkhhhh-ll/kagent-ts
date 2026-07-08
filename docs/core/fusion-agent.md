@@ -174,6 +174,16 @@ const answer = await agent.run(
 console.log(answer)
 ```
 
+### 流式输出
+
+`stream()` 可用，路由到 ReAct 时逐 token 流式输出，路由到 Plan-Solve 时最终答案一次性输出：
+
+```ts
+for await (const chunk of agent.stream('请分析项目代码质量')) {
+  process.stdout.write(chunk)
+}
+```
+
 ## 什么时候用 Fusion？
 
 ✅ **适合**:

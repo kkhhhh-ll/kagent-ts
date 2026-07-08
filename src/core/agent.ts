@@ -615,6 +615,33 @@ export abstract class Agent {
     return this.toolRegistry;
   }
 
+  /**
+   * Stream the agent's response, yielding text chunks as they arrive.
+   *
+   * Uses `chatStream()` under the hood for the LLM generation phase.
+   * Tool calls are handled transparently — when the LLM requests tools,
+   * they're executed and results are fed back into context before the
+   * next LLM call (non-streamed).
+   *
+   * Usage:
+   * ```ts
+   * for await (const chunk of agent.stream("Hello!")) {
+   *   process.stdout.write(chunk);
+   * }
+   * ```
+   */
+  async *stream(input: string): AsyncIterable<string> {
+    yield* this.executeStream(input);
+  }
+
+  /**
+   * Subclass hook for the streaming loop.
+   * Each agent type overrides this with its own loop logic.
+   */
+  protected async *executeStream(_input: string): AsyncIterable<string> {
+    yield "Streaming is not supported by this agent type.";
+  }
+
   // ─── Skill Management ────────────────────────────────────────────────
 
   /**

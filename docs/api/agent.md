@@ -131,31 +131,28 @@ interface OrchestratorAgentConfig extends AgentConfig {
 
 ```ts
 interface AgentConfig {
-  systemPrompt: string
+  systemPrompt?: string
   llm: LLMProvider
-  tools: Tool[]
-  maxIterations?: number
+  tools?: Tool[]
   contextConfig?: Partial<ContextConfig>
   logger?: Logger
-  hooks?: AgentHooks[]
+  hooks?: AgentHooks | AgentHooks[]
   onToolApproval?: ApprovalCallback
   allowParallelToolCalls?: boolean
+  preferencesPath?: string           // 偏好文件路径 (默认: ".kagent/preferences.md")
+  rulesPath?: string                 // 规则文件/目录路径 (默认: ".kagent/rules/")
+  memoryDir?: string                 // 记忆存储目录 (默认: ".memory")
   sessionId?: string
-  mcpConfigPath?: string          // 推荐：从 JSON 文件加载 MCP 配置
-  mcpServers?: Record<string, McpServerConfig>  // 内联覆盖
+  mcpConfigPath?: string
+  mcpServers?: Record<string, McpServerConfig>
   subAgents?: SubAgentDefinition[]
 
   /**
    * 子 Agent 的生命周期钩子。
    * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks | AgentHooks[]。
-   * 用于为子 Agent 注入 TraceLogger 等观测型 hook。
-   *
-   * 标记了 safeForSubAgent: false 的 hook 会被自动过滤（防止无限递归）。
    */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  memoryDir?: string
-  rulesPath?: string
   tokenBudget?: TokenBudgetConfig
 }
 
@@ -184,6 +181,7 @@ interface AgentHooks {
   onToolEnd?: (toolName: string, result: string, toolCallId?: string) => void
   onToolError?: (toolName: string, error: string, toolCallId?: string) => void
   onThought?: (thought: string) => void
+  onChunk?: (chunk: string) => void
   onPlanCreated?: (plan: string[]) => void
   onPlanRevised?: (plan: string[]) => void
   onFinish?: (answer: string) => void

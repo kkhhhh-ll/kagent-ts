@@ -309,6 +309,149 @@ export class ReActAgent extends Agent {
     return timeoutMsg;
   }
 
+  // ─── Streaming ────────────────────────────────────────────────────────
+
+  protected async *executeStream(input: string): AsyncIterable<string> {
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) { yield sizeError; return; }
+
+    await this.init();
+    await this.reloadDynamicResources();
+    this.recoverOrphanedSubAgentResults();
+
+    const userMessage = Message.user(input);
+    this.contextManager.addMessage(userMessage.toDict());
+
+    if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+    let consecutiveTruncations = 0;
+    const MAX_TRUNCATION_CONTINUES = 3;
+
+    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      this._abortController = new AbortController();
+
+      if (this.isCancelled) {
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
+        return;
+      }
+
+      // Poll sub-agent results
+      const subResults = await this.pollSubAgentResults();
+      for (const r of subResults) {
+        const source = `subagent:${r.name}`;
+        const msg = new Message(Role.User, wrapAndScan(source, r.output), { name: source });
+        this.contextManager.addMessage(msg.toDict());
+      }
+
+      await this.checkAndCompress();
+      const contextMessages = this.contextManager.getContextMessages();
+
+      const budgetError = this.checkTokenBudget(
+        this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
+      );
+      if (budgetError) { yield budgetError; return; }
+
+      for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+
+      // ── Streaming LLM call ──────────────────────────────────────────
+      let rawContent = "";
+      let toolCallsAccumulated: Map<number, { id?: string; name?: string; args?: string }> = new Map();
+      let usageInfo: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+
+      try {
+        for await (const event of this.llm.chatStream(
+          contextMessages,
+          this.toolRegistry.getTools(),
+          this._abortController?.signal,
+        )) {
+          if (event.type === "chunk") {
+            if (event.content) {
+              rawContent += event.content;
+              yield event.content;
+              for (const h of this.hooks) h.onChunk?.(event.content);
+            }
+            if (event.tool_calls) {
+              for (const tc of event.tool_calls) {
+                const existing = toolCallsAccumulated.get(tc.index) ?? { args: "" };
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name = tc.function.name;
+                if (tc.function?.arguments) existing.args = (existing.args ?? "") + tc.function.arguments;
+                toolCallsAccumulated.set(tc.index, existing);
+              }
+            }
+          } else if (event.type === "done") {
+            usageInfo = event.usage;
+          }
+        }
+      } catch (err: unknown) {
+        if (this.isCancelled) {
+          this.saveCheckpoint("cancelled");
+          const sid = this.sessionManager?.getSessionId() ?? "unknown";
+          yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
+          return;
+        }
+        if (err instanceof LLMNetworkError) {
+          for (const h of this.hooks) h.onLLMError?.(err);
+          yield `\n\n[Network error: ${err.message}]`;
+          return;
+        }
+        throw err;
+      }
+
+      // Build tool calls from accumulated deltas
+      const toolCalls = Array.from(toolCallsAccumulated.entries())
+        .filter(([, tc]) => tc.name && tc.args !== undefined)
+        .map(([, tc]) => ({
+          id: tc.id ?? `call_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+          type: "function" as const,
+          function: { name: tc.name!, arguments: tc.args! },
+        }));
+
+      if (usageInfo) {
+        this.tokenBudget?.recordUsage(usageInfo.prompt_tokens, usageInfo.completion_tokens);
+      }
+
+      // Hook: LLM end
+      for (const h of this.hooks) {
+        h.onLLMEnd?.({ content: rawContent, tool_calls: toolCalls, usage: usageInfo });
+      }
+
+      const parsed = parseReActResponse(rawContent);
+      if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
+
+      const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
+      this.contextManager.addMessage(assistantMessage.toDict());
+
+      // ── Tool calls → execute and continue ───────────────────────────
+      if (toolCalls.length > 0) {
+        if (parsed.thought) {
+          this.logger.info("Thought", parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        const mcpWarnedServers = new Set<string>();
+        await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        if (this.checkpointingEnabled) this.saveCheckpoint("active");
+        continue;
+      }
+
+      // ── No tool calls → final answer (already streamed) ─────────────
+      const answer = parsed.answer || rawContent;
+
+      // Empty/short response check
+      if (!rawContent || rawContent.trim().length < 5) {
+        continue;
+      }
+
+      this.logger.info("Answer", answer);
+      for (const h of this.hooks) h.onFinish?.(answer);
+      if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+      return;
+    }
+
+    yield `\n\n[Unable to complete within ${this.maxIterations} iterations.]`;
+  }
+
   // ─── Resume ──────────────────────────────────────────────────────────
 
   /**

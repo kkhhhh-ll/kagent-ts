@@ -68,6 +68,13 @@ export interface AgentHooks {
   /** Called when the LLM produces a reasoning thought. */
   onThought?: (thought: string) => void;
 
+  /**
+   * Called for each text chunk during streaming (`agent.stream()`).
+   * When set, the agent uses `chatStream()` instead of `chat()` for the
+   * final answer phase, yielding incremental content to the consumer.
+   */
+  onChunk?: (chunk: string) => void;
+
   // ─── Plan & Solve (PlanSolveAgent only) ──────────────────────────────
 
   /** Called when an initial plan is created. */
