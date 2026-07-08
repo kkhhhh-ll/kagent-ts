@@ -90,6 +90,22 @@ export class TraceLogger implements AgentHooks {
   private totalPromptTokens = 0;
   private totalCompletionTokens = 0;
 
+  // ── Sub-agent spawn counter (links spawn events to child traces) ──
+  private spawnSeq = 0;
+
+  // ── Sub-agent trace embedding ──
+  private parent?: TraceLogger;
+  private subTraceId: string = ""; // set on child traces to link with parent events
+  private childrenTraces: Array<{
+    traceId: string;
+    agentLabel: string;
+    events: AgentTraceEvent[];
+    sessionCounters: { llmCalls: number; toolCalls: number; promptTokens: number; completionTokens: number };
+    startTime: number;
+    endTime: number;
+    modelName: string;
+  }> = [];
+
   constructor(config?: TraceLoggerConfig) {
     const ts = Date.now();
     const rand = Math.random().toString(36).slice(2, 6);
@@ -143,14 +159,19 @@ export class TraceLogger implements AgentHooks {
    * @returns A new TraceLogger for the sub-agent's execution.
    */
   createChildTrace(name: string, runId: string): TraceLogger {
-    return new TraceLogger({
-      sessionId: `${this.sessionId}__sub_${name}_${runId}`,
+    const child = new TraceLogger({
+      sessionId: runId,
       outputDir: this.outputDir,
       agentLabel: `${this.agentLabel} › ${name}`,
       modelName: this.modelName,
       logger: this.logger,
       pricing: this.pricing,
     });
+    // Link child to parent — when the sub-agent finishes, its events
+    // are serialised into the parent trace instead of a separate file.
+    child.parent = this;
+    child.subTraceId = runId;
+    return child;
   }
 
   /**
@@ -212,7 +233,25 @@ export class TraceLogger implements AgentHooks {
       cause: error.cause,
       message: error.message,
     });
-    this.flush();
+    // Push to parent trace if this is a sub-agent, otherwise flush to file.
+    if (this.parent) {
+      this.parent.addChildTrace({
+        traceId: this.subTraceId,
+        agentLabel: this.agentLabel,
+        events: this.events,
+        sessionCounters: {
+          llmCalls: this.llmCallCount,
+          toolCalls: this.toolCallCount,
+          promptTokens: this.totalPromptTokens,
+          completionTokens: this.totalCompletionTokens,
+        },
+        startTime: this.startTime,
+        endTime: Date.now(),
+        modelName: this.modelName,
+      });
+    } else {
+      this.flush();
+    }
   }
 
   onToolStart(toolName: string, args: Record<string, unknown>, toolCallId?: string): void {
@@ -226,9 +265,12 @@ export class TraceLogger implements AgentHooks {
     // For spawn_subagent, emit a dedicated subagent_spawn event so the
     // timeline clearly delineates where work is delegated to a sub-agent.
     if (toolName === "spawn_subagent" && args.name) {
+      const seq = ++this.spawnSeq;
+      const subInput = (args.input ?? args.task ?? "") as string;
       this.addEvent("subagent_spawn", `Sub-Agent: ${args.name}`, {
         subAgentName: args.name,
-        input: args.input ?? args.task ?? "",
+        input: subInput,
+        spawnSeq: seq,
       });
     }
   }
@@ -275,16 +317,53 @@ export class TraceLogger implements AgentHooks {
 
   onFinish(answer: string): void {
     this.addEvent("finish", "Final Answer", { answer });
-    this.flush();
+
+    if (this.parent) {
+      // Sub-agent: push trace data into the parent instead of writing a file.
+      this.parent.addChildTrace({
+        traceId: this.subTraceId,
+        agentLabel: this.agentLabel,
+        events: this.events,
+        sessionCounters: {
+          llmCalls: this.llmCallCount,
+          toolCalls: this.toolCallCount,
+          promptTokens: this.totalPromptTokens,
+          completionTokens: this.totalCompletionTokens,
+        },
+        startTime: this.startTime,
+        endTime: Date.now(),
+        modelName: this.modelName,
+      });
+    } else {
+      // Main agent: flush to file.
+      this.flush();
+    }
+  }
+
+  /** Drop oldest child traces once this ceiling is reached (prevents OOM). */
+  private static MAX_CHILD_TRACES = 20;
+
+  /** Called by a child trace to deposit its events into this (parent) trace. */
+  private addChildTrace(child: TraceLogger["childrenTraces"][number]): void {
+    if (this.childrenTraces.length >= TraceLogger.MAX_CHILD_TRACES) {
+      this.childrenTraces.shift(); // drop oldest
+    }
+    this.childrenTraces.push(child);
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────
+
+  /** Drop oldest events once this ceiling is reached (prevents OOM). */
+  private static MAX_EVENTS = 500;
 
   private addEvent(
     type: AgentTraceEventType,
     label: string,
     data: Record<string, unknown>,
   ): void {
+    if (this.events.length >= TraceLogger.MAX_EVENTS) {
+      this.events.shift(); // drop oldest
+    }
     this.events.push({
       id: ++this.eventId,
       timestamp: new Date().toISOString(),
@@ -425,6 +504,29 @@ export class TraceLogger implements AgentHooks {
   }
   .kv-table th { background: #0d1117; color: #8b949e; font-weight: 500; white-space: nowrap; }
 
+  /* ── Child Trace (Sub-Agent) ── */
+  .child-trace {
+    margin-top: 16px; border: 1px solid #30363d; border-radius: 10px;
+    background: #161b22; overflow: hidden;
+  }
+  .child-trace-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; cursor: pointer; user-select: none;
+    background: #1c2333; border-bottom: 1px solid #30363d;
+  }
+  .child-trace-header:hover { background: #21262d; }
+  .child-trace-header .icon { font-size: 18px; }
+  .child-trace-header .label { flex: 1; font-weight: 600; color: #79c0ff; }
+  .child-trace-header .badge {
+    font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    background: #1a2332; color: #8b949e; font-family: monospace;
+  }
+  .child-trace-header .time { color: #8b949e; font-size: 13px; }
+  .child-trace-header .toggle { color: #8b949e; font-size: 12px; transition: transform .15s; }
+  .child-trace.open .child-trace-header .toggle { transform: rotate(90deg); }
+  .child-trace-body { display: none; padding: 0 16px 16px; }
+  .child-trace.open .child-trace-body { display: block; }
+
   @media (max-width: 640px) {
     body { padding: 12px; }
     .timeline { padding-left: 28px; }
@@ -456,6 +558,7 @@ export class TraceLogger implements AgentHooks {
   <div class="timeline">
 ${eventCards}
   </div>
+${this.childrenTraces.length > 0 ? this.renderChildTraces() : ""}
 
 </div>
 <script>
@@ -470,6 +573,37 @@ ${eventCards}
 </script>
 </body>
 </html>`;
+  }
+
+  /** Render collapsible child-trace sections below the main timeline. */
+  private renderChildTraces(): string {
+    return this.childrenTraces.map((child, i) => {
+      const duration = ((child.endTime - child.startTime) / 1000).toFixed(1);
+      const totalTokens = child.sessionCounters.promptTokens + child.sessionCounters.completionTokens;
+      const eventCards = child.events.map((e) => this.renderEventCard(e)).join("\n");
+      return `
+  <div class="child-trace" id="child-trace-${i}">
+    <div class="child-trace-header" onclick="document.getElementById('child-trace-${i}').classList.toggle('open')">
+      <span class="icon">🤖</span>
+      <span class="label">${this.escapeHtml(child.agentLabel)}</span>
+      <span class="badge">${child.events.length} events</span>
+      <span class="badge">${this.fmtNum(totalTokens)} tok</span>
+      <span class="time">${duration}s</span>
+      <span class="toggle">▶</span>
+    </div>
+    <div class="child-trace-body">
+      <div class="summary" style="margin-top:12px">
+        <span class="stat"><span class="lbl">LLM Calls:</span><span class="val">${child.sessionCounters.llmCalls}</span></span>
+        <span class="stat"><span class="lbl">Tool Calls:</span><span class="val">${child.sessionCounters.toolCalls}</span></span>
+        <span class="stat"><span class="lbl">Tokens:</span><span class="val">${this.fmtNum(totalTokens)}</span></span>
+        <span class="stat"><span class="lbl">In / Out:</span><span class="val">${this.fmtNum(child.sessionCounters.promptTokens)} / ${this.fmtNum(child.sessionCounters.completionTokens)}</span></span>
+      </div>
+      <div class="timeline" style="margin-top:12px">
+${eventCards}
+      </div>
+    </div>
+  </div>`;
+    }).join("\n");
   }
 
   private renderEventCard(event: AgentTraceEvent): string {
@@ -589,6 +723,12 @@ ${eventCards}
       case "subagent_spawn": {
         const subName = event.data.subAgentName as string | undefined;
         const subInput = event.data.input as string | undefined;
+        // Link by spawn order: childrenTraces are added in spawn order,
+        // so spawnSeq-1 = childrenTraces index.
+        const spawnSeq = event.data.spawnSeq as number | undefined;
+        const childIdx = (spawnSeq !== undefined && spawnSeq > 0 && spawnSeq <= this.childrenTraces.length)
+          ? spawnSeq - 1
+          : (this.childrenTraces.length > 0 ? this.childrenTraces.length - 1 : null);
         detail = `<div class="detail-section">
           <h4>Sub-Agent: ${this.escapeHtml(subName ?? "unknown")}</h4>
         </div>`;
@@ -598,13 +738,24 @@ ${eventCards}
             <pre>${this.escapeHtml(subInput)}</pre>
           </div>`;
         }
+        if (childIdx !== null && childIdx < this.childrenTraces.length) {
+          detail += `<div class="detail-section">
+            <a href="#child-trace-${childIdx}" style="color:#58a6ff">📋 View sub-agent trace ↓</a>
+          </div>`;
+        }
         break;
       }
       case "subagent_result": {
+        const childIdx = this.childrenTraces.length > 0 ? this.childrenTraces.length - 1 : null;
         detail = `<div class="detail-section">
           <h4>Sub-Agent Output (${event.data.resultLength ?? 0} chars)</h4>
           <pre>${this.escapeHtml(String(event.data.result ?? ""))}</pre>
         </div>`;
+        if (childIdx !== null) {
+          detail += `<div class="detail-section">
+            <a href="#child-trace-${childIdx}" style="color:#58a6ff">📋 View full sub-agent trace ↓</a>
+          </div>`;
+        }
         break;
       }
     }
@@ -666,7 +817,14 @@ ${eventCards}
   }
 
   private syntaxHighlight(json: string): string {
-    return json.replace(
+    // Escape HTML-dangerous characters before highlighting (keep " for the
+    // regex below). Prevents XSS when LLM-generated content contains
+    // literal <script> tags in code-review output.
+    const safe = json
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return safe.replace(
       /("(?:[^"\\]|\\.)*")\s*:/g,
       '<span class="key">$1</span>:',
     ).replace(

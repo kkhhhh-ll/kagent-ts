@@ -1228,6 +1228,7 @@ export class FusionAgent extends Agent {
       for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
 
       let rawContent = "";
+      let isTruncated = false;
       let toolCallsMap = new Map<number, { id?: string; name?: string; args?: string }>();
       let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
 
@@ -1257,6 +1258,7 @@ export class FusionAgent extends Agent {
             }
           } else if (event.type === "done") {
             streamUsage = event.usage;
+            isTruncated = event.stop_reason === "length";
           }
         }
       } catch (err: unknown) {
@@ -1295,11 +1297,21 @@ export class FusionAgent extends Agent {
       const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
       this.contextManager.addMessage(assistantMessage.toDict());
 
+      // ── Truncation → continue in next iteration ────────────────────
+      if (isTruncated) {
+        this.contextManager.addMessage(
+          Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          ).toDict(),
+        );
+        continue;
+      }
+
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {
         consecutiveEmptyIterations = 0;
         if (parsed.thought) {
-          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         const mcpWarnedServers = new Set<string>();
@@ -1336,7 +1348,6 @@ export class FusionAgent extends Agent {
       // ── Final answer ──────────────────────────────────────────────
       if (parsed.answer) {
         if (parsed.thought) {
-          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         this.logger.info("Fusion", "Task complete.");
@@ -1354,7 +1365,7 @@ export class FusionAgent extends Agent {
         yield planText;
         for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
         if (parsed.thought) {
-          this.logger.info("Thought", parsed.thought);
+
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         continue;
@@ -1370,7 +1381,7 @@ export class FusionAgent extends Agent {
         yield revText;
         for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
         if (parsed.thought) {
-          this.logger.info("Thought", parsed.thought);
+
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         continue;
@@ -1379,7 +1390,7 @@ export class FusionAgent extends Agent {
       // ── Thought only ──────────────────────────────────────────────
       if (parsed.thought) {
         consecutiveEmptyIterations++;
-        this.logger.info("Thought", parsed.thought);
+
         for (const h of this.hooks) h.onThought?.(parsed.thought);
         if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
           yield "\n\n[Unable to make progress. Please try rephrasing.]";

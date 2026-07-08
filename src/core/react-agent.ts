@@ -353,6 +353,7 @@ export class ReActAgent extends Agent {
 
       // ── Streaming LLM call ──────────────────────────────────────────
       let rawContent = "";
+      let isTruncated = false;
       let toolCallsAccumulated: Map<number, { id?: string; name?: string; args?: string }> = new Map();
       let usageInfo: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
 
@@ -382,6 +383,8 @@ export class ReActAgent extends Agent {
             }
           } else if (event.type === "done") {
             usageInfo = event.usage;
+            // Track truncation for continuation handling below
+            isTruncated = event.stop_reason === "length";
           }
         }
       } catch (err: unknown) {
@@ -423,10 +426,20 @@ export class ReActAgent extends Agent {
       const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
       this.contextManager.addMessage(assistantMessage.toDict());
 
+      // ── Truncation → continue in next iteration ────────────────────
+      if (isTruncated) {
+        this.contextManager.addMessage(
+          Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          ).toDict(),
+        );
+        continue;
+      }
+
       // ── Tool calls → execute and continue ───────────────────────────
       if (toolCalls.length > 0) {
         if (parsed.thought) {
-          this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         const mcpWarnedServers = new Set<string>();

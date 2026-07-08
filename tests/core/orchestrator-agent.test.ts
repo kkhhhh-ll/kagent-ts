@@ -580,18 +580,18 @@ describe("OrchestratorAgent", () => {
       expect(result).toContain("Recovered after network error.");
     });
 
-    it("fails early with clear error when no subAgentsDir is configured", async () => {
+    it("fails early with clear error when subAgentsDir has no valid agents", async () => {
       const agent = new OrchestratorAgent({
         llm: mockAnswerLLM("should not be called"),
         toolRegistry: createToolRegistry(),
         logger: new SilentLogger(),
         maxRounds: 3,
-        // No subAgentsDir — the orchestrator cannot function without sub-agents
+        subAgentsDir: "/nonexistent/path/no/subagents/here",
       });
 
       const result = await agent.run("do something");
-      expect(result).toContain("OrchestratorAgent requires sub-agents to be configured");
-      expect(result).toContain("subAgentsDir");
+      expect(result).toContain("OrchestratorAgent requires at least one sub-agent definition");
+      expect(result).toContain("No definitions found");
     });
 
     it("fails early with clear error when subAgentsDir has no definitions", async () => {

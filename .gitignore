@@ -8,9 +8,10 @@ temp/
 *.tgz
 .npmrc
 .rules/
-traces/
+.kagent-traces/
 .vscode/
 .memory/
+subagents/
 .claude/
 mcp.json
 docs/.vitepress/dist/

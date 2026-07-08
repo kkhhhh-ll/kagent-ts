@@ -188,12 +188,24 @@ export class SubAgentManager {
    * @returns The unique run ID (used to correlate results later).
    * @throws If the definition is unknown or the manager is not yet bound.
    */
+  /** Maximum concurrent sub-agent runs before the spawn tool returns a "wait" message. */
+  private static MAX_PENDING = 3;
+
   spawn(name: string, input: string, options?: { workdir?: string }): string {
     const definition = this.definitions.get(name);
     if (!definition) {
       const available = Array.from(this.definitions.keys()).join(", ") || "none";
       throw new Error(
         `Unknown sub-agent: "${name}". Available: ${available}`,
+      );
+    }
+
+    // Prevent runaway spawns — if there are already several sub-agents
+    // running, tell the LLM to wait instead of spawning more.
+    if (this.pending.length >= SubAgentManager.MAX_PENDING) {
+      throw new Error(
+        `Too many sub-agents already running (${this.pending.length}). ` +
+        `Wait for at least one to complete before spawning another.`,
       );
     }
 
@@ -250,7 +262,13 @@ export class SubAgentManager {
   async pollCompleted(): Promise<SubAgentResult[]> {
     if (this.pending.length === 0) return [];
 
-    // Yield the event loop so in-flight promises can make progress
+    // Block until at least one pending sub-agent completes.
+    // This prevents the main agent from spinning the LLM loop while
+    // waiting for async sub-agent results — no wasted iterations.
+    const firstDone = await Promise.race(
+      this.pending.map((r) => r.promise.then(() => r)),
+    );
+    // Quick yield so any other recently-completed runs also surface
     await new Promise((r) => setImmediate(r));
 
     const results: SubAgentResult[] = [];
@@ -582,6 +600,11 @@ export class SubAgentManager {
       toolRegistry,
       skillManager,
       maxIterations: 10,
+      // Prevent infinite recursion: sub-agents should NOT auto-register
+      // sub-agents from the project directory.
+      // "" explicitly disables the default (undefined would be overridden
+      // by the ?? "./subagents/" fallback in the Agent constructor).
+      subAgentsDir: "",
       workdir,
     });
   }

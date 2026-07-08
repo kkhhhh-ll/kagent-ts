@@ -31,7 +31,12 @@ export class ContextManager {
       compression: config?.compression,
     };
 
-    // Validate ratio mode
+    // Validate threshold
+    if (this.config.compressionThreshold <= 0) {
+      throw new Error(
+        `compressionThreshold must be > 0. Got ${this.config.compressionThreshold}.`
+      );
+    }
     if (this.config.compressionThreshold < 1 && this.config.compressionThreshold > 0.25) {
       throw new Error(
         `compressionThreshold ratio must be ≤ 0.25 (trigger at ≥ 75% of context). ` +

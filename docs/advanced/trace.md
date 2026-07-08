@@ -27,11 +27,20 @@ await agent.run('分析项目结构')
 
 ```ts
 interface TraceLoggerConfig {
-  /** 输出目录 (默认: ./traces) */
+  /** 输出目录 (默认: ".kagent-traces/") */
   outputDir?: string
 
-  /** 文件名前缀 (默认: trace) */
-  prefix?: string
+  /** Session 标识，用于生成文件名（默认: trace-<timestamp>-<random>） */
+  sessionId?: string
+
+  /** 页面标题中的 Agent 标签（默认: "Agent"） */
+  agentLabel?: string
+
+  /** 模型名称，显示在报告头部 */
+  modelName?: string
+
+  /** Token 计价，用于成本估算 */
+  pricing?: { inputPricePer1K: number; outputPricePer1K: number }
 }
 ```
 
@@ -106,29 +115,29 @@ const agent = new ReActAgent({
 
 ## 子 Agent 追踪
 
-通过 `createChildTrace()` 和 `subAgentHooks`，可以为每个子 Agent 生成独立的 trace 文件：
+子 Agent 的轨迹**自动嵌入**主 Agent 的 HTML 文件中，不再生成独立文件。通过 `createChildTrace()` 和 `subAgentHooks` 配置：
 
 ```ts
 const mainTrace = new TraceLogger({ sessionId: 'main-session' })
 
-const agent = new OrchestratorAgent({
+const agent = new ReActAgent({
   llm: provider,
-  hooks: mainTrace,                                             // 主 Agent 轨迹
-  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),  // 每个子 Agent 独立轨迹
-  subAgentsDir: './subagents',
+  hooks: mainTrace,
+  subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
+  // ...
 })
 
 await agent.run('分析整个项目')
 
-// 生成:
+// 生成单个文件:
 //   .kagent-traces/main-session.html
-//   .kagent-traces/main-session__sub_code-reviewer_1_1718123456789.html
-//   .kagent-traces/main-session__sub_researcher_2_1718123456790.html
+//   ├── 主 Agent Timeline
+//   └── 🤖 Agent › code-reviewer      ← 折叠区块，点击展开子 Agent 的完整时间线
 ```
 
-`createChildTrace(name, runId)` 返回一个新的 `TraceLogger`，自动使用嵌套 session ID（`{parentId}__sub_{name}_{runId}`），继承父 trace 的输出目录、模型名、pricing 配置。
+子 Agent 的 🚀 `subagent_spawn` 事件卡片中包含 `📋 View full sub-agent trace ↓` 链接，点击跳转到页面底部的子 trace 区块。每个区块默认折叠，点击标题展开即可查看子 Agent 的完整 LLM 调用、工具调用和思考过程。
 
-Orchestrator Agent 的 trace 会完整显示 Decompose → Dispatch（每个 🚀 spawn + 📬 result）→ Synthesize → Adapt 的时间线。
+`createChildTrace(name, runId)` 返回一个新的 `TraceLogger`，继承父 trace 的输出目录、模型名、pricing 配置。
 
 ## 下一步
 

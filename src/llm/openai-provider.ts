@@ -271,6 +271,7 @@ export class OpenAIProvider implements LLMProvider {
       // The final chunk may carry usage when stream_options.include_usage is set.
       if (chunk.usage) {
         emittedDone = true;
+        const finishReason = chunk.choices?.[0]?.finish_reason ?? undefined;
         yield {
           type: "done",
           usage: {
@@ -278,6 +279,7 @@ export class OpenAIProvider implements LLMProvider {
             completion_tokens: chunk.usage.completion_tokens,
             total_tokens: chunk.usage.total_tokens,
           },
+          stop_reason: finishReason === "stop" ? undefined : (finishReason || undefined),
         };
       }
     }

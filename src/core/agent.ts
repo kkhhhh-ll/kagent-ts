@@ -557,12 +557,18 @@ export abstract class Agent {
       });
     }
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
+    // Auto-load mcp.json from project root when not explicitly configured.
+    // Skip auto-discovery for sub-agents (they inherit MCP tools from the
+    // parent's ToolRegistry — no need to re-connect).
+    const effectiveMcpPath = config.toolRegistry
+      ? undefined  // sub-agent: parent's ToolRegistry already has MCP tools
+      : (config.mcpConfigPath ?? "mcp.json");
     this.mcpServerConfigs = Agent.loadMcpConfig(
-      config.mcpConfigPath ?? "mcp.json",
+      effectiveMcpPath,
       config.mcpServers,
       this.logger,
     );
-    this.subAgentsDir = config.subAgentsDir;
+    this.subAgentsDir = config.subAgentsDir ?? "./subagents/";
     this.subAgentHooks = config.subAgentHooks;
     this.skillsDir = config.skillsDir;
     this.workdir = config.workdir;

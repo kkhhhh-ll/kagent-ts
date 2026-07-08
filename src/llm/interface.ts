@@ -112,6 +112,11 @@ export interface LLMStreamDone {
     completion_tokens: number;
     total_tokens: number;
   };
+  /**
+   * `"length"` if the stream stopped because max_tokens was reached.
+   * `undefined` for a natural stop.
+   */
+  stop_reason?: "length" | string;
 }
 
 /** Union of all possible stream event types. */

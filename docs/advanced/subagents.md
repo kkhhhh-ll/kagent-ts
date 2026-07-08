@@ -40,9 +40,9 @@ subagents/
 name: code-reviewer
 description: 审查 TypeScript 代码质量，识别潜在问题和改进点
 tools:
-  - ReadFileTool
-  - GrepSearchTool
-  - GlobSearchTool
+  - read_file
+  - grep_search
+  - glob_search
 ---
 
 你是一个资深的 TypeScript 代码审查专家。在审查代码时：
@@ -225,7 +225,7 @@ description: 可以操作文件系统和数据库的全栈子代理
 tools:
   - filesystem_*       # filesystem Server 的全部工具
   - pg_query           # database Server 的特定工具
-  - WriteFileTool      # 内置工具
+  - write_file         # 内置工具
 ---
 ```
 
