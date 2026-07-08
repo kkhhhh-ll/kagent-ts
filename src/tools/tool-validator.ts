@@ -106,6 +106,16 @@ export function validateToolArgs(
   // ── Validate ──────────────────────────────────────────────────────────
   const valid = validate(args);
 
+  // Guard: $async schema returns a Promise (always truthy) — skip sync validation
+  // rather than passing invalid args to the tool silently.
+  if (valid instanceof Promise) {
+    log.warn(
+      "ToolValidator",
+      `Schema for tool "${toolName}" uses async validation — skipping synchronous validation.`,
+    );
+    return null;
+  }
+
   if (valid) {
     return null; // all good
   }

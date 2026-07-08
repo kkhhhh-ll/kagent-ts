@@ -200,13 +200,19 @@ export class PlanSolveAgent extends Agent {
         return budgetError;
       }
 
-      // Call the LLM — with network error handling
-      for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+      // Call the LLM — with network error handling.
+      // First round: withhold tools to force plan generation. Once a plan
+      // exists, pass all tools for execution. This prevents models (esp.
+      // weaker ones) from skipping the plan phase and acting like ReAct.
+      const toolsForRound = this.hasPlan
+        ? this.toolRegistry.getTools()
+        : [];
+      for (const h of this.hooks) h.onLLMStart?.(contextMessages, toolsForRound);
       let response: LLMResponse;
       try {
         response = await this.llm.chat(
           contextMessages,
-          this.toolRegistry.getTools(),
+          toolsForRound,
           this._abortController?.signal,
         );
       } catch (err: unknown) {
@@ -540,9 +546,219 @@ export class PlanSolveAgent extends Agent {
    * @param input     New user input to continue the conversation.
    */
   protected async *executeStream(input: string): AsyncIterable<string> {
-    // Plan-solve is inherently multi-phase — stream the final answer.
-    const answer = await this.run(input);
-    yield answer;
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) { yield sizeError; return; }
+
+    await this.init();
+    await this.reloadDynamicResources();
+    this.recoverOrphanedSubAgentResults();
+
+    const userMessage = Message.user(input);
+    this.contextManager.addMessage(userMessage.toDict());
+
+    this.currentPlan = [];
+    this.hasPlan = false;
+    this.consecutiveFailures = 0;
+    this.completedSteps = 0;
+
+    if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+    let consecutiveEmptyIterations = 0;
+    const EMPTY_ITERATION_LIMIT = 5;
+
+    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      this._abortController = new AbortController();
+
+      if (this.isCancelled) {
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
+        return;
+      }
+
+      // Poll sub-agents
+      const subResults = await this.pollSubAgentResults();
+      for (const r of subResults) {
+        const source = `subagent:${r.name}`;
+        this.contextManager.addMessage(
+          new Message(Role.User, wrapAndScan(source, r.output), { name: source }).toDict(),
+        );
+      }
+
+      await this.checkAndCompress();
+
+      const replanHint = this.computeReplanHint();
+      this.rebuildContextWithPlan(replanHint);
+
+      const contextMessages = this.contextManager.getContextMessages();
+      const budgetError = this.checkTokenBudget(
+        this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
+      );
+      if (budgetError) { yield budgetError; return; }
+
+      // First round: no tools (force plan generation).
+      // Buffer the raw output — don't stream raw JSON to the user.
+      const isPlanRound = !this.hasPlan;
+      const toolsForRound = isPlanRound ? [] : this.toolRegistry.getTools();
+      for (const h of this.hooks) h.onLLMStart?.(contextMessages, toolsForRound);
+
+      // ── Streaming LLM call ────────────────────────────────────────
+      let rawContent = "";
+      let toolCallsMap = new Map<number, { id?: string; name?: string; args?: string }>();
+      let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+
+      try {
+        for await (const event of this.llm.chatStream(
+          contextMessages,
+          toolsForRound,
+          this._abortController?.signal,
+        )) {
+          if (event.type === "chunk") {
+            if (event.content) {
+              rawContent += event.content;
+              // Buffer plan-round output; stream execution-round output
+              if (!isPlanRound) {
+                yield event.content;
+                for (const h of this.hooks) h.onChunk?.(event.content);
+              }
+            }
+            if (event.tool_calls) {
+              for (const tc of event.tool_calls) {
+                const ex = toolCallsMap.get(tc.index) ?? { args: "" };
+                if (tc.id) ex.id = tc.id;
+                if (tc.function?.name) ex.name = tc.function.name;
+                if (tc.function?.arguments) ex.args = (ex.args ?? "") + tc.function.arguments;
+                toolCallsMap.set(tc.index, ex);
+              }
+            }
+          } else if (event.type === "done") {
+            streamUsage = event.usage;
+          }
+        }
+      } catch (err: unknown) {
+        if (this.isCancelled) {
+          const sid = this.sessionManager?.getSessionId() ?? "unknown";
+          yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
+          return;
+        }
+        if (err instanceof LLMNetworkError) {
+          for (const h of this.hooks) h.onLLMError?.(err);
+          yield `\n\n[Network error: ${err.message}]`;
+          return;
+        }
+        throw err;
+      }
+
+      const toolCalls = Array.from(toolCallsMap.entries())
+        .filter(([, tc]) => tc.name && tc.args !== undefined)
+        .map(([, tc]) => ({
+          id: tc.id ?? `call_${Math.random().toString(36).slice(2)}`,
+          type: "function" as const,
+          function: { name: tc.name!, arguments: tc.args! },
+        }));
+
+      if (streamUsage) {
+        this.tokenBudget?.recordUsage(streamUsage.prompt_tokens, streamUsage.completion_tokens);
+      }
+
+      for (const h of this.hooks) {
+        h.onLLMEnd?.({ content: rawContent, tool_calls: toolCalls, usage: streamUsage });
+      }
+
+      const parsed = parsePlanSolveResponse(rawContent);
+      if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
+
+      const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
+      this.contextManager.addMessage(assistantMessage.toDict());
+
+      // ── Tool calls → execute and continue ─────────────────────────
+      if (toolCalls.length > 0) {
+        consecutiveEmptyIterations = 0;
+        if (parsed.thought) {
+          this.logger.info("Thought", parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        const mcpWarnedServers = new Set<string>();
+        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+
+        if (hadFailure) {
+          this.consecutiveFailures++;
+        } else {
+          this.consecutiveFailures = 0;
+          if (parsed.currentStep && this.hasPlan) {
+            this.completedSteps = Math.max(this.completedSteps, Math.min(parsed.currentStep - 1, this.currentPlan.length));
+          } else if (this.hasPlan) {
+            this.completedSteps = Math.min(this.completedSteps + 1, this.currentPlan.length);
+          }
+        }
+        if (this.checkpointingEnabled) this.saveCheckpoint("active");
+        continue;
+      }
+
+      // ── Final answer ─────────────────────────────────────────────
+      if (parsed.answer) {
+        if (parsed.thought) {
+          this.logger.info("Thought", parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        this.logger.info("Plan-Solve", "Task complete.");
+        for (const h of this.hooks) h.onFinish?.(parsed.answer);
+        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+        return;
+      }
+
+      // ── Initial plan ─────────────────────────────────────────────
+      if (!this.hasPlan && parsed.plan && parsed.plan.length > 0) {
+        consecutiveEmptyIterations = 0;
+        this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
+        this.hasPlan = true;
+        const planText = "\n## Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
+        yield planText;
+        this.logger.info("Plan", `Created ${this.currentPlan.length}-step plan`);
+        for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+        if (parsed.thought) {
+          this.logger.info("Thought", parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        continue;
+      }
+
+      // ── Revised plan ─────────────────────────────────────────────
+      if (parsed.revised_plan && parsed.revised_plan.length > 0) {
+        consecutiveEmptyIterations = 0;
+        this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
+        this.completedSteps = 0;
+        this.consecutiveFailures = 0;
+        const revText = "\n## Revised Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
+        yield revText;
+        this.logger.info("Plan", `Revised — ${this.currentPlan.length} steps`);
+        for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
+        if (parsed.thought) {
+          this.logger.info("Thought", parsed.thought);
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        continue;
+      }
+
+      // ── Thought-only → accumulate, continue ──────────────────────
+      if (parsed.thought) {
+        consecutiveEmptyIterations++;
+        this.logger.info("Thought", parsed.thought);
+        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
+          yield "\n\n[Unable to make progress. Please try rephrasing.]";
+          return;
+        }
+        continue;
+      }
+
+      consecutiveEmptyIterations++;
+      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
+        yield "\n\n[Unable to make progress. Please try rephrasing.]";
+        return;
+      }
+    }
+
+    yield `\n\n[Unable to complete within ${this.maxIterations} iterations.]`;
   }
 
   async resume(sessionId: string, input: string): Promise<string> {

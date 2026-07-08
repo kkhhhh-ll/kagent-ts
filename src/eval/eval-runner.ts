@@ -158,6 +158,10 @@ export class EvalRunner {
           }
         }
       } catch (err: unknown) {
+        // Stop the agent to prevent resource leaks (e.g., orphaned LLM calls
+        // or tool executions continuing after timeout).
+        agent.cancel();
+
         answer = err instanceof Error ? err.message : String(err);
         failures.push(`Execution error: ${answer}`);
       }

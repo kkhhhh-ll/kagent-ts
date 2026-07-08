@@ -324,9 +324,6 @@ export class ReActAgent extends Agent {
 
     if (this.checkpointingEnabled) this.saveCheckpoint("active");
 
-    let consecutiveTruncations = 0;
-    const MAX_TRUNCATION_CONTINUES = 3;
-
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
 

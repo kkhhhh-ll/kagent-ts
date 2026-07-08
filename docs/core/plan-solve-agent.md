@@ -19,6 +19,8 @@ Phase 2 — RESOLVE:
 Final Answer: 所有步骤完成，输出完整答案
 ```
 
+> **注意**：Plan 阶段首轮 LLM 调用**不传工具**，强制模型先输出计划。拿到计划后，后续轮次恢复工具，进入执行阶段。这避免了弱模型跳过规划直接干活。
+
 ## 基本用法
 
 ```ts
@@ -44,11 +46,18 @@ console.log(answer)
 
 ### 流式输出
 
-`stream()` 方法可用但最终答案为一次性输出（Plan-Solve 多阶段推理不适合逐 token 流）：
+`stream()` 在 Plan-Solve 流程中会依次输出计划、修订计划、推理思考和最终答案：
 
 ```ts
 for await (const chunk of agent.stream('请审查项目代码')) {
   process.stdout.write(chunk)
+  // 输出示例：
+  //   ## Plan
+  //   1. 读取文件
+  //   2. 分析代码
+  //   ...
+  //   [Thought] 正在分析...
+  //   [最终审查结果]
 }
 ```
 

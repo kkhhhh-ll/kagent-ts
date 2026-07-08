@@ -176,11 +176,16 @@ console.log(answer)
 
 ### 流式输出
 
-`stream()` 可用，路由到 ReAct 时逐 token 流式输出，路由到 Plan-Solve 时最终答案一次性输出：
+`stream()` 路由和 Plan 阶段快速输出，执行阶段逐 token 流式输出，全程实时可见：
 
 ```ts
 for await (const chunk of agent.stream('请分析项目代码质量')) {
   process.stdout.write(chunk)
+  // 输出示例：
+  //   [Route: complex — 需要多步骤分析和工具调用]
+  //   ## Plan
+  //   1. ...
+  //   [逐 token 执行过程...]
 }
 ```
 
