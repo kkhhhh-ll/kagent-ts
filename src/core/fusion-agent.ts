@@ -1240,8 +1240,11 @@ export class FusionAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              yield event.content;
-              for (const h of this.hooks) h.onChunk?.(event.content);
+              // Stop yielding once [Answer] appears (duplicate content)
+              if (!/\[Answer\]/i.test(rawContent)) {
+                yield event.content;
+                for (const h of this.hooks) h.onChunk?.(event.content);
+              }
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {

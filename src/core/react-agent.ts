@@ -365,8 +365,11 @@ export class ReActAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              yield event.content;
-              for (const h of this.hooks) h.onChunk?.(event.content);
+              // Stop yielding once [Answer] appears (duplicate content)
+              if (!/\[Answer\]/i.test(rawContent)) {
+                yield event.content;
+                for (const h of this.hooks) h.onChunk?.(event.content);
+              }
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
@@ -440,7 +443,6 @@ export class ReActAgent extends Agent {
         continue;
       }
 
-      this.logger.info("Answer", answer);
       for (const h of this.hooks) h.onFinish?.(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
       return;

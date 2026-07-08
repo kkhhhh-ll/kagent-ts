@@ -615,10 +615,14 @@ export class PlanSolveAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              // Buffer plan-round output; stream execution-round output
+              // Buffer plan-round output; stream execution-round output.
+              // Stop yielding once [Answer] appears (the content after the
+              // marker is a duplicate of what the model already output).
               if (!isPlanRound) {
-                yield event.content;
-                for (const h of this.hooks) h.onChunk?.(event.content);
+                if (!/\[Answer\]/i.test(rawContent)) {
+                  yield event.content;
+                  for (const h of this.hooks) h.onChunk?.(event.content);
+                }
               }
             }
             if (event.tool_calls) {

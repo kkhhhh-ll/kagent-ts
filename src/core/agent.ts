@@ -558,7 +558,7 @@ export abstract class Agent {
     }
     this.checkpointingEnabled = config.enableCheckpointing ?? false;
     this.mcpServerConfigs = Agent.loadMcpConfig(
-      config.mcpConfigPath,
+      config.mcpConfigPath ?? "mcp.json",
       config.mcpServers,
       this.logger,
     );

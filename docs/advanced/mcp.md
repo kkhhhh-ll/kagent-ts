@@ -38,7 +38,7 @@ const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: BUILTIN_TOOLS,
-  mcpConfigPath: './mcp.json',  // 从文件加载
+  // mcpConfigPath 默认 "./mcp.json"，可省略
 })
 ```
 

@@ -12,5 +12,6 @@ traces/
 .vscode/
 .memory/
 .claude/
+mcp.json
 docs/.vitepress/dist/
 docs/.vitepress/cache/
