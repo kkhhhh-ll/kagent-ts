@@ -425,9 +425,11 @@ export class PlanSolveAgent extends Agent {
 
         // ── Skill precipitation (best-effort, post-hoc) ─────────────────
         if (shouldPrecipitate) {
-          this.runPrecipitation(input, parsed.answer).catch((err) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
+          try {
+            await this.runPrecipitation(input, parsed.answer);
+          } catch (err: unknown) {
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         return parsed.answer;
@@ -764,9 +766,11 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
         if (shouldPrecipitate) {
-          this.runPrecipitation(input, parsed.answer).catch((err) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
+          try {
+            await this.runPrecipitation(input, parsed.answer);
+          } catch (err: unknown) {
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         return;

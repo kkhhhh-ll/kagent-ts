@@ -330,9 +330,11 @@ export class ReActAgent extends Agent {
 
       // ── Skill precipitation (best-effort, post-hoc) ─────────────────
       if (shouldPrecipitate) {
-        this.runPrecipitation(input, answer).catch((err) =>
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
+        try {
+          await this.runPrecipitation(input, answer);
+        } catch (err: unknown) {
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       return answer;
@@ -550,9 +552,11 @@ export class ReActAgent extends Agent {
 
       // ── Skill precipitation (best-effort, post-hoc) ─────────────────
       if (shouldPrecipitate) {
-        this.runPrecipitation(input, answer).catch((err) =>
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
+        try {
+          await this.runPrecipitation(input, answer);
+        } catch (err: unknown) {
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       return;

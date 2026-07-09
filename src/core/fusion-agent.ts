@@ -346,9 +346,11 @@ export class FusionAgent extends Agent {
       (this.precipitationMode !== "off" &&
         /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
     if (shouldPrecipitate) {
-      this.runPrecipitation(input, answer).catch((err) =>
-        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-      );
+      try {
+        await this.runPrecipitation(input, answer);
+      } catch (err: unknown) {
+        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     this.fireOnFinish(answer);
@@ -1440,9 +1442,11 @@ export class FusionAgent extends Agent {
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
         if (shouldPrecipitate) {
-          this.runPrecipitation(input, parsed.answer).catch((err) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
+          try {
+            await this.runPrecipitation(input, parsed.answer);
+          } catch (err: unknown) {
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         return;
