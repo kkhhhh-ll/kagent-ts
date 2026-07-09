@@ -115,7 +115,7 @@ const agent = new ReActAgent({
 
 ## 子 Agent 追踪
 
-子 Agent 的轨迹**自动嵌入**主 Agent 的 HTML 文件中，不再生成独立文件。通过 `createChildTrace()` 和 `subAgentHooks` 配置：
+子 Agent 的轨迹**自动嵌入**主 Agent 的 HTML 文件中，不再生成独立文件。当 `hooks` 中包含 `TraceLogger` 时，子 Agent 追踪**自动生效**，无需额外配置。以下为自动行为背后的机制——如需自定义子 Agent hook，仍可通过 `subAgentHooks` 显式覆盖：
 
 ```ts
 const mainTrace = new TraceLogger({ sessionId: 'main-session' })

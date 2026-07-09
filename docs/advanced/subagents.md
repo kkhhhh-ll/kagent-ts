@@ -280,7 +280,9 @@ const report = await agent.run(
 
 ## 子 Agent 的 Hook 与追踪
 
-通过 `subAgentHooks` 可以为子 Agent 注入生命周期钩子（如 `TraceLogger`），记录其内部的 LLM 调用、工具调用等执行轨迹：
+通过 `subAgentHooks` 可以为子 Agent 注入生命周期钩子（如 `TraceLogger`），记录其内部的 LLM 调用、工具调用等执行轨迹。
+
+当 `hooks` 中包含 `TraceLogger` 时，`subAgentHooks` **自动派生**，无需手动配置：
 
 ```ts
 import { OrchestratorAgent, TraceLogger } from 'kagent-ts'
@@ -291,7 +293,18 @@ const agent = new OrchestratorAgent({
   llm: provider,
   hooks: mainTrace,
   subAgentsDir: './subagents',
-  // 工厂函数：每次 spawn 时调用，创建子 Agent 的独立 TraceLogger
+  // subAgentHooks 自动生效，无需手动配置
+})
+```
+
+如需自定义行为，仍可显式传入工厂函数：
+
+```ts
+const agent = new OrchestratorAgent({
+  llm: provider,
+  hooks: mainTrace,
+  subAgentsDir: './subagents',
+  // 显式覆盖：每次 spawn 时调用，创建子 Agent 的独立 TraceLogger
   subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
 })
 ```

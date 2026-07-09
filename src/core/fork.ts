@@ -92,7 +92,6 @@ export async function forkAgent(
   let onAbort: (() => void) | undefined;
   if (options.signal) {
     if (options.signal.aborted) {
-      agent.cancel();
       throw new Error("Fork aborted before execution.");
     }
     onAbort = () => agent.cancel();

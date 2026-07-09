@@ -642,6 +642,22 @@ export abstract class Agent {
     const rawHooks = config.hooks ?? [];
     this.hooks = Array.isArray(rawHooks) ? rawHooks : [rawHooks];
 
+    // Auto-derive subAgentHooks from a TraceLogger in this.hooks when the
+    // user didn't configure subAgentHooks explicitly. This makes sub-agent
+    // tracing work out-of-the-box — same behavior as fork-agent tracing via
+    // TraceLogger.wrapHooksForFork(). Duck-typed via createChildTrace to
+    // avoid an import dependency on the trace package from core.
+    if (!this.subAgentHooks) {
+      const traceLogger = this.hooks.find(
+        (h) => typeof (h as Record<string, unknown>).createChildTrace === "function",
+      );
+      if (traceLogger) {
+        const createChild = (traceLogger as Record<string, Function>).createChildTrace.bind(traceLogger);
+        this.subAgentHooks = (name: string, runId: string) =>
+          createChild(name, runId) as AgentHooks | AgentHooks[];
+      }
+    }
+
     // ── User Preferences ─────────────────────────────────────────────────
     this.preferenceManager = new PreferenceManager(
       { filePath: config.preferencesPath ?? ".kagent/preferences.md" },
