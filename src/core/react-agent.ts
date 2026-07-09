@@ -324,6 +324,14 @@ export class ReActAgent extends Agent {
 
     if (this.checkpointingEnabled) this.saveCheckpoint("active");
 
+    // Track consecutive empty/short responses (safety valve)
+    let consecutiveEmptyResponses = 0;
+    const MAX_EMPTY_RESPONSES = 3;
+
+    // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
+    let consecutiveTruncations = 0;
+    const MAX_TRUNCATION_CONTINUES = 3;
+
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
 
@@ -428,6 +436,16 @@ export class ReActAgent extends Agent {
 
       // ── Truncation → continue in next iteration ────────────────────
       if (isTruncated) {
+        consecutiveTruncations++;
+        if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          const fallback = parsed.answer
+            ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+            : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+              "Please try breaking your request into smaller steps.";
+          yield fallback;
+          for (const h of this.hooks) h.onFinish?.(fallback);
+          return;
+        }
         this.contextManager.addMessage(
           Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -436,6 +454,7 @@ export class ReActAgent extends Agent {
         );
         continue;
       }
+      consecutiveTruncations = 0;
 
       // ── Tool calls → execute and continue ───────────────────────────
       if (toolCalls.length > 0) {
@@ -453,6 +472,16 @@ export class ReActAgent extends Agent {
 
       // Empty/short response check
       if (!rawContent || rawContent.trim().length < 5) {
+        consecutiveEmptyResponses++;
+        if (consecutiveEmptyResponses >= MAX_EMPTY_RESPONSES) {
+          const stuckMsg =
+            "I apologize, but I'm having difficulty responding. " +
+            "Please try rephrasing your request.";
+          const stuckMsgObj = Message.assistant(stuckMsg);
+          this.contextManager.addMessage(stuckMsgObj.toDict());
+          for (const h of this.hooks) h.onFinish?.(stuckMsg);
+          return;
+        }
         continue;
       }
 

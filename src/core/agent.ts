@@ -1504,6 +1504,10 @@ export abstract class Agent {
       // Register sub-agent tools into the tool registry
       try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"list_subagents" already registered — keeping existing.`); }
       try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"spawn_subagent" already registered — keeping existing.`); }
+
+      // Sub-agents are now available — rebuild the system prompt so
+      // SUB_AGENT_DELEGATION is included for the first run.
+      this.rebuildSystemPrompt();
     }
 
     // ── RAG knowledge base ─────────────────────────────────────────────
