@@ -41,6 +41,8 @@ export interface ReflectionFinding {
 
 /**
  * Structured JSON output expected from the fork sub-agent's final answer.
+ * Used as the parsing target in {@link parseFindings} so TypeScript
+ * validates the shape at compile time.
  */
 interface ReflectionResponse {
   analysis: string;
@@ -86,6 +88,132 @@ Rules:
 - Use your tools to verify findings against the actual codebase before reporting them.
 ${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
 
+// ─── Pure Helpers ────────────────────────────────────────────────────────────
+
+/** Characters to keep from the start of a truncated tool result. */
+const TRUNCATION_RETAIN = 500;
+/** Tool result longer than this will be truncated. */
+const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+
+const VALID_FINDING_CATEGORIES = new Set<string>([
+  "reasoning_error", "tool_misuse", "missed_optimization",
+  "incomplete_answer", "hallucination", "context_mismanagement", "other",
+]);
+
+/**
+ * Format the conversation for the reflection prompt.
+ * Truncates very long tool results for readability.
+ */
+function formatConversation(messages: MessageData[]): string[] {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    const role = msg.role.toUpperCase();
+    let content = msg.content;
+
+    if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
+      content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
+    }
+
+    lines.push(`[${role}] ${content}`);
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const tc of msg.tool_calls) {
+        lines.push(`  → tool_call: ${tc.function.name}(${tc.function.arguments})`);
+      }
+    }
+  }
+  return lines;
+}
+
+/**
+ * Format error traces for the reflection prompt.
+ */
+function formatErrorTraces(traces?: ToolErrorTrace[]): string[] {
+  if (!traces || traces.length === 0) return ["(no tool errors recorded)"];
+  const lines: string[] = [];
+  for (const t of traces) {
+    lines.push(`- ${t.traceId}: ${t.toolName} — ${t.resolved ? "resolved" : "unresolved"} (${t.events.length} events)`);
+  }
+  return lines;
+}
+
+/**
+ * Build the task prompt for the fork sub-agent from the reflection input.
+ */
+function buildTaskPrompt(input: ReflectionInput): string {
+  return [
+    "Please review this agent session and identify any issues.",
+    "",
+    "=== User Query ===",
+    input.userQuery,
+    "",
+    "=== Final Answer ===",
+    input.finalAnswer,
+    "",
+    "=== Conversation ===",
+    ...formatConversation(input.conversation),
+    "",
+    "=== Tool Error Traces ===",
+    ...formatErrorTraces(input.errorTraces),
+    "",
+    "Analyze the session and output your findings as JSON in your final answer.",
+  ].join("\n");
+}
+
+/**
+ * Parse the sub-agent's final answer into a list of ReflectionFindings.
+ *
+ * @returns Parsed findings (may be empty if no issues were found).
+ * @throws {Error} If the LLM output cannot be parsed as valid JSON —
+ *         this is a fatal error distinct from "no findings."
+ */
+function parseFindings(answer: string, logger: Logger): ReflectionFinding[] {
+  // Extract JSON from the answer (may be wrapped in ```json fences)
+  let raw = answer.trim();
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) raw = fenceMatch[1];
+
+  let parsed: ReflectionResponse;
+
+  try {
+    parsed = JSON.parse(raw) as ReflectionResponse;
+  } catch (err: unknown) {
+    throw new Error(
+      `Failed to parse reflection findings from LLM output: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (!Array.isArray(parsed.findings)) return [];
+
+  const findings: ReflectionFinding[] = [];
+  for (const f of parsed.findings) {
+    if (
+      typeof f.category !== "string" ||
+      !VALID_FINDING_CATEGORIES.has(f.category) ||
+      typeof f.description !== "string" ||
+      typeof f.cause !== "string" ||
+      typeof f.suggestion !== "string"
+    ) {
+      logger.warn(
+        "ReflectionAgent",
+        `Skipping malformed reflection finding: Got: ${JSON.stringify({ category: f.category, description: f.description, cause: f.cause, suggestion: f.suggestion })}`,
+      );
+      continue;
+    }
+    findings.push({
+      category: f.category as ReflectionErrorCategory,
+      description: f.description,
+      cause: f.cause,
+      suggestion: f.suggestion,
+      relatedTraceIds: Array.isArray(f.relatedTraceIds)
+        ? f.relatedTraceIds.filter((id): id is string => typeof id === "string")
+        : undefined,
+    });
+  }
+
+  return findings;
+}
+
 // ─── ReflectionAgent ─────────────────────────────────────────────────────────
 
 /**
@@ -112,7 +240,7 @@ export interface ReflectionAgentConfig {
  * context with read-only tools (read_file, grep_search) so it can verify
  * findings against the codebase.
  *
- * Findings are persisted to an ErrorNotebook (错题本) for future learning.
+ * Findings are persisted to an ErrorNotebook for future learning.
  *
  * Usage:
  * ```ts
@@ -149,51 +277,59 @@ export class ReflectionAgent {
    *
    * @returns The final list of findings written to the notebook.
    * @throws If the reflection fork times out.
+   * @throws If the LLM output cannot be parsed.
    */
   async reflect(input: ReflectionInput): Promise<ErrorNotebookEntry[]> {
-    const taskPrompt = this.buildTaskPrompt(input);
+    const taskPrompt = buildTaskPrompt(input);
 
-    // Enforce a hard timeout so a slow/stuck LLM call can't block
-    // the process indefinitely.
-    const answer = await Promise.race([
-      this.forkAndRun(taskPrompt),
-      new Promise<string>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Reflection fork timed out after ${ReflectionAgent.REFLECTION_TIMEOUT_MS / 1000}s`)),
-          ReflectionAgent.REFLECTION_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+    // Enforce a hard timeout. The timer is explicitly cleared in the
+    // finally block to prevent a timer leak that would keep the
+    // Node.js event loop alive.
+    let timerId: ReturnType<typeof setTimeout> | undefined;
 
-    const findings = this.parseFindings(answer);
+    try {
+      const answer = await Promise.race([
+        this.forkAndRun(taskPrompt),
+        new Promise<string>((_, reject) => {
+          timerId = setTimeout(
+            () => reject(new Error(`Reflection fork timed out after ${ReflectionAgent.REFLECTION_TIMEOUT_MS / 1000}s`)),
+            ReflectionAgent.REFLECTION_TIMEOUT_MS,
+          );
+        }),
+      ]);
 
-    // Deduplicate by category + description before persisting
-    const seen = new Set<string>();
-    const unique: ReflectionFinding[] = [];
-    for (const f of findings) {
-      const key = `${f.category}::${f.description.toLowerCase()}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(f);
+      const findings = parseFindings(answer, this.logger);
+
+      // Deduplicate by category + description before persisting
+      const seen = new Set<string>();
+      const unique: ReflectionFinding[] = [];
+      for (const f of findings) {
+        const key = `${f.category}::${f.description.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          unique.push(f);
+        }
       }
-    }
 
-    // Persist to ErrorNotebook
-    const entries: ErrorNotebookEntry[] = [];
-    for (const f of unique) {
-      const entry = this.notebook.add({
-        sessionId: input.sessionId,
-        category: f.category,
-        description: f.description,
-        cause: f.cause,
-        suggestion: f.suggestion,
-        userQuery: input.userQuery,
-        relatedTraceIds: f.relatedTraceIds,
-      });
-      entries.push(entry);
-    }
+      // Persist to ErrorNotebook
+      const entries: ErrorNotebookEntry[] = [];
+      for (const f of unique) {
+        const entry = this.notebook.add({
+          sessionId: input.sessionId,
+          category: f.category,
+          description: f.description,
+          cause: f.cause,
+          suggestion: f.suggestion,
+          userQuery: input.userQuery,
+          relatedTraceIds: f.relatedTraceIds,
+        });
+        entries.push(entry);
+      }
 
-    return entries;
+      return entries;
+    } finally {
+      if (timerId !== undefined) clearTimeout(timerId);
+    }
   }
 
   // ─── Private: Fork ─────────────────────────────────────────────────────
@@ -210,134 +346,5 @@ export class ReflectionAgent {
       maxIterations: this.maxIterations,
       logger: this.logger,
     });
-  }
-
-  // ─── Private: Prompt Building ──────────────────────────────────────────
-
-  /**
-   * Build the task prompt for the sub-agent from the reflection input.
-   */
-  private buildTaskPrompt(input: ReflectionInput): string {
-    const context = [
-      "Please review this agent session and identify any issues.",
-      "",
-      "=== User Query ===",
-      input.userQuery,
-      "",
-      "=== Final Answer ===",
-      input.finalAnswer,
-      "",
-      "=== Conversation ===",
-      ...this.formatConversation(input.conversation),
-      "",
-      "=== Tool Error Traces ===",
-      ...this.formatErrorTraces(input.errorTraces),
-      "",
-      "Analyze the session and output your findings as JSON in your final answer.",
-    ].join("\n");
-
-    return context;
-  }
-
-  /**
-   * Format the conversation for the reflection prompt.
-   * Truncates very long tool results for readability.
-   */
-  private formatConversation(messages: MessageData[]): string[] {
-    /** Characters to keep from the start of a truncated tool result. */
-    const TRUNCATION_RETAIN = 500;
-    /** Tool result longer than this will be truncated. */
-    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
-
-    const lines: string[] = [];
-    for (const msg of messages) {
-      const role = msg.role.toUpperCase();
-      let content = msg.content;
-
-      // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
-        content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
-      }
-
-      lines.push(`[${role}] ${content}`);
-
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
-          lines.push(`  → tool_call: ${tc.function.name}(${tc.function.arguments})`);
-        }
-      }
-    }
-    return lines;
-  }
-
-  /**
-   * Format error traces for the reflection prompt.
-   */
-  private formatErrorTraces(traces?: ToolErrorTrace[]): string[] {
-    if (!traces || traces.length === 0) return ["(no tool errors recorded)"];
-    const lines: string[] = [];
-    for (const t of traces) {
-      lines.push(`- ${t.traceId}: ${t.toolName} — ${t.resolved ? "resolved" : "unresolved"} (${t.events.length} events)`);
-    }
-    return lines;
-  }
-
-  // ─── Private: Parsing ──────────────────────────────────────────────────
-
-  /**
-   * Parse the sub-agent's final answer into a list of ReflectionFindings.
-   * Returns an empty array if parsing fails (best-effort — the LLM may
-   * produce malformed output).
-   */
-  private parseFindings(answer: string): ReflectionFinding[] {
-    try {
-      // Extract JSON from the answer (may be wrapped in ```json fences)
-      let raw = answer.trim();
-      const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) raw = fenceMatch[1];
-
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      if (!Array.isArray(parsed.findings)) return [];
-
-      const validCategories = new Set<string>([
-        "reasoning_error", "tool_misuse", "missed_optimization",
-        "incomplete_answer", "hallucination", "context_mismanagement", "other",
-      ]);
-
-      const findings: ReflectionFinding[] = [];
-      for (const f of parsed.findings as Array<Record<string, unknown>>) {
-        if (
-          typeof f.category !== "string" ||
-          !validCategories.has(f.category) ||
-          typeof f.description !== "string" ||
-          typeof f.cause !== "string" ||
-          typeof f.suggestion !== "string"
-        ) {
-          this.logger.warn(
-            "ReflectionAgent",
-            `Skipping malformed reflection finding: missing or invalid required field (category, description, cause, suggestion). Got: ${JSON.stringify({ category: f.category, description: f.description, cause: f.cause, suggestion: f.suggestion })}`,
-          );
-          continue;
-        }
-        findings.push({
-          category: f.category as ReflectionErrorCategory,
-          description: f.description,
-          cause: f.cause,
-          suggestion: f.suggestion,
-          relatedTraceIds: Array.isArray(f.relatedTraceIds)
-            ? f.relatedTraceIds.filter((id): id is string => typeof id === "string")
-            : undefined,
-        });
-      }
-
-      return findings;
-    } catch (err: unknown) {
-      this.logger.error(
-        "ReflectionAgent",
-        `Failed to parse reflection findings from LLM output: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
-    }
   }
 }

@@ -2,21 +2,10 @@ import { Tool } from "../types";
 import type { SkillManager } from "../../skills/skill-manager";
 import * as fs from "fs";
 import * as path from "path";
-
-/** Regex matching the FileSkillLoader validation: no slashes, backslashes, "..", or null bytes. */
-const VALID_SKILL_NAME_RE = /[/\\]|\.\.|\0/;
-
-/**
- * Escape a value for safe use as a YAML frontmatter single-line string.
- * Mirrors PrecipitateAgent.yamlValue to keep the two writers in sync.
- */
-function yamlValue(value: string): string {
-  const single = value.replace(/\n/g, " ").replace(/\r/g, "").trim();
-  if (/[:#{}&*!|>'"%@`\-]/.test(single) || single.includes(" - ")) {
-    return `"${single.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-  }
-  return single;
-}
+import {
+  VALID_SKILL_NAME_RE,
+  buildSkillMarkdown,
+} from "../../skills/skill-utils";
 
 /**
  * Create a `precipitate_skill` tool that allows the LLM to save a reusable
@@ -100,18 +89,9 @@ export function createPrecipitateSkillTool(
         const skillDir = path.join(skillsDir, name);
         fs.mkdirSync(skillDir, { recursive: true });
 
-        const frontmatter = [
-          "---",
-          `name: ${yamlValue(name)}`,
-          `description: ${yamlValue(description)}`,
-          "precipitated: true",
-          "---",
-          "",
-          content,
-        ].join("\n");
-
+        const fileContent = buildSkillMarkdown(name, description, content);
         const filePath = path.join(skillDir, "SKILL.md");
-        fs.writeFileSync(filePath, frontmatter, "utf-8");
+        fs.writeFileSync(filePath, fileContent, "utf-8");
 
         // Register with SkillManager
         skillManager.reloadFromDirectory(skillsDir);

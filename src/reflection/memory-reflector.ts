@@ -36,6 +36,8 @@ export interface ExtractedMemory {
 
 /**
  * Structured JSON output expected from the fork sub-agent's final answer.
+ * Used as the parsing target in {@link parseMemories} so TypeScript
+ * validates the shape at compile time.
  */
 interface MemoryExtractionResponse {
   memories: ExtractedMemory[];
@@ -93,6 +95,130 @@ Rules:
 - Only output memories that provide lasting value across sessions.
 - Be specific and actionable — avoid vague statements.
 - Do NOT duplicate existing memory names.${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
+
+// ─── Pure Helpers ────────────────────────────────────────────────────────────
+
+/** Characters to keep from the start of a truncated tool result. */
+const TRUNCATION_RETAIN = 500;
+/** Tool result longer than this will be truncated. */
+const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+
+const VALID_MEMORY_TYPES = new Set<string>(["rule", "project", "preference"]);
+
+/**
+ * Format the conversation for the memory extraction prompt.
+ * Truncates very long tool results for readability.
+ */
+function formatConversation(messages: MessageData[]): string[] {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    const role = msg.role.toUpperCase();
+    let content = msg.content;
+
+    if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
+      content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
+    }
+
+    lines.push(`[${role}] ${content}`);
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const tc of msg.tool_calls) {
+        lines.push(`  → tool_call: ${tc.function.name}(${tc.function.arguments})`);
+      }
+    }
+  }
+  return lines;
+}
+
+/**
+ * Build the task prompt for the fork sub-agent from the memory reflection input.
+ */
+function buildTaskPrompt(
+  input: MemoryReflectionInput,
+  existing: Array<{ name: string; description: string }>,
+): string {
+  const context: string[] = [
+    "Review this agent session and extract any memories worth keeping for future sessions.",
+    "",
+    "=== Existing Memories (do NOT duplicate these names) ===",
+  ];
+
+  if (existing.length === 0) {
+    context.push("(no existing memories)");
+  } else {
+    for (const m of existing) {
+      context.push(`- ${m.name}: ${m.description}`);
+    }
+  }
+
+  context.push(
+    "",
+    "=== User Query ===",
+    input.userQuery,
+    "",
+    "=== Final Answer ===",
+    input.finalAnswer,
+    "",
+    "=== Conversation ===",
+    ...formatConversation(input.conversation),
+    "",
+    "Analyze the session and output extracted memories as JSON in your final answer.",
+  );
+
+  return context.join("\n");
+}
+
+/**
+ * Parse the sub-agent's final answer into a list of ExtractedMemories.
+ *
+ * @returns Parsed memories (may be empty if nothing worth remembering).
+ * @throws {Error} If the LLM output cannot be parsed as valid JSON —
+ *         this is a fatal error distinct from "no memories extracted."
+ */
+function parseMemories(answer: string, logger: Logger): ExtractedMemory[] {
+  // Extract JSON from the answer (may be wrapped in ```json fences)
+  let raw = answer.trim();
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) raw = fenceMatch[1];
+
+  let parsed: MemoryExtractionResponse;
+
+  try {
+    parsed = JSON.parse(raw) as MemoryExtractionResponse;
+  } catch (err: unknown) {
+    throw new Error(
+      `Failed to parse extracted memories from LLM output: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (!Array.isArray(parsed.memories)) return [];
+
+  const memories: ExtractedMemory[] = [];
+
+  for (const m of parsed.memories) {
+    if (
+      typeof m.name !== "string" || !m.name ||
+      typeof m.description !== "string" || !m.description ||
+      typeof m.type !== "string" || !VALID_MEMORY_TYPES.has(m.type) ||
+      typeof m.content !== "string" || !m.content
+    ) {
+      logger.warn(
+        "MemoryReflector",
+        `Skipping malformed memory: Got: ${JSON.stringify({ name: m.name, description: m.description, type: m.type, hasContent: typeof m.content === "string" && !!m.content })}`,
+      );
+      continue;
+    }
+
+    memories.push({
+      name: m.name,
+      description: m.description,
+      type: m.type as MemoryType,
+      content: m.content,
+    });
+  }
+
+  return memories;
+}
 
 // ─── MemoryReflector ─────────────────────────────────────────────────────────
 
@@ -158,6 +284,7 @@ export class MemoryReflector {
    *
    * @returns The list of new memories written to the MemoryManager.
    * @throws If the memory extraction fork times out.
+   * @throws If the LLM output cannot be parsed.
    */
   async reflect(input: MemoryReflectionInput): Promise<Memory[]> {
     const existingNames = this.memoryManager.getAll().map((m) => ({
@@ -165,40 +292,46 @@ export class MemoryReflector {
       description: m.description,
     }));
 
-    const taskPrompt = this.buildTaskPrompt(input, existingNames);
+    const taskPrompt = buildTaskPrompt(input, existingNames);
 
-    // Enforce a hard timeout so a slow/stuck LLM call can't block
-    // the process indefinitely.
-    const answer = await Promise.race([
-      this.forkAndRun(taskPrompt),
-      new Promise<string>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Memory extraction fork timed out after ${MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS / 1000}s`)),
-          MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+    // Enforce a hard timeout. The timer is explicitly cleared in the
+    // finally block to prevent a timer leak.
+    let timerId: ReturnType<typeof setTimeout> | undefined;
 
-    const extracted = this.parseMemories(answer);
+    try {
+      const answer = await Promise.race([
+        this.forkAndRun(taskPrompt),
+        new Promise<string>((_, reject) => {
+          timerId = setTimeout(
+            () => reject(new Error(`Memory extraction fork timed out after ${MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS / 1000}s`)),
+            MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS,
+          );
+        }),
+      ]);
 
-    // Persist to MemoryManager (add() handles upsert by name)
-    const saved: Memory[] = [];
-    for (const m of extracted) {
-      const memory: Memory = {
-        name: m.name,
-        description: m.description,
-        type: m.type,
-        content: m.content,
-      };
+      const extracted = parseMemories(answer, this.logger);
 
-      // Skip if name already exists (defensive — sub-agent should avoid this)
-      if (this.memoryManager.has(m.name)) continue;
+      // Persist to MemoryManager (add() handles upsert by name)
+      const saved: Memory[] = [];
+      for (const m of extracted) {
+        const memory: Memory = {
+          name: m.name,
+          description: m.description,
+          type: m.type,
+          content: m.content,
+        };
 
-      this.memoryManager.add(memory);
-      saved.push(memory);
+        // Skip if name already exists (defensive — sub-agent should avoid this)
+        if (this.memoryManager.has(m.name)) continue;
+
+        this.memoryManager.add(memory);
+        saved.push(memory);
+      }
+
+      return saved;
+    } finally {
+      if (timerId !== undefined) clearTimeout(timerId);
     }
-
-    return saved;
   }
 
   // ─── Private: Fork ─────────────────────────────────────────────────────
@@ -215,129 +348,5 @@ export class MemoryReflector {
       maxIterations: this.maxIterations,
       logger: this.logger,
     });
-  }
-
-  // ─── Private: Prompt Building ──────────────────────────────────────────
-
-  /**
-   * Build the task prompt for the sub-agent from the reflection input.
-   */
-  private buildTaskPrompt(
-    input: MemoryReflectionInput,
-    existing: Array<{ name: string; description: string }>,
-  ): string {
-    let context = [
-      "Review this agent session and extract any memories worth keeping for future sessions.",
-      "",
-      "=== Existing Memories (do NOT duplicate these names) ===",
-    ];
-
-    if (existing.length === 0) {
-      context.push("(no existing memories)");
-    } else {
-      for (const m of existing) {
-        context.push(`- ${m.name}: ${m.description}`);
-      }
-    }
-
-    context.push(
-      "",
-      "=== User Query ===",
-      input.userQuery,
-      "",
-      "=== Final Answer ===",
-      input.finalAnswer,
-      "",
-      "=== Conversation ===",
-      ...this.formatConversation(input.conversation),
-      "",
-      "Analyze the session and output extracted memories as JSON in your final answer.",
-    );
-
-    return context.join("\n");
-  }
-
-  /**
-   * Format the conversation for the memory extraction prompt.
-   * Truncates very long tool results for readability.
-   */
-  private formatConversation(messages: MessageData[]): string[] {
-    /** Characters to keep from the start of a truncated tool result. */
-    const TRUNCATION_RETAIN = 500;
-    /** Tool result longer than this will be truncated. */
-    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
-
-    const lines: string[] = [];
-    for (const msg of messages) {
-      const role = msg.role.toUpperCase();
-      let content = msg.content;
-
-      // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
-        content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
-      }
-
-      lines.push(`[${role}] ${content}`);
-
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
-          lines.push(`  → tool_call: ${tc.function.name}(${tc.function.arguments})`);
-        }
-      }
-    }
-    return lines;
-  }
-
-  // ─── Private: Parsing ──────────────────────────────────────────────────
-
-  /**
-   * Parse the sub-agent's final answer into a list of ExtractedMemories.
-   * Returns an empty array if parsing fails (best-effort — the LLM may
-   * produce malformed output).
-   */
-  private parseMemories(answer: string): ExtractedMemory[] {
-    try {
-      // Extract JSON from the answer (may be wrapped in ```json fences)
-      let raw = answer.trim();
-      const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) raw = fenceMatch[1];
-
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      if (!Array.isArray(parsed.memories)) return [];
-
-      const validTypes = new Set<string>(["rule", "project", "preference"]);
-      const memories: ExtractedMemory[] = [];
-
-      for (const m of parsed.memories as Array<Record<string, unknown>>) {
-        if (
-          typeof m.name !== "string" || !m.name ||
-          typeof m.description !== "string" || !m.description ||
-          typeof m.type !== "string" || !validTypes.has(m.type) ||
-          typeof m.content !== "string" || !m.content
-        ) {
-          this.logger.warn(
-            "MemoryReflector",
-            `Skipping malformed memory: missing or invalid required field (name, description, type, content). Got: ${JSON.stringify({ name: m.name, description: m.description, type: m.type, hasContent: typeof m.content === "string" && !!m.content })}`,
-          );
-          continue;
-        }
-
-        memories.push({
-          name: m.name,
-          description: m.description,
-          type: m.type as MemoryType,
-          content: m.content,
-        });
-      }
-
-      return memories;
-    } catch (err: unknown) {
-      this.logger.error(
-        "MemoryReflector",
-        `Failed to parse extracted memories from LLM output: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
-    }
   }
 }

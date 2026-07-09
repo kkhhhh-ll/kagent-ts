@@ -4,8 +4,11 @@ import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { mkdir, writeFile } from "fs/promises";
-import { existsSync } from "fs";
 import * as path from "path";
+import {
+  validateSkillName,
+  buildSkillMarkdown,
+} from "../skills/skill-utils";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,6 +71,8 @@ export interface RunFromAgentOptions {
 
 /**
  * Structured JSON output expected from the fork sub-agent's final answer.
+ * Used as the parsing target in {@link parseCandidates} so TypeScript
+ * validates the shape at compile time.
  */
 interface PrecipitationResponse {
   analysis: string;
@@ -125,20 +130,154 @@ Rules:
 - Maximum 3 skills per session — quality over quantity.
 - You MUST output the JSON object in your final answer — do NOT write natural language instead.`;
 
-// ─── Name Validation ─────────────────────────────────────────────────────────
+// ─── Pure Helpers ────────────────────────────────────────────────────────────
 
-/** Regex matching the FileSkillLoader validation: no slashes, backslashes, "..", or null bytes. */
-const VALID_SKILL_NAME_RE = /[/\\]|\.\.|\0/;
+/** Characters to keep from the start of a truncated tool result. */
+const TRUNCATION_RETAIN = 500;
+/** Tool result longer than this will be truncated. */
+const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+/** Max number of existing skills to list in the prompt. */
+const MAX_EXISTING_SKILLS_LISTED = 30;
 
-function validateSkillName(name: string): void {
-  if (!name) {
-    throw new Error("Skill name must not be empty.");
+/**
+ * Format the conversation for the precipitation prompt.
+ * Truncates very long tool results for readability.
+ */
+function formatConversation(messages: MessageData[]): string[] {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    const role = msg.role.toUpperCase();
+    let content = msg.content ?? "";
+
+    if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
+      content =
+        content.slice(0, TRUNCATION_RETAIN) +
+        "\n... (truncated, " +
+        content.length +
+        " chars total)";
+    }
+
+    lines.push(`[${role}] ${content}`);
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const tc of msg.tool_calls) {
+        lines.push(
+          `  → tool_call: ${tc.function.name}(${tc.function.arguments})`,
+        );
+      }
+    }
   }
-  if (VALID_SKILL_NAME_RE.test(name)) {
-    throw new Error(
-      `Invalid skill name "${name}": contains path traversal characters.`,
+  return lines;
+}
+
+/**
+ * Format the existing skills list for dedup awareness.
+ * Truncates to the most recent skills if the list is very large.
+ */
+function formatExistingSkills(
+  names: string[],
+  descriptions: Record<string, string>,
+): string[] {
+  if (names.length === 0) return ["(no existing skills)"];
+
+  const truncated =
+    names.length > MAX_EXISTING_SKILLS_LISTED
+      ? names.slice(0, MAX_EXISTING_SKILLS_LISTED)
+      : names;
+
+  const lines: string[] = [];
+  for (const name of truncated) {
+    const desc = descriptions[name] || "(no description)";
+    lines.push(`- ${name}: ${desc}`);
+  }
+
+  if (names.length > MAX_EXISTING_SKILLS_LISTED) {
+    lines.push(
+      `... and ${names.length - MAX_EXISTING_SKILLS_LISTED} more (use read_file/grep_search to inspect if needed)`,
     );
   }
+
+  return lines;
+}
+
+/**
+ * Build the task prompt for the fork sub-agent from the precipitation input.
+ */
+function buildTaskPrompt(input: PrecipitationInput): string {
+  return [
+    "Please review this agent session and extract reusable skills.",
+    "",
+    "=== User Query ===",
+    input.userQuery,
+    "",
+    "=== Final Answer ===",
+    input.finalAnswer,
+    "",
+    "=== Conversation ===",
+    ...formatConversation(input.conversation),
+    "",
+    "=== Existing Skills (do NOT duplicate these) ===",
+    ...formatExistingSkills(
+      input.existingSkillNames,
+      input.existingSkillDescriptions,
+    ),
+    "",
+    "Extract any reusable patterns and output them as JSON in your final answer.",
+  ].join("\n");
+}
+
+/**
+ * Parse the sub-agent's final answer into a list of SkillCandidates.
+ *
+ * @returns Parsed candidates (may be empty if no skills were found).
+ * @throws {Error} If the LLM output cannot be parsed as valid JSON —
+ *         this is a fatal error that the caller must handle, distinct
+ *         from the "no skills extracted" case.
+ */
+function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
+  // Extract JSON from the answer using the framework's robust parser
+  // (handles nested fences, markdown noise, malformed newlines).
+  const raw = extractJSON(answer) ?? answer;
+  let parsed: PrecipitationResponse;
+
+  try {
+    parsed = JSON.parse(raw) as PrecipitationResponse;
+  } catch (err: unknown) {
+    throw new Error(
+      `Failed to parse skill candidates from LLM output: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (typeof parsed.analysis === "string" && parsed.analysis) {
+    logger.info("Precipitation", `Analysis: ${parsed.analysis}`);
+  }
+
+  if (!Array.isArray(parsed.skills)) return [];
+
+  const candidates: SkillCandidate[] = [];
+  for (const s of parsed.skills) {
+    if (
+      typeof s.name !== "string" ||
+      !s.name ||
+      typeof s.description !== "string" ||
+      !s.description ||
+      typeof s.content !== "string" ||
+      !s.content
+    ) {
+      logger.warn(
+        "Precipitation",
+        `Skipping malformed skill candidate: missing or empty required field. Got: ${JSON.stringify({ name: s.name, description: s.description, hasContent: typeof s.content === "string" && !!s.content })}`,
+      );
+      continue;
+    }
+    candidates.push({
+      name: s.name,
+      description: s.description,
+      content: s.content,
+    });
+  }
+
+  return candidates;
 }
 
 // ─── PrecipitateAgent ────────────────────────────────────────────────────────
@@ -197,6 +336,9 @@ export class PrecipitateAgent {
   private maxIterations: number;
   private logger: Logger;
 
+  /** Hard timeout for the entire precipitation fork (5 minutes). */
+  private static readonly PRECIPITATION_TIMEOUT_MS = 5 * 60 * 1000;
+
   constructor(config: PrecipitateAgentConfig) {
     this.llm = config.llm;
     this.skillsDir = config.skillsDir;
@@ -207,9 +349,6 @@ export class PrecipitateAgent {
 
   // ─── Public API ────────────────────────────────────────────────────────
 
-  /** Hard timeout for the entire precipitation fork (5 minutes). */
-  private static readonly PRECIPITATION_TIMEOUT_MS = 5 * 60 * 1000;
-
   /**
    * Fork a sub-agent to review the session and extract reusable skills.
    *
@@ -217,38 +356,45 @@ export class PrecipitateAgent {
    *          AND loaded into the SkillManager.
    * @throws If the skills directory does not exist or is not writable.
    * @throws If the precipitation fork times out or fails.
+   * @throws If the LLM output cannot be parsed (distinct from "no skills").
    * @throws If skill persistence or reload fails.
    */
   async precipitate(input: PrecipitationInput): Promise<SkillCandidate[]> {
-    // Validate skillsDir upfront so we don't waste an LLM call on a
-    // broken filesystem.
-    if (!existsSync(this.skillsDir)) {
-      throw new Error(
-        `Skills directory does not exist: ${this.skillsDir}`,
-      );
-    }
+    // Ensure the skills directory exists. Create it if it doesn't —
+    // precipitation is best-effort post-hoc work and a missing directory
+    // is not a fatal error (mkdir with recursive: true is a no-op if
+    // the directory already exists).
+    await mkdir(this.skillsDir, { recursive: true });
 
-    const taskPrompt = this.buildTaskPrompt(input);
+    const taskPrompt = buildTaskPrompt(input);
 
     // Enforce a hard timeout so a slow/stuck LLM call can't block
     // the process indefinitely. Precipitation is non-critical post-hoc
     // work — it should fail fast rather than hang forever.
-    const answer = await Promise.race([
-      this.forkAndRun(taskPrompt),
-      new Promise<string>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Precipitation fork timed out after ${PrecipitateAgent.PRECIPITATION_TIMEOUT_MS / 1000}s`)),
-          PrecipitateAgent.PRECIPITATION_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+    //
+    // The timer is explicitly cleared in the finally block to prevent
+    // a timer leak that would keep the Node.js event loop alive for
+    // the full timeout duration after the fork completes.
+    let timerId: ReturnType<typeof setTimeout> | undefined;
 
-    const candidates = this.parseCandidates(answer);
+    try {
+      const answer = await Promise.race([
+        this.forkAndRun(taskPrompt),
+        new Promise<string>((_, reject) => {
+          timerId = setTimeout(
+            () => reject(new Error(`Precipitation fork timed out after ${PrecipitateAgent.PRECIPITATION_TIMEOUT_MS / 1000}s`)),
+            PrecipitateAgent.PRECIPITATION_TIMEOUT_MS,
+          );
+        }),
+      ]);
 
-    // Persist to disk and reload
-    const persisted = await this.persistCandidates(candidates);
+      const candidates = parseCandidates(answer, this.logger);
 
-    return persisted;
+      // Persist to disk and reload
+      return await this.persistCandidates(candidates);
+    } finally {
+      if (timerId !== undefined) clearTimeout(timerId);
+    }
   }
 
   // ─── Static Helper ────────────────────────────────────────────────────
@@ -324,169 +470,6 @@ export class PrecipitateAgent {
     });
   }
 
-  // ─── Private: Prompt Building ──────────────────────────────────────────
-
-  /**
-   * Build the task prompt for the sub-agent from the precipitation input.
-   */
-  private buildTaskPrompt(input: PrecipitationInput): string {
-    const parts = [
-      "Please review this agent session and extract reusable skills.",
-      "",
-      "=== User Query ===",
-      input.userQuery,
-      "",
-      "=== Final Answer ===",
-      input.finalAnswer,
-      "",
-      "=== Conversation ===",
-      ...this.formatConversation(input.conversation),
-      "",
-      "=== Existing Skills (do NOT duplicate these) ===",
-      ...this.formatExistingSkills(
-        input.existingSkillNames,
-        input.existingSkillDescriptions,
-      ),
-      "",
-      "Extract any reusable patterns and output them as JSON in your final answer.",
-    ];
-
-    return parts.join("\n");
-  }
-
-  /**
-   * Format the conversation for the precipitation prompt.
-   * Truncates very long tool results for readability.
-   */
-  private formatConversation(messages: MessageData[]): string[] {
-    /** Characters to keep from the start of a truncated tool result. */
-    const TRUNCATION_RETAIN = 500;
-    /** Tool result longer than this will be truncated. */
-    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
-
-    const lines: string[] = [];
-    for (const msg of messages) {
-      const role = msg.role.toUpperCase();
-      let content = msg.content ?? "";
-
-      // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
-        content =
-          content.slice(0, TRUNCATION_RETAIN) +
-          "\n... (truncated, " +
-          content.length +
-          " chars total)";
-      }
-
-      lines.push(`[${role}] ${content}`);
-
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
-          lines.push(
-            `  → tool_call: ${tc.function.name}(${tc.function.arguments})`,
-          );
-        }
-      }
-    }
-    return lines;
-  }
-
-  /**
-   * Format the existing skills list for dedup awareness.
-   * Truncates to the most recent skills if the list is very large.
-   */
-  private formatExistingSkills(
-    names: string[],
-    descriptions: Record<string, string>,
-  ): string[] {
-    if (names.length === 0) return ["(no existing skills)"];
-
-    const MAX_LISTED = 30;
-    const truncated =
-      names.length > MAX_LISTED
-        ? names.slice(0, MAX_LISTED)
-        : names;
-
-    const lines: string[] = [];
-    for (const name of truncated) {
-      const desc = descriptions[name] || "(no description)";
-      lines.push(`- ${name}: ${desc}`);
-    }
-
-    if (names.length > MAX_LISTED) {
-      lines.push(
-        `... and ${names.length - MAX_LISTED} more (use read_file/grep_search to inspect if needed)`,
-      );
-    }
-
-    return lines;
-  }
-
-  /**
-   * Escape a value for safe use as a YAML frontmatter single-line string.
-   * Newlines are collapsed to spaces because the parser (parseFrontmatter)
-   * is line-based and cannot handle multiline YAML strings.
-   */
-  private yamlValue(value: string): string {
-    const single = value.replace(/\n/g, " ").replace(/\r/g, "").trim();
-    if (/[:#{}&*!|>'"%@`-]/.test(single) || single.includes(" - ")) {
-      return `"${single.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-    }
-    return single;
-  }
-
-
-  /**
-   * Parse the sub-agent's final answer into a list of SkillCandidates.
-   * Returns an empty array if parsing fails (best-effort — the LLM may
-   * produce malformed output).
-   */
-  private parseCandidates(answer: string): SkillCandidate[] {
-    try {
-      // Extract JSON from the answer using the framework's robust parser
-      // (handles nested fences, markdown noise, malformed newlines).
-      const raw = extractJSON(answer) ?? answer;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      if (typeof parsed.analysis === "string" && parsed.analysis) {
-        this.logger.info("Precipitation", `Analysis: ${parsed.analysis}`);
-      }
-
-      if (!Array.isArray(parsed.skills)) return [];
-
-      const candidates: SkillCandidate[] = [];
-      for (const s of parsed.skills as Array<Record<string, unknown>>) {
-        if (
-          typeof s.name !== "string" ||
-          !s.name ||
-          typeof s.description !== "string" ||
-          !s.description ||
-          typeof s.content !== "string" ||
-          !s.content
-        ) {
-          this.logger.warn(
-            "Precipitation",
-            `Skipping malformed skill candidate: missing or empty required field (name, description, content). Got: ${JSON.stringify({ name: s.name, description: s.description, hasContent: typeof s.content === "string" && !!s.content })}`,
-          );
-          continue;
-        }
-        candidates.push({
-          name: s.name,
-          description: s.description,
-          content: s.content,
-        });
-      }
-
-      return candidates;
-    } catch (err: unknown) {
-      this.logger.error(
-        "Precipitation",
-        `Failed to parse skill candidates from LLM output: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
-    }
-  }
-
   // ─── Private: Persistence ──────────────────────────────────────────────
 
   /**
@@ -542,23 +525,11 @@ export class PrecipitateAgent {
         const skillDir = path.join(this.skillsDir, c.name);
         await mkdir(skillDir, { recursive: true });
 
-        const frontmatter = [
-          "---",
-          `name: ${this.yamlValue(c.name)}`,
-          `description: ${this.yamlValue(c.description)}`,
-          "precipitated: true",
-          "---",
-          "",
-          c.content,
-        ].join("\n");
-
+        const fileContent = buildSkillMarkdown(c.name, c.description, c.content);
         const filePath = path.join(skillDir, "SKILL.md");
-        await writeFile(filePath, frontmatter, "utf-8");
+        await writeFile(filePath, fileContent, "utf-8");
 
-        this.logger.info(
-          "Precipitation",
-          `Written: ${filePath}`,
-        );
+        this.logger.info("Precipitation", `Written: ${filePath}`);
         persisted.push(c);
       } catch (err: unknown) {
         this.logger.warn(
