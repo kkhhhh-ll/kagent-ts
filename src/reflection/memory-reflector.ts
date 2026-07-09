@@ -2,6 +2,7 @@ import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,8 @@ export interface MemoryReflectorConfig {
    * Memory extraction requires more context reading than error reflection.
    */
   maxIterations?: number;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -136,11 +139,16 @@ export class MemoryReflector {
   private llm: LLMProvider;
   private memoryManager: MemoryManager;
   private maxIterations: number;
+  private logger: Logger;
+
+  /** Hard timeout for the entire memory extraction fork (5 minutes). */
+  private static readonly MEMORY_REFLECTION_TIMEOUT_MS = 5 * 60 * 1000;
 
   constructor(config: MemoryReflectorConfig) {
     this.llm = config.llm;
     this.memoryManager = config.memoryManager;
     this.maxIterations = config.maxIterations ?? 5;
+    this.logger = config.logger ?? new ConsoleLogger();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -149,6 +157,7 @@ export class MemoryReflector {
    * Fork a sub-agent to extract memories from the session.
    *
    * @returns The list of new memories written to the MemoryManager.
+   * @throws If the memory extraction fork times out.
    */
   async reflect(input: MemoryReflectionInput): Promise<Memory[]> {
     const existingNames = this.memoryManager.getAll().map((m) => ({
@@ -157,7 +166,19 @@ export class MemoryReflector {
     }));
 
     const taskPrompt = this.buildTaskPrompt(input, existingNames);
-    const answer = await this.forkAndRun(taskPrompt);
+
+    // Enforce a hard timeout so a slow/stuck LLM call can't block
+    // the process indefinitely.
+    const answer = await Promise.race([
+      this.forkAndRun(taskPrompt),
+      new Promise<string>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Memory extraction fork timed out after ${MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS / 1000}s`)),
+          MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+
     const extracted = this.parseMemories(answer);
 
     // Persist to MemoryManager (add() handles upsert by name)
@@ -192,6 +213,7 @@ export class MemoryReflector {
       llm: this.llm,
       systemPrompt: MEMORY_EXTRACTION_SYSTEM_PROMPT,
       maxIterations: this.maxIterations,
+      logger: this.logger,
     });
   }
 
@@ -240,14 +262,19 @@ export class MemoryReflector {
    * Truncates very long tool results for readability.
    */
   private formatConversation(messages: MessageData[]): string[] {
+    /** Characters to keep from the start of a truncated tool result. */
+    const TRUNCATION_RETAIN = 500;
+    /** Tool result longer than this will be truncated. */
+    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+
     const lines: string[] = [];
     for (const msg of messages) {
       const role = msg.role.toUpperCase();
       let content = msg.content;
 
       // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > 1000) {
-        content = content.slice(0, 500) + "\n... (truncated, " + content.length + " chars total)";
+      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
+        content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
       }
 
       lines.push(`[${role}] ${content}`);
@@ -265,7 +292,8 @@ export class MemoryReflector {
 
   /**
    * Parse the sub-agent's final answer into a list of ExtractedMemories.
-   * Returns an empty array if parsing fails (best-effort).
+   * Returns an empty array if parsing fails (best-effort — the LLM may
+   * produce malformed output).
    */
   private parseMemories(answer: string): ExtractedMemory[] {
     try {
@@ -288,6 +316,10 @@ export class MemoryReflector {
           typeof m.type !== "string" || !validTypes.has(m.type) ||
           typeof m.content !== "string" || !m.content
         ) {
+          this.logger.warn(
+            "MemoryReflector",
+            `Skipping malformed memory: missing or invalid required field (name, description, type, content). Got: ${JSON.stringify({ name: m.name, description: m.description, type: m.type, hasContent: typeof m.content === "string" && !!m.content })}`,
+          );
           continue;
         }
 
@@ -300,7 +332,11 @@ export class MemoryReflector {
       }
 
       return memories;
-    } catch {
+    } catch (err: unknown) {
+      this.logger.error(
+        "MemoryReflector",
+        `Failed to parse extracted memories from LLM output: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return [];
     }
   }

@@ -122,6 +122,7 @@ export class ReActAgent extends Agent {
 
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      this.logger.info("ReAct", `Iteration ${iteration + 1}/${this.maxIterations}`);
       // Fresh AbortController per iteration so the signal's listener
       // count doesn't accumulate across LLM calls and retries.
       this._abortController = new AbortController();
@@ -382,6 +383,7 @@ export class ReActAgent extends Agent {
     }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      this.logger.info("ReAct", `Iteration ${iteration + 1}/${this.maxIterations}`);
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
@@ -593,17 +595,24 @@ export class ReActAgent extends Agent {
     }
 
     const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
-    await PrecipitateAgent.runFromAgent(
-      input,
-      answer,
-      this.skillsDir,
-      this.skillManager,
-      this.llm,
-      this.sessionManager?.getSessionId() ?? "unknown",
-      this.precipitationMaxIterations,
-      this.logger,
-      this.contextManager.getContextMessages(),
-    );
+    try {
+      await PrecipitateAgent.runFromAgent({
+        input,
+        answer,
+        skillsDir: this.skillsDir,
+        skillManager: this.skillManager,
+        llm: this.llm,
+        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        maxIterations: this.precipitationMaxIterations,
+        logger: this.logger,
+        contextMessages: this.contextManager.getContextMessages(),
+      });
+    } catch (err: unknown) {
+      this.logger.error(
+        "Precipitation",
+        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────

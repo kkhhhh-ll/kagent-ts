@@ -180,6 +180,7 @@ const hook = createReflectionHook({
   memoryManager: memory,         // 可选，不传则只做错题本反思
   maxErrorIterations: 4,         // 可选
   maxMemoryIterations: 5,        // 可选
+  logger: new ConsoleLogger(),   // 可选
   onReflectionComplete: (entryCount, memoryCount) => {
     console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
   },

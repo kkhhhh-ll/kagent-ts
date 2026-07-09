@@ -69,6 +69,7 @@ export function createReflectionHook(
         llm,
         notebook,
         maxIterations: config.maxErrorIterations,
+        logger,
       })
     : null;
 
@@ -77,6 +78,7 @@ export function createReflectionHook(
         llm,
         memoryManager,
         maxIterations: config.maxMemoryIterations,
+        logger,
       })
     : null;
 
@@ -131,7 +133,7 @@ export function createReflectionHook(
             }
             return entries;
           } catch (err) {
-            logger.warn("Reflection", `Error reflector failed: ${err}`);
+            logger.error("Reflection", `Error reflector failed: ${err instanceof Error ? err.message : String(err)}`);
             return [];
           }
         })(),
@@ -154,7 +156,7 @@ export function createReflectionHook(
             }
             return memories;
           } catch (err) {
-            logger.warn("Reflection", `Memory reflector failed: ${err}`);
+            logger.error("Reflection", `Memory reflector failed: ${err instanceof Error ? err.message : String(err)}`);
             return [];
           }
         })(),

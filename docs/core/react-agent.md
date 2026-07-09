@@ -76,7 +76,7 @@ interface ReActAgentConfig extends AgentConfig {
   /** 技能沉淀模式 (默认: "off") */
   precipitation?: "off" | "post-hoc"
 
-  /** 沉淀子 Agent 最大迭代次数 (默认: 5) */
+  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 }
 ```

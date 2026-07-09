@@ -4,6 +4,7 @@ import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { mkdir, writeFile } from "fs/promises";
+import { existsSync } from "fs";
 import * as path from "path";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -36,6 +37,33 @@ export interface SkillCandidate {
   description: string;
   /** Full system prompt body (markdown, goes after the frontmatter). */
   content: string;
+}
+
+/**
+ * Options bag for {@link PrecipitateAgent.runFromAgent}.
+ *
+ * Replaces the previous 9-positional-parameter signature with a single
+ * typed object — call sites are far less error-prone.
+ */
+export interface RunFromAgentOptions {
+  /** The original user query. */
+  input: string;
+  /** The final answer produced by the agent. */
+  answer: string;
+  /** Path to the skills directory where SKILL.md files are written. */
+  skillsDir: string;
+  /** SkillManager for reloading after writes. */
+  skillManager: SkillManager;
+  /** LLM provider (shared with the main agent). */
+  llm: LLMProvider;
+  /** Session identifier for traceability. */
+  sessionId: string;
+  /** Maximum ReAct iterations for the sub-agent. */
+  maxIterations: number;
+  /** Logger instance. */
+  logger: Logger;
+  /** Full conversation messages (for context). */
+  contextMessages: MessageData[];
 }
 
 /**
@@ -179,14 +207,42 @@ export class PrecipitateAgent {
 
   // ─── Public API ────────────────────────────────────────────────────────
 
+  /** Hard timeout for the entire precipitation fork (5 minutes). */
+  private static readonly PRECIPITATION_TIMEOUT_MS = 5 * 60 * 1000;
+
   /**
    * Fork a sub-agent to review the session and extract reusable skills.
    *
-   * @returns Skill candidates that were successfully persisted to disk.
+   * @returns Skill candidates that were successfully persisted to disk
+   *          AND loaded into the SkillManager.
+   * @throws If the skills directory does not exist or is not writable.
+   * @throws If the precipitation fork times out or fails.
+   * @throws If skill persistence or reload fails.
    */
   async precipitate(input: PrecipitationInput): Promise<SkillCandidate[]> {
+    // Validate skillsDir upfront so we don't waste an LLM call on a
+    // broken filesystem.
+    if (!existsSync(this.skillsDir)) {
+      throw new Error(
+        `Skills directory does not exist: ${this.skillsDir}`,
+      );
+    }
+
     const taskPrompt = this.buildTaskPrompt(input);
-    const answer = await this.forkAndRun(taskPrompt);
+
+    // Enforce a hard timeout so a slow/stuck LLM call can't block
+    // the process indefinitely. Precipitation is non-critical post-hoc
+    // work — it should fail fast rather than hang forever.
+    const answer = await Promise.race([
+      this.forkAndRun(taskPrompt),
+      new Promise<string>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Precipitation fork timed out after ${PrecipitateAgent.PRECIPITATION_TIMEOUT_MS / 1000}s`)),
+          PrecipitateAgent.PRECIPITATION_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+
     const candidates = this.parseCandidates(answer);
 
     // Persist to disk and reload
@@ -203,67 +259,53 @@ export class PrecipitateAgent {
    * to avoid code duplication.
    *
    * @returns Names of newly created skills (empty if none).
+   * @throws If the skills directory is not configured, or if the
+   *         precipitation pipeline encounters a fatal error. Callers
+   *         should wrap in try-catch since precipitation is a non-critical
+   *         post-execution step.
    */
-  static async runFromAgent(
-    input: string,
-    answer: string,
-    skillsDir: string,
-    skillManager: SkillManager,
-    llm: LLMProvider,
-    sessionId: string,
-    maxIterations: number,
-    logger: Logger,
-    contextMessages: MessageData[],
-  ): Promise<string[]> {
-    if (!skillsDir) {
-      logger.warn("Precipitation", "skillsDir not set — skipping.");
+  static async runFromAgent(opts: RunFromAgentOptions): Promise<string[]> {
+    if (!opts.skillsDir) {
+      opts.logger.warn("Precipitation", "skillsDir not set — skipping.");
       return [];
     }
 
-    logger.info("Precipitation", "Starting post-hoc skill extraction...");
+    opts.logger.info("Precipitation", "Starting post-hoc skill extraction...");
 
-    try {
-      const precipitator = new PrecipitateAgent({
-        llm,
-        skillsDir,
-        skillManager,
-        maxIterations,
-        logger,
-      });
+    const precipitator = new PrecipitateAgent({
+      llm: opts.llm,
+      skillsDir: opts.skillsDir,
+      skillManager: opts.skillManager,
+      maxIterations: opts.maxIterations,
+      logger: opts.logger,
+    });
 
-      const existingSkills = skillManager.getAll();
-      const existingSkillNames = existingSkills.map((s) => s.name);
-      const existingSkillDescriptions: Record<string, string> = {};
-      for (const s of existingSkills) {
-        existingSkillDescriptions[s.name] = s.description;
-      }
+    const existingSkills = opts.skillManager.getAll();
+    const existingSkillNames = existingSkills.map((s) => s.name);
+    const existingSkillDescriptions: Record<string, string> = {};
+    for (const s of existingSkills) {
+      existingSkillDescriptions[s.name] = s.description;
+    }
 
-      const candidates = await precipitator.precipitate({
-        userQuery: input,
-        finalAnswer: answer,
-        conversation: contextMessages,
-        sessionId,
-        existingSkillNames,
-        existingSkillDescriptions,
-      });
+    const candidates = await precipitator.precipitate({
+      userQuery: opts.input,
+      finalAnswer: opts.answer,
+      conversation: opts.contextMessages,
+      sessionId: opts.sessionId,
+      existingSkillNames,
+      existingSkillDescriptions,
+    });
 
-      if (candidates.length > 0) {
-        logger.info(
-          "Precipitation",
-          `Extracted ${candidates.length} new skill(s): ${candidates.map((c) => c.name).join(", ")}`,
-        );
-      } else {
-        logger.info("Precipitation", "No new skills extracted.");
-      }
-
-      return candidates.map((c) => c.name);
-    } catch (err: unknown) {
-      logger.warn(
+    if (candidates.length > 0) {
+      opts.logger.info(
         "Precipitation",
-        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Extracted ${candidates.length} new skill(s): ${candidates.map((c) => c.name).join(", ")}`,
       );
-      return [];
+    } else {
+      opts.logger.info("Precipitation", "No new skills extracted.");
     }
+
+    return candidates.map((c) => c.name);
   }
 
   // ─── Private: Fork ─────────────────────────────────────────────────────
@@ -278,6 +320,7 @@ export class PrecipitateAgent {
       llm: this.llm,
       systemPrompt: PRECIPITATION_SYSTEM_PROMPT,
       maxIterations: this.maxIterations,
+      logger: this.logger,
     });
   }
 
@@ -316,15 +359,20 @@ export class PrecipitateAgent {
    * Truncates very long tool results for readability.
    */
   private formatConversation(messages: MessageData[]): string[] {
+    /** Characters to keep from the start of a truncated tool result. */
+    const TRUNCATION_RETAIN = 500;
+    /** Tool result longer than this will be truncated. */
+    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+
     const lines: string[] = [];
     for (const msg of messages) {
       const role = msg.role.toUpperCase();
       let content = msg.content ?? "";
 
       // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > 1000) {
+      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
         content =
-          content.slice(0, 500) +
+          content.slice(0, TRUNCATION_RETAIN) +
           "\n... (truncated, " +
           content.length +
           " chars total)";
@@ -381,7 +429,7 @@ export class PrecipitateAgent {
    */
   private yamlValue(value: string): string {
     const single = value.replace(/\n/g, " ").replace(/\r/g, "").trim();
-    if (/[:#{}&*!|>'"%@`\-]/.test(single) || single.includes(" - ")) {
+    if (/[:#{}&*!|>'"%@`-]/.test(single) || single.includes(" - ")) {
       return `"${single.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
     }
     return single;
@@ -390,7 +438,8 @@ export class PrecipitateAgent {
 
   /**
    * Parse the sub-agent's final answer into a list of SkillCandidates.
-   * Returns an empty array if parsing fails (best-effort).
+   * Returns an empty array if parsing fails (best-effort — the LLM may
+   * produce malformed output).
    */
   private parseCandidates(answer: string): SkillCandidate[] {
     try {
@@ -415,6 +464,10 @@ export class PrecipitateAgent {
           typeof s.content !== "string" ||
           !s.content
         ) {
+          this.logger.warn(
+            "Precipitation",
+            `Skipping malformed skill candidate: missing or empty required field (name, description, content). Got: ${JSON.stringify({ name: s.name, description: s.description, hasContent: typeof s.content === "string" && !!s.content })}`,
+          );
           continue;
         }
         candidates.push({
@@ -426,9 +479,9 @@ export class PrecipitateAgent {
 
       return candidates;
     } catch (err: unknown) {
-      this.logger.warn(
+      this.logger.error(
         "Precipitation",
-        `Failed to parse skill candidates: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to parse skill candidates from LLM output: ${err instanceof Error ? err.message : String(err)}`,
       );
       return [];
     }
@@ -437,11 +490,17 @@ export class PrecipitateAgent {
   // ─── Private: Persistence ──────────────────────────────────────────────
 
   /**
-   * Write skill candidates to disk as SKILL.md files.
+   * Write skill candidates to disk as SKILL.md files and reload the
+   * SkillManager so new skills are immediately available in memory.
+   *
    * Skips candidates whose name already exists in the SkillManager,
    * or whose name fails validation.
    *
-   * @returns Only the candidates that were successfully persisted.
+   * @returns Only the candidates that were successfully persisted
+   *          AND loaded into the SkillManager.
+   * @throws If skills were written to disk but the SkillManager reload
+   *         fails — this leaves the in-memory state inconsistent and
+   *         must be surfaced to the caller.
    */
   private async persistCandidates(
     candidates: SkillCandidate[],
@@ -509,14 +568,19 @@ export class PrecipitateAgent {
       }
     }
 
-    // Reload newly written skills into the SkillManager
+    // Reload newly written skills into the SkillManager.
+    // If this fails, the in-memory state is inconsistent with disk —
+    // we must surface the error rather than silently returning `persisted`.
     if (persisted.length > 0) {
       try {
         this.skillManager.reloadFromDirectory(this.skillsDir);
       } catch (err: unknown) {
-        this.logger.warn(
+        this.logger.error(
           "Precipitation",
-          `Skills written to disk but reload failed: ${err instanceof Error ? err.message : String(err)}`,
+          `Skills written to disk but reload failed — in-memory state is inconsistent: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw new Error(
+          `Failed to reload SkillManager after writing ${persisted.length} skill(s) to disk: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }

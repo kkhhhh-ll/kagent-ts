@@ -70,6 +70,8 @@ interface ForkOptions {
   maxIterations?: number
   /** 阻止自动发现 sub-agent（默认 true）。 */
   preventSubAgents?: boolean
+  /** Logger 实例（默认 ConsoleLogger）。 */
+  logger?: Logger
 }
 ```
 

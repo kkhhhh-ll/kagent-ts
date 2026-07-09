@@ -4,6 +4,7 @@ import { ToolRegistry } from "../tools/tool-registry";
 import { ReadFileTool } from "../tools/builtin/read-file";
 import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { Tool } from "./types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 /**
  * Options for {@link forkAgent}.
@@ -19,6 +20,8 @@ export interface ForkOptions {
   maxIterations?: number;
   /** Prevent the fork from auto-discovering sub-agents. Default: true. */
   preventSubAgents?: boolean;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -44,6 +47,9 @@ export async function forkAgent(
   options: ForkOptions,
 ): Promise<string> {
   const { systemPrompt, llm, maxIterations = 5, preventSubAgents = true } = options;
+  const logger = options.logger ?? new ConsoleLogger();
+
+  logger.info("ForkAgent", `Starting fork with max ${maxIterations} iteration(s)...`);
 
   const tools = new ToolRegistry();
   if (options.tools && options.tools.length > 0) {
@@ -61,5 +67,7 @@ export async function forkAgent(
     subAgentsDir: preventSubAgents ? "" : undefined,
   });
 
-  return agent.run(input);
+  const result = await agent.run(input);
+  logger.info("ForkAgent", "Fork completed.");
+  return result;
 }

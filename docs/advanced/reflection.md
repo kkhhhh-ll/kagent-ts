@@ -50,6 +50,7 @@ const hook = createReflectionHook({
   memoryManager: memory,          // 可选：不传则跳过记忆提取
   maxErrorIterations: 4,          // 可选，默认 4
   maxMemoryIterations: 5,         // 可选，默认 5
+  logger: new ConsoleLogger(),    // 可选，默认 ConsoleLogger
   onReflectionComplete: (entryCount, memoryCount) => {
     console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
   },
@@ -80,6 +81,7 @@ const reflector = new ReflectionAgent({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   notebook: errorNotebook,
   maxIterations: 4,  // Fork 子 Agent 的最大 ReAct 迭代次数 (默认: 4)
+  logger: new ConsoleLogger(),  // 可选
 })
 
 const entries = await reflector.reflect({
@@ -120,6 +122,7 @@ const reflector = new MemoryReflector({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   memoryManager,
   maxIterations: 5,  // Fork 子 Agent 的最大 ReAct 迭代次数 (默认: 5)
+  logger: new ConsoleLogger(),  // 可选
 })
 
 const memories = await reflector.reflect({
@@ -262,7 +265,7 @@ const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 2. **合理设置 maxIterations**：错题本 3-4 足够，记忆提取可稍多（4-5）
 3. **定期审查**：错题本和记忆都是跨 session 积累的，定期清理过时内容
 4. **结合 Eval**：反思结果可以作为 Eval 评估的输入
-5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，不会影响用户看到的结果
+5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，失败以 `error` 级别记录日志。每个 Fork 有 5 分钟硬超时保护，防止 LLM 调用卡住导致进程无法退出。
 
 ## 下一步
 

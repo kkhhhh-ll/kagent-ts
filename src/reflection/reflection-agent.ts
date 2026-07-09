@@ -3,6 +3,7 @@ import { MessageData, Role } from "../messages/types";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { ErrorNotebook, ErrorNotebookEntry, ReflectionErrorCategory } from "./error-notebook";
 import type { ToolErrorTrace } from "../tools/types";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,8 @@ export interface ReflectionAgentConfig {
    * Maximum ReAct iterations for the sub-agent (default: 4).
    */
   maxIterations?: number;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -127,11 +130,16 @@ export class ReflectionAgent {
   private llm: LLMProvider;
   private notebook: ErrorNotebook;
   private maxIterations: number;
+  private logger: Logger;
+
+  /** Hard timeout for the entire reflection fork (5 minutes). */
+  private static readonly REFLECTION_TIMEOUT_MS = 5 * 60 * 1000;
 
   constructor(config: ReflectionAgentConfig) {
     this.llm = config.llm;
     this.notebook = config.notebook;
     this.maxIterations = config.maxIterations ?? 4;
+    this.logger = config.logger ?? new ConsoleLogger();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -140,10 +148,23 @@ export class ReflectionAgent {
    * Fork a sub-agent to review the session and persist findings.
    *
    * @returns The final list of findings written to the notebook.
+   * @throws If the reflection fork times out.
    */
   async reflect(input: ReflectionInput): Promise<ErrorNotebookEntry[]> {
     const taskPrompt = this.buildTaskPrompt(input);
-    const answer = await this.forkAndRun(taskPrompt);
+
+    // Enforce a hard timeout so a slow/stuck LLM call can't block
+    // the process indefinitely.
+    const answer = await Promise.race([
+      this.forkAndRun(taskPrompt),
+      new Promise<string>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Reflection fork timed out after ${ReflectionAgent.REFLECTION_TIMEOUT_MS / 1000}s`)),
+          ReflectionAgent.REFLECTION_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+
     const findings = this.parseFindings(answer);
 
     // Deduplicate by category + description before persisting
@@ -187,6 +208,7 @@ export class ReflectionAgent {
       llm: this.llm,
       systemPrompt: ERROR_REFLECTION_SYSTEM_PROMPT,
       maxIterations: this.maxIterations,
+      logger: this.logger,
     });
   }
 
@@ -222,14 +244,19 @@ export class ReflectionAgent {
    * Truncates very long tool results for readability.
    */
   private formatConversation(messages: MessageData[]): string[] {
+    /** Characters to keep from the start of a truncated tool result. */
+    const TRUNCATION_RETAIN = 500;
+    /** Tool result longer than this will be truncated. */
+    const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
+
     const lines: string[] = [];
     for (const msg of messages) {
       const role = msg.role.toUpperCase();
       let content = msg.content;
 
       // Truncate long tool results
-      if (msg.role === Role.Tool && content.length > 1000) {
-        content = content.slice(0, 500) + "\n... (truncated, " + content.length + " chars total)";
+      if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
+        content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
       }
 
       lines.push(`[${role}] ${content}`);
@@ -259,7 +286,8 @@ export class ReflectionAgent {
 
   /**
    * Parse the sub-agent's final answer into a list of ReflectionFindings.
-   * Returns an empty array if parsing fails (best-effort).
+   * Returns an empty array if parsing fails (best-effort — the LLM may
+   * produce malformed output).
    */
   private parseFindings(answer: string): ReflectionFinding[] {
     try {
@@ -286,6 +314,10 @@ export class ReflectionAgent {
           typeof f.cause !== "string" ||
           typeof f.suggestion !== "string"
         ) {
+          this.logger.warn(
+            "ReflectionAgent",
+            `Skipping malformed reflection finding: missing or invalid required field (category, description, cause, suggestion). Got: ${JSON.stringify({ category: f.category, description: f.description, cause: f.cause, suggestion: f.suggestion })}`,
+          );
           continue;
         }
         findings.push({
@@ -300,7 +332,11 @@ export class ReflectionAgent {
       }
 
       return findings;
-    } catch {
+    } catch (err: unknown) {
+      this.logger.error(
+        "ReflectionAgent",
+        `Failed to parse reflection findings from LLM output: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return [];
     }
   }

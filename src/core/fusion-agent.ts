@@ -1080,17 +1080,24 @@ export class FusionAgent extends Agent {
     }
 
     const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
-    await PrecipitateAgent.runFromAgent(
-      input,
-      answer,
-      this.skillsDir,
-      this.skillManager,
-      this.llm,
-      this.sessionManager?.getSessionId() ?? "unknown",
-      this.precipitationMaxIterations,
-      this.logger,
-      this.contextManager.getContextMessages(),
-    );
+    try {
+      await PrecipitateAgent.runFromAgent({
+        input,
+        answer,
+        skillsDir: this.skillsDir,
+        skillManager: this.skillManager,
+        llm: this.llm,
+        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        maxIterations: this.precipitationMaxIterations,
+        logger: this.logger,
+        contextMessages: this.contextManager.getContextMessages(),
+      });
+    } catch (err: unknown) {
+      this.logger.error(
+        "Precipitation",
+        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // Rebuild system prompt so new skills show up immediately
     if (this.skillManager.getAll().length > 0) {
