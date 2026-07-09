@@ -9,7 +9,6 @@ import { TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { wrapAndScan } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
-import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 import { SessionState, SessionStatus } from "../session/session-types";
 
 /**
@@ -54,7 +53,7 @@ export interface PlanSolveAgentConfig extends AgentConfig {
   /** Skill precipitation mode. Default: "off". */
   precipitation?: "off" | "post-hoc";
 
-  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 }
 
@@ -114,7 +113,7 @@ export class PlanSolveAgent extends Agent {
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -749,6 +748,11 @@ export class PlanSolveAgent extends Agent {
         this.logger.info("Plan-Solve", "Task complete.");
         for (const h of this.hooks) h.onFinish?.(parsed.answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+        if (this.precipitationMode === "post-hoc") {
+          await this.runPrecipitation(input, parsed.answer);
+        }
+
         return;
       }
 
@@ -898,6 +902,7 @@ export class PlanSolveAgent extends Agent {
       return;
     }
 
+    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
     await PrecipitateAgent.runFromAgent(
       input,
       answer,

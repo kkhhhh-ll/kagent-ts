@@ -4,10 +4,10 @@ import { ReActAgent } from "../core/react-agent";
 import { ToolRegistry } from "../tools/tool-registry";
 import { ReadFileTool } from "../tools/builtin/read-file";
 import { GrepSearchTool } from "../tools/builtin/grep-search";
-import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
+import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
-import * as fs from "fs";
+import { mkdir, writeFile } from "fs/promises";
 import * as path from "path";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ Rules:
 - The content should be written as instructions to a future LLM agent.
 - Use your tools to verify claims against the actual codebase.
 - Maximum 3 skills per session — quality over quantity.
-${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
+- You MUST output the JSON object in your final answer — do NOT write natural language instead.`;
 
 // ─── Name Validation ─────────────────────────────────────────────────────────
 
@@ -130,9 +130,11 @@ export interface PrecipitateAgentConfig {
   /** SkillManager for reloading after writes. */
   skillManager: SkillManager;
   /**
-   * Maximum ReAct iterations for the sub-agent (default: 5).
+   * Maximum ReAct iterations for the sub-agent (default: 15).
    */
   maxIterations?: number;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 /**
@@ -175,8 +177,8 @@ export class PrecipitateAgent {
     this.llm = config.llm;
     this.skillsDir = config.skillsDir;
     this.skillManager = config.skillManager;
-    this.maxIterations = config.maxIterations ?? 5;
-    this.logger = new ConsoleLogger();
+    this.maxIterations = config.maxIterations ?? 15;
+    this.logger = config.logger ?? new ConsoleLogger();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -230,6 +232,7 @@ export class PrecipitateAgent {
         skillsDir,
         skillManager,
         maxIterations,
+        logger,
       });
 
       const existingSkills = skillManager.getAll();
@@ -283,6 +286,9 @@ export class PrecipitateAgent {
       systemPrompt: PRECIPITATION_SYSTEM_PROMPT,
       toolRegistry: tools,
       maxIterations: this.maxIterations,
+      // Prevent the fork from auto-discovering sub-agents and MCP —
+      // it only needs read_file + grep_search.
+      subAgentsDir: "",
     });
 
     return agent.run(userPrompt);
@@ -326,7 +332,7 @@ export class PrecipitateAgent {
     const lines: string[] = [];
     for (const msg of messages) {
       const role = msg.role.toUpperCase();
-      let content = msg.content;
+      let content = msg.content ?? "";
 
       // Truncate long tool results
       if (msg.role === Role.Tool && content.length > 1000) {
@@ -381,7 +387,19 @@ export class PrecipitateAgent {
     return lines;
   }
 
-  // ─── Private: Parsing ──────────────────────────────────────────────────
+  /**
+   * Escape a value for safe use as a YAML frontmatter single-line string.
+   * Newlines are collapsed to spaces because the parser (parseFrontmatter)
+   * is line-based and cannot handle multiline YAML strings.
+   */
+  private yamlValue(value: string): string {
+    const single = value.replace(/\n/g, " ").replace(/\r/g, "").trim();
+    if (/[:#{}&*!|>'"%@`\-]/.test(single) || single.includes(" - ")) {
+      return `"${single.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    }
+    return single;
+  }
+
 
   /**
    * Parse the sub-agent's final answer into a list of SkillCandidates.
@@ -389,12 +407,14 @@ export class PrecipitateAgent {
    */
   private parseCandidates(answer: string): SkillCandidate[] {
     try {
-      // Extract JSON from the answer (may be wrapped in ```json fences)
-      let raw = answer.trim();
-      const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) raw = fenceMatch[1];
-
+      // Extract JSON from the answer using the framework's robust parser
+      // (handles nested fences, markdown noise, malformed newlines).
+      const raw = extractJSON(answer) ?? answer;
       const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+      if (typeof parsed.analysis === "string" && parsed.analysis) {
+        this.logger.info("Precipitation", `Analysis: ${parsed.analysis}`);
+      }
 
       if (!Array.isArray(parsed.skills)) return [];
 
@@ -418,7 +438,11 @@ export class PrecipitateAgent {
       }
 
       return candidates;
-    } catch {
+    } catch (err: unknown) {
+      this.logger.warn(
+        "Precipitation",
+        `Failed to parse skill candidates: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return [];
     }
   }
@@ -470,12 +494,12 @@ export class PrecipitateAgent {
 
       try {
         const skillDir = path.join(this.skillsDir, c.name);
-        fs.mkdirSync(skillDir, { recursive: true });
+        await mkdir(skillDir, { recursive: true });
 
         const frontmatter = [
           "---",
-          `name: ${c.name}`,
-          `description: ${c.description}`,
+          `name: ${this.yamlValue(c.name)}`,
+          `description: ${this.yamlValue(c.description)}`,
           "precipitated: true",
           "---",
           "",
@@ -483,7 +507,7 @@ export class PrecipitateAgent {
         ].join("\n");
 
         const filePath = path.join(skillDir, "SKILL.md");
-        fs.writeFileSync(filePath, frontmatter, "utf-8");
+        await writeFile(filePath, frontmatter, "utf-8");
 
         this.logger.info(
           "Precipitation",
@@ -500,7 +524,14 @@ export class PrecipitateAgent {
 
     // Reload newly written skills into the SkillManager
     if (persisted.length > 0) {
-      this.skillManager.reloadFromDirectory(this.skillsDir);
+      try {
+        this.skillManager.reloadFromDirectory(this.skillsDir);
+      } catch (err: unknown) {
+        this.logger.warn(
+          "Precipitation",
+          `Skills written to disk but reload failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     return persisted;

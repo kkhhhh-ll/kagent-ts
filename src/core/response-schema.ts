@@ -119,7 +119,7 @@ function parseNLFallback(raw: string): ReActResponse {
  *
  * Returns the JSON string if found, or null.
  */
-function extractJSON(text: string): string | null {
+export function extractJSON(text: string): string | null {
   if (!text) return null;
 
   // Try with progressively more aggressive cleanup

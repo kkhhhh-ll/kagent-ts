@@ -19,7 +19,6 @@ import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
 import { ReflectionAgent } from "../reflection/reflection-agent";
 import { ErrorNotebook } from "../reflection/error-notebook";
-import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 
 // ─── System Prompt ────────────────────────────────────────────────────────
 
@@ -136,7 +135,7 @@ export interface FusionAgentConfig extends AgentConfig {
    */
   precipitation?: "off" | "post-hoc";
 
-  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 }
 
@@ -224,7 +223,7 @@ export class FusionAgent extends Agent {
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
 
     // Validate: notebook required for post-hoc/both modes
     if (
@@ -1076,6 +1075,7 @@ export class FusionAgent extends Agent {
       return;
     }
 
+    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
     await PrecipitateAgent.runFromAgent(
       input,
       answer,
@@ -1414,6 +1414,11 @@ export class FusionAgent extends Agent {
         this.logger.info("Fusion", "Task complete.");
         for (const h of this.hooks) h.onFinish?.(parsed.answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+        if (this.precipitationMode === "post-hoc") {
+          await this.runPrecipitation(input, parsed.answer);
+        }
+
         return;
       }
 

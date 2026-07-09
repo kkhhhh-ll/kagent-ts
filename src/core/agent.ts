@@ -413,7 +413,7 @@ export interface AgentConfig {
 
   /**
    * Maximum iterations for the precipitation sub-agent's ReAct loop.
-   * Default: 5.
+   * Default: 15.
    */
   precipitationMaxIterations?: number;
 }

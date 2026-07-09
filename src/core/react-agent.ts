@@ -9,7 +9,6 @@ import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
-import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 
 /**
  * Default system prompt for ReAct-style reasoning.
@@ -40,7 +39,7 @@ export interface ReActAgentConfig extends AgentConfig {
   /** Skill precipitation mode. Default: "off". */
   precipitation?: "off" | "post-hoc";
 
-  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 }
 
@@ -73,7 +72,7 @@ export class ReActAgent extends Agent {
 
     this.maxIterations = config.maxIterations ?? 10;
     this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -524,6 +523,12 @@ export class ReActAgent extends Agent {
 
       for (const h of this.hooks) h.onFinish?.(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+      // ── Skill precipitation (best-effort, post-hoc) ─────────────────
+      if (this.precipitationMode === "post-hoc") {
+        await this.runPrecipitation(input, answer);
+      }
+
       return;
     }
 
@@ -563,6 +568,7 @@ export class ReActAgent extends Agent {
       return;
     }
 
+    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
     await PrecipitateAgent.runFromAgent(
       input,
       answer,

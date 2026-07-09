@@ -7,6 +7,18 @@ import * as path from "path";
 const VALID_SKILL_NAME_RE = /[/\\]|\.\.|\0/;
 
 /**
+ * Escape a value for safe use as a YAML frontmatter single-line string.
+ * Mirrors PrecipitateAgent.yamlValue to keep the two writers in sync.
+ */
+function yamlValue(value: string): string {
+  const single = value.replace(/\n/g, " ").replace(/\r/g, "").trim();
+  if (/[:#{}&*!|>'"%@`\-]/.test(single) || single.includes(" - ")) {
+    return `"${single.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+  return single;
+}
+
+/**
  * Create a `precipitate_skill` tool that allows the LLM to save a reusable
  * skill discovered during a session directly to the skills directory.
  *
@@ -90,8 +102,8 @@ export function createPrecipitateSkillTool(
 
         const frontmatter = [
           "---",
-          `name: ${name}`,
-          `description: ${description}`,
+          `name: ${yamlValue(name)}`,
+          `description: ${yamlValue(description)}`,
           "precipitated: true",
           "---",
           "",
