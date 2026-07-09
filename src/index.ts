@@ -2,6 +2,8 @@
 export { Agent } from "./core/agent";
 export type { AgentConfig, ApprovalCallback } from "./core/agent";
 export { ReActAgent } from "./core/react-agent";
+export { forkAgent } from "./core/fork";
+export type { ForkOptions } from "./core/fork";
 export type { ReActAgentConfig } from "./core/react-agent";
 export { PlanSolveAgent } from "./core/plan-solve-agent";
 export type { PlanSolveAgentConfig } from "./core/plan-solve-agent";

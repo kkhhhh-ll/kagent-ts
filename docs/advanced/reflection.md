@@ -266,6 +266,7 @@ const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 
 ## 下一步
 
+- [Fork — Agent 派生](/core/fork) — 反思子 Agent 使用的轻量派生机制
 - [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
 - [Memory 记忆](/advanced/memory) — MemoryManager 和长期记忆
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量

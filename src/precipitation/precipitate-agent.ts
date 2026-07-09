@@ -1,9 +1,5 @@
 import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
-import { ReActAgent } from "../core/react-agent";
-import { ToolRegistry } from "../tools/tool-registry";
-import { ReadFileTool } from "../tools/builtin/read-file";
-import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
@@ -277,21 +273,12 @@ export class PrecipitateAgent {
    * Returns the agent's final answer string.
    */
   private async forkAndRun(userPrompt: string): Promise<string> {
-    const tools = new ToolRegistry();
-    tools.register(ReadFileTool);
-    tools.register(GrepSearchTool);
-
-    const agent = new ReActAgent({
+    const { forkAgent } = await import("../core/fork.js");
+    return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: PRECIPITATION_SYSTEM_PROMPT,
-      toolRegistry: tools,
       maxIterations: this.maxIterations,
-      // Prevent the fork from auto-discovering sub-agents and MCP —
-      // it only needs read_file + grep_search.
-      subAgentsDir: "",
     });
-
-    return agent.run(userPrompt);
   }
 
   // ─── Private: Prompt Building ──────────────────────────────────────────

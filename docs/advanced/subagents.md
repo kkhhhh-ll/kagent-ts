@@ -315,8 +315,21 @@ const unsafeHook = {
 
 这是为了防止无限递归——例如 `ReflectionHook`（`createReflectionHook()`）在 `onFinish` 中会 spawn 子 Agent 进行反思，如果将它传入子 Agent，会导致：子 Agent 完成 → spawn 反思 Agent → 反思 Agent 完成 → spawn 更多 Agent → ……
 
+## Sub-Agent vs Fork
+
+如果不需要完整工具集或工作区隔离，考虑使用更轻量的 [Fork](/core/fork)：
+
+|            | Sub-Agent                     | Fork                          |
+| ---------- | ----------------------------- | ----------------------------- |
+| 触发方式   | LLM 通过 `Task` 工具 spawn    | 代码直接调用 `forkAgent()`    |
+| 隔离       | worktree 隔离                 | 无隔离（共享进程）            |
+| 工具       | 继承主 Agent                  | 默认只读，可自定义            |
+| 开销       | 较高                          | 极低                          |
+| 适用场景   | 开放式复杂子任务              | 确定性的小范围任务            |
+
 ## 下一步
 
+- [Fork — Agent 派生](/core/fork) — 轻量级内联派生
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理编排
 - [MCP 协议](/advanced/mcp) — 连接外部 MCP Server，与子代理共享工具
 - [RAG 知识库](/advanced/rag) — 语义检索文档，子代理按需共享

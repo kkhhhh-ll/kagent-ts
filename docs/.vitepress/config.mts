@@ -45,6 +45,7 @@ export default defineConfig({
             { text: 'Plan-Solve Agent', link: '/core/plan-solve-agent' },
             { text: 'Fusion Agent', link: '/core/fusion-agent' },
             { text: 'Orchestrator Agent', link: '/core/orchestrator-agent' },
+            { text: 'Fork — Agent 派生', link: '/core/fork' },
             { text: '生命周期钩子', link: '/core/hooks' },
           ],
         },

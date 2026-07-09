@@ -89,6 +89,25 @@ const answer = await agent.resume('session_abc123', '继续之前的任务')
 await agent.shutdown()
 ```
 
+### `fork(input: string, options): Promise<string>` <Badge type="tip" text="protected" />
+
+派生一个轻量 ReActAgent，执行独立的子任务。自动使用当前 Agent 的 LLM，不继承对话上下文。
+
+```ts
+class MyAgent extends Agent {
+  async run(input: string): Promise<string> {
+    // ...
+    const summary = await this.fork('总结上述内容。', {
+      systemPrompt: '你是总结专家。',
+      maxIterations: 3,
+    })
+    return `${answer}\n\n${summary}`
+  }
+}
+```
+
+详见 [Fork — Agent 派生](/core/fork)。
+
 ## 生命周期钩子
 
 通过 `AgentHooks` 接口可以监听 Agent 执行的各个阶段。详见 [生命周期钩子](/core/hooks)。

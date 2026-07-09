@@ -666,6 +666,36 @@ export abstract class Agent {
   }
 
   /**
+   * Fork a lightweight ReActAgent to run a self-contained task.
+   *
+   * The fork runs inline (not via SubAgentManager), uses this agent's LLM
+   * by default, and returns the final answer as a string. Ideal for
+   * post-hoc analysis, extraction, or verification that should not
+   * modify the main agent's context.
+   *
+   * @example
+   * ```ts
+   * const summary = await this.fork("Summarize the conversation above.", {
+   *   systemPrompt: "You are a summarizer.",
+   *   maxIterations: 3,
+   * });
+   * ```
+   */
+  protected async fork(
+    input: string,
+    options: {
+      systemPrompt: string;
+      llm?: LLMProvider;
+      tools?: Tool[];
+      maxIterations?: number;
+      preventSubAgents?: boolean;
+    },
+  ): Promise<string> {
+    const { forkAgent } = await import("./fork.js");
+    return forkAgent(input, { llm: this.llm, ...options });
+  }
+
+  /**
    * Stream the agent's response, yielding text chunks as they arrive.
    *
    * Uses `chatStream()` under the hood for the LLM generation phase.

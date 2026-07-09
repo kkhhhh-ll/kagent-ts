@@ -1,9 +1,5 @@
 import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
-import { ReActAgent } from "../core/react-agent";
-import { ToolRegistry } from "../tools/tool-registry";
-import { ReadFileTool } from "../tools/builtin/read-file";
-import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 
@@ -191,18 +187,12 @@ export class MemoryReflector {
    * Returns the agent's final answer string.
    */
   private async forkAndRun(userPrompt: string): Promise<string> {
-    const tools = new ToolRegistry();
-    tools.register(ReadFileTool);
-    tools.register(GrepSearchTool);
-
-    const agent = new ReActAgent({
+    const { forkAgent } = await import("../core/fork.js");
+    return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: MEMORY_EXTRACTION_SYSTEM_PROMPT,
-      toolRegistry: tools,
       maxIterations: this.maxIterations,
     });
-
-    return agent.run(userPrompt);
   }
 
   // ─── Private: Prompt Building ──────────────────────────────────────────

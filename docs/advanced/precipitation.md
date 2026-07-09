@@ -186,6 +186,7 @@ await agent.run("帮我记住怎么配置这个项目的 CI/CD")
 
 ## 下一步
 
+- [Fork — Agent 派生](/core/fork) — 沉淀子 Agent 使用的轻量派生机制
 - [Skills 渐进式技能](/advanced/skills) — 技能定义和加载机制
 - [Reflection 反思](/advanced/reflection) — 执行后反思（错题本 + 记忆提取）
 - [Fusion Agent](/core/fusion-agent) — 内置沉淀的 Agent 范式
