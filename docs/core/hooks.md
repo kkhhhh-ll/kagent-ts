@@ -43,8 +43,8 @@ interface AgentHooks {
   /** 流式输出文本块时触发 (配合 agent.stream()) */
   onChunk?: (chunk: string) => void
 
-  /** Agent 执行完成时触发 */
-  onFinish?: (answer: string) => void
+  /** Agent 执行完成时触发（支持同步和异步，异步回调在后台执行不阻塞） */
+  onFinish?: (answer: string) => void | Promise<void>
 }
 ```
 
@@ -67,8 +67,8 @@ const loggingHook: AgentHooks = {
     const status = result.success ? '✅' : '❌'
     console.log(`[Tool] ${status} ${name}`)
   },
-  onFinish: (answer, stats) => {
-    console.log(`[Agent] 完成，共 ${stats.iterations} 轮迭代`)
+  onFinish: (answer) => {
+    console.log(`[Agent] 完成，答案长度: ${answer.length} 字符`)
   },
 }
 

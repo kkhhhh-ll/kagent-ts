@@ -325,7 +325,7 @@ export class OrchestratorAgent extends Agent {
         const fallback =
           "I was unable to decompose this task into sub-agent actions. " +
           "Please try rephrasing your request with more specific goals.";
-        for (const h of this.hooks) h.onFinish?.(fallback);
+        this.fireOnFinish(fallback);
         return fallback;
       }
 
@@ -361,7 +361,7 @@ export class OrchestratorAgent extends Agent {
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
           `resume with agent.resume("${sid}", "<your prompt>").`;
-        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        this.fireOnFinish(cancelMsg);
         return cancelMsg;
       }
 
@@ -382,7 +382,7 @@ export class OrchestratorAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(synthesis.finalAnswer);
+        this.fireOnFinish(synthesis.finalAnswer);
         return synthesis.finalAnswer;
       }
 
@@ -393,7 +393,7 @@ export class OrchestratorAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(forced);
+        this.fireOnFinish(forced);
         return forced;
       }
 
@@ -404,7 +404,7 @@ export class OrchestratorAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(forced);
+        this.fireOnFinish(forced);
         return forced;
       }
 
@@ -417,7 +417,7 @@ export class OrchestratorAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(forced);
+        this.fireOnFinish(forced);
         return forced;
       }
 
@@ -429,7 +429,7 @@ export class OrchestratorAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(forced);
+        this.fireOnFinish(forced);
         return forced;
       }
 
@@ -452,7 +452,7 @@ export class OrchestratorAgent extends Agent {
 
     // Should not reach here — caught by last-round check above
     const forced = await this.forceSynthesize(input);
-    for (const h of this.hooks) h.onFinish?.(forced);
+    this.fireOnFinish(forced);
     return forced;
   }
 
@@ -734,7 +734,7 @@ export class OrchestratorAgent extends Agent {
         this.saveCheckpoint("cancelled");
         const cancelMsg =
           `Execution cancelled by user. Session "${this.sessionManager?.getSessionId() ?? "unknown"}" preserved.`;
-        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        this.fireOnFinish(cancelMsg);
         return { thought: "Cancelled.", taskGraph: { nodes: [] } };
       }
       if (err instanceof LLMNetworkError) {

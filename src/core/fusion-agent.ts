@@ -314,7 +314,7 @@ export class FusionAgent extends Agent {
       const planResult = await this.createPlan(input);
       if (typeof planResult === "string") {
         // planResult is a string → plan was aborted / returned as answer
-        for (const h of this.hooks) h.onFinish?.(planResult);
+        this.fireOnFinish(planResult);
         return planResult;
       }
       // planResult is string[] → plan was confirmed, continue
@@ -331,8 +331,10 @@ export class FusionAgent extends Agent {
     // ── Phase 3: ReAct Execute Loop ───────────────────────────────────
     const answer = await this.executeReActLoop();
 
-    // ── Phase 4: Reflection ───────────────────────────────────────────
-    await this.runReflection(input, answer);
+    // ── Phase 4: Reflection (best-effort, non-blocking) ──────────────
+    this.runReflection(input, answer).catch((err) =>
+      this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
 
     // ── Phase 5: Precipitation (skill extraction) ─────────────────────
     // Trigger on: post-hoc mode, or hard-won success (failures→success), or user intent
@@ -344,10 +346,12 @@ export class FusionAgent extends Agent {
       (this.precipitationMode !== "off" &&
         /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
     if (shouldPrecipitate) {
-      await this.runPrecipitation(input, answer);
+      this.runPrecipitation(input, answer).catch((err) =>
+        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
     }
 
-    for (const h of this.hooks) h.onFinish?.(answer);
+    this.fireOnFinish(answer);
     return answer;
   }
 
@@ -448,7 +452,7 @@ export class FusionAgent extends Agent {
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
           `resume with agent.resume("${sid}", "<your prompt>").`;
-        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        this.fireOnFinish(cancelMsg);
         return cancelMsg;
       }
       if (err instanceof LLMNetworkError) {
@@ -674,7 +678,7 @@ export class FusionAgent extends Agent {
           const cancelMsg =
             `Execution cancelled by user. Session "${sid}" preserved — ` +
             `resume with agent.resume("${sid}", "<your prompt>").`;
-          for (const h of this.hooks) h.onFinish?.(cancelMsg);
+          this.fireOnFinish(cancelMsg);
           return cancelMsg;
         }
         if (err instanceof LLMNetworkError) {
@@ -1260,6 +1264,14 @@ export class FusionAgent extends Agent {
     let consecutiveEmptyIterations = 0;
     const EMPTY_ITERATION_LIMIT = 5;
 
+    // Determine if precipitation should run (mode + signals)
+    const FAILURE_THRESHOLD = 2;
+    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
+      shouldPrecipitate = true;
+      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
+
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
 
@@ -1380,6 +1392,10 @@ export class FusionAgent extends Agent {
 
         if (hadFailure) {
           this.consecutiveFailures++;
+          if (this.consecutiveFailures >= FAILURE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
           if (
             (this.reflectionMode === "inline" || this.reflectionMode === "both") &&
             this.inlineReflectionsDone === 0
@@ -1412,11 +1428,13 @@ export class FusionAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         this.logger.info("Fusion", "Task complete.");
-        for (const h of this.hooks) h.onFinish?.(parsed.answer);
+        this.fireOnFinish(parsed.answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-        if (this.precipitationMode === "post-hoc") {
-          await this.runPrecipitation(input, parsed.answer);
+        if (shouldPrecipitate) {
+          this.runPrecipitation(input, parsed.answer).catch((err) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         return;

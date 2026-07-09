@@ -86,5 +86,5 @@ export interface AgentHooks {
   // ─── Final ───────────────────────────────────────────────────────────
 
   /** Called when a final answer is produced. */
-  onFinish?: (answer: string) => void;
+  onFinish?: (answer: string) => void | Promise<void>;
 }

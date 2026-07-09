@@ -184,7 +184,7 @@ export class PlanSolveAgent extends Agent {
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
           `resume with agent.resume("${sid}", "<your prompt>").`;
-        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        this.fireOnFinish(cancelMsg);
         return cancelMsg;
       }
 
@@ -214,7 +214,7 @@ export class PlanSolveAgent extends Agent {
         this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
       );
       if (budgetError) {
-        for (const h of this.hooks) h.onFinish?.(budgetError);
+        this.fireOnFinish(budgetError);
         return budgetError;
       }
 
@@ -241,7 +241,7 @@ export class PlanSolveAgent extends Agent {
           const cancelMsg =
             `Execution cancelled by user. Session "${sid}" preserved — ` +
             `resume with agent.resume("${sid}", "<your prompt>").`;
-          for (const h of this.hooks) h.onFinish?.(cancelMsg);
+          this.fireOnFinish(cancelMsg);
           return cancelMsg;
         }
         if (err instanceof LLMNetworkError) {
@@ -281,7 +281,7 @@ export class PlanSolveAgent extends Agent {
             ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
               "Please try breaking your request into smaller steps.";
-          for (const h of this.hooks) h.onFinish?.(fallback);
+          this.fireOnFinish(fallback);
           return fallback;
         }
 
@@ -399,7 +399,7 @@ export class PlanSolveAgent extends Agent {
           if (iteration === this.maxIterations - 1) {
             const fallback = parsed.answer +
               "\n\n[Note: Response may be incomplete due to output length constraints.]";
-            for (const h of this.hooks) h.onFinish?.(fallback);
+            this.fireOnFinish(fallback);
             return fallback;
           }
           // Inject continuation instruction so the LLM knows to complete
@@ -421,11 +421,13 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        for (const h of this.hooks) h.onFinish?.(parsed.answer);
+        this.fireOnFinish(parsed.answer);
 
         // ── Skill precipitation (best-effort, post-hoc) ─────────────────
         if (shouldPrecipitate) {
-          await this.runPrecipitation(input, parsed.answer);
+          this.runPrecipitation(input, parsed.answer).catch((err) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         return parsed.answer;
@@ -491,7 +493,7 @@ export class PlanSolveAgent extends Agent {
             "Please try rephrasing or breaking it down into smaller, more specific steps.";
           const stuckAssistantMessage = Message.assistant(stuckMsg);
           this.contextManager.addMessage(stuckAssistantMessage.toDict());
-          for (const h of this.hooks) h.onFinish?.(stuckMsg);
+          this.fireOnFinish(stuckMsg);
           return stuckMsg;
         }
 
@@ -506,7 +508,7 @@ export class PlanSolveAgent extends Agent {
           "Please try rephrasing or breaking it down into smaller, more specific steps.";
         const stuckAssistantMessage = Message.assistant(stuckMsg);
         this.contextManager.addMessage(stuckAssistantMessage.toDict());
-        for (const h of this.hooks) h.onFinish?.(stuckMsg);
+        this.fireOnFinish(stuckMsg);
         return stuckMsg;
       }
     }
@@ -517,7 +519,7 @@ export class PlanSolveAgent extends Agent {
       `Please try breaking your request into smaller steps.`;
     const timeoutAssistantMessage = Message.assistant(timeoutMsg);
     this.contextManager.addMessage(timeoutAssistantMessage.toDict());
-    for (const h of this.hooks) h.onFinish?.(timeoutMsg);
+    this.fireOnFinish(timeoutMsg);
     return timeoutMsg;
   }
 
@@ -593,6 +595,14 @@ export class PlanSolveAgent extends Agent {
 
     let consecutiveEmptyIterations = 0;
     const EMPTY_ITERATION_LIMIT = 5;
+
+    // Determine if precipitation should run (mode + signals)
+    const FAILURE_PRECIPITATE_THRESHOLD = 2;
+    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
+      shouldPrecipitate = true;
+      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
@@ -727,6 +737,10 @@ export class PlanSolveAgent extends Agent {
 
         if (hadFailure) {
           this.consecutiveFailures++;
+          if (this.consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
         } else {
           this.consecutiveFailures = 0;
           if (parsed.currentStep && this.hasPlan) {
@@ -746,11 +760,13 @@ export class PlanSolveAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         this.logger.info("Plan-Solve", "Task complete.");
-        for (const h of this.hooks) h.onFinish?.(parsed.answer);
+        this.fireOnFinish(parsed.answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-        if (this.precipitationMode === "post-hoc") {
-          await this.runPrecipitation(input, parsed.answer);
+        if (shouldPrecipitate) {
+          this.runPrecipitation(input, parsed.answer).catch((err) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         return;

@@ -20,6 +20,8 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   ├── [Inline Reflection] 每 N 步内省一次
   └── 继续直到完成
   ↓
+Final Answer（答案已返回给用户）
+  ↓ (后台 fire-and-forget，不阻塞)
 [REFLECT] (可选，post-hoc):
   ├── ReflectionAgent 反思整个会话
   ├── 评分 (0-100)
@@ -29,8 +31,6 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   ├── PrecipitateAgent 提取可复用技能
   ├── 写入 SKILL.md 文件
   └── 对比已有 Skills 去重
-  ↓
-Final Answer
 ```
 
 ## 基本用法
@@ -143,7 +143,7 @@ LLM: {"complexity": "simple", "reason": "单步工具调用即可完成"}
 
 ## 技能沉淀
 
-在 Reflection 完成之后，Fusion Agent 还可以运行 Phase 5：Skill Precipitation（技能沉淀）。详见 [Precipitation 沉淀](/advanced/precipitation)。
+Fusion Agent 还支持 Phase 4（Reflection）和 Phase 5（Skill Precipitation），两者在答案返回给用户后**在后台并行运行**，不阻塞主流程。详见 [Precipitation 沉淀](/advanced/precipitation) 和 [Reflection 反思](/advanced/reflection)。
 
 ```ts
 const agent = new FusionAgent({

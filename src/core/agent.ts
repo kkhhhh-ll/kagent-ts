@@ -648,6 +648,24 @@ export abstract class Agent {
   }
 
   /**
+   * Fire the {@link AgentHooks.onFinish} hook for every registered observer.
+   *
+   * Each hook is called in a fire-and-forget fashion — promise rejections
+   * are caught and logged so a failing hook (e.g. background reflection)
+   * never crashes the main agent loop.
+   */
+  protected fireOnFinish(answer: string): void {
+    for (const h of this.hooks) {
+      Promise.resolve(h.onFinish?.(answer)).catch((err: unknown) =>
+        this.logger.warn(
+          "Hook",
+          `onFinish failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
+  }
+
+  /**
    * Stream the agent's response, yielding text chunks as they arrive.
    *
    * Uses `chatStream()` under the hood for the LLM generation phase.

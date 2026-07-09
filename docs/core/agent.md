@@ -102,7 +102,7 @@ const agent = new ReActAgent({
     onToolStart: (name, args) => console.log(`工具调用: ${name}`),
     onToolEnd: (name, result) => console.log(`工具结果: ${name}`),
     onThought: (thought) => console.log(`思考: ${thought}`),
-    onFinish: (answer, stats) => console.log(`完成: ${stats.iterations} 轮`),
+    onFinish: (answer) => console.log(`完成，答案长度: ${answer.length} 字符`),
   }],
 })
 ```

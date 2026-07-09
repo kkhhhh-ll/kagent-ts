@@ -133,7 +133,7 @@ export class ReActAgent extends Agent {
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
           `resume with agent.resume("${sid}", "<your prompt>").`;
-        for (const h of this.hooks) h.onFinish?.(cancelMsg);
+        this.fireOnFinish(cancelMsg);
         return cancelMsg;
       }
 
@@ -160,7 +160,7 @@ export class ReActAgent extends Agent {
         this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
       );
       if (budgetError) {
-        for (const h of this.hooks) h.onFinish?.(budgetError);
+        this.fireOnFinish(budgetError);
         return budgetError;
       }
 
@@ -181,7 +181,7 @@ export class ReActAgent extends Agent {
           const cancelMsg =
             `Execution cancelled by user. Session "${sid}" preserved — ` +
             `resume with agent.resume("${sid}", "<your prompt>").`;
-          for (const h of this.hooks) h.onFinish?.(cancelMsg);
+          this.fireOnFinish(cancelMsg);
           return cancelMsg;
         }
         if (err instanceof LLMNetworkError) {
@@ -223,7 +223,7 @@ export class ReActAgent extends Agent {
             ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
               "Please try breaking your request into smaller steps.";
-          for (const h of this.hooks) h.onFinish?.(fallback);
+          this.fireOnFinish(fallback);
           return fallback;
         }
 
@@ -295,7 +295,7 @@ export class ReActAgent extends Agent {
         if (iteration === this.maxIterations - 1) {
           const fallback = answer +
             "\n\n[Note: Response may be incomplete due to output length constraints.]";
-          for (const h of this.hooks) h.onFinish?.(fallback);
+          this.fireOnFinish(fallback);
           return fallback;
         }
         const continueMsg = Message.user(
@@ -316,7 +316,7 @@ export class ReActAgent extends Agent {
             "Please try rephrasing your request.";
           const stuckMsgObj = Message.assistant(stuckMsg);
           this.contextManager.addMessage(stuckMsgObj.toDict());
-          for (const h of this.hooks) h.onFinish?.(stuckMsg);
+          this.fireOnFinish(stuckMsg);
           return stuckMsg;
         }
         continue;
@@ -324,12 +324,14 @@ export class ReActAgent extends Agent {
 
       // Normal answer — return content
       this.logger.info("Answer", answer);
-      for (const h of this.hooks) h.onFinish?.(answer);
+      this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
       // ── Skill precipitation (best-effort, post-hoc) ─────────────────
       if (shouldPrecipitate) {
-        await this.runPrecipitation(input, answer);
+        this.runPrecipitation(input, answer).catch((err) =>
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
 
       return answer;
@@ -341,7 +343,7 @@ export class ReActAgent extends Agent {
       `Please try breaking your request into smaller steps.`;
     const timeoutAssistantMessage = Message.assistant(timeoutMsg);
     this.contextManager.addMessage(timeoutAssistantMessage.toDict());
-    for (const h of this.hooks) h.onFinish?.(timeoutMsg);
+    this.fireOnFinish(timeoutMsg);
     return timeoutMsg;
   }
 
@@ -367,6 +369,17 @@ export class ReActAgent extends Agent {
     // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
+
+    // Track tool failures → trigger precipitation on hard-won success
+    let consecutiveFailures = 0;
+    const FAILURE_PRECIPITATE_THRESHOLD = 2;
+
+    // Determine if precipitation should run (mode + signals)
+    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
+      shouldPrecipitate = true;
+      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
@@ -479,7 +492,7 @@ export class ReActAgent extends Agent {
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
               "Please try breaking your request into smaller steps.";
           yield fallback;
-          for (const h of this.hooks) h.onFinish?.(fallback);
+          this.fireOnFinish(fallback);
           return;
         }
         this.contextManager.addMessage(
@@ -498,7 +511,16 @@ export class ReActAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         const mcpWarnedServers = new Set<string>();
-        await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        if (hadFailure) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
+        } else {
+          consecutiveFailures = 0;
+        }
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
         continue;
       }
@@ -515,18 +537,20 @@ export class ReActAgent extends Agent {
             "Please try rephrasing your request.";
           const stuckMsgObj = Message.assistant(stuckMsg);
           this.contextManager.addMessage(stuckMsgObj.toDict());
-          for (const h of this.hooks) h.onFinish?.(stuckMsg);
+          this.fireOnFinish(stuckMsg);
           return;
         }
         continue;
       }
 
-      for (const h of this.hooks) h.onFinish?.(answer);
+      this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
       // ── Skill precipitation (best-effort, post-hoc) ─────────────────
-      if (this.precipitationMode === "post-hoc") {
-        await this.runPrecipitation(input, answer);
+      if (shouldPrecipitate) {
+        this.runPrecipitation(input, answer).catch((err) =>
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
 
       return;

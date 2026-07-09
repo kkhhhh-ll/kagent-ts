@@ -1235,6 +1235,9 @@ describe("FusionAgent", () => {
       const result = await agent.run("important task");
       expect(result).toContain("A possibly incomplete answer.");
 
+      // Wait for background reflection to complete (now fire-and-forget)
+      await new Promise((r) => setTimeout(r, 50));
+
       // Verify findings were written to the notebook
       const entries = notebook.getAll();
       expect(entries.length).toBe(2);
@@ -1353,6 +1356,9 @@ describe("FusionAgent", () => {
 
       // Inline reflection was triggered
       expect((agent as any).inlineReflectionsDone).toBeGreaterThanOrEqual(1);
+
+      // Wait for background post-hoc reflection to complete (now fire-and-forget)
+      await new Promise((r) => setTimeout(r, 50));
 
       // Post-hoc reflection wrote to the notebook
       const entries = notebook.getAll();
