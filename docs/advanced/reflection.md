@@ -259,6 +259,59 @@ for (const m of recentMemories) {
 const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 ```
 
+## 追踪与调试
+
+Reflection 的 fork 子 Agent 运行在独立上下文中，控制台默认只看到 fork 的启动和完成日志。通过 `TraceLogger` 可以完整记录 fork 内部的工具调用和 LLM 交互。
+
+### 基本用法
+
+```ts
+import {
+  ReActAgent, OpenAIProvider, BUILTIN_TOOLS,
+  TraceLogger, ErrorNotebook, MemoryManager,
+  createReflectionHook,
+} from "kagent-ts"
+
+const trace = new TraceLogger({ sessionId: "reflection-demo" })
+
+const notebook = new ErrorNotebook({ storageDir: ".error-notebook" })
+const memory = new MemoryManager(".memory")
+
+const agent = new ReActAgent({
+  llm: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),
+  tools: BUILTIN_TOOLS,
+  hooks: [
+    trace,   // ← 主 Agent 事件
+    createReflectionHook({
+      llm: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),
+      notebook,
+      memoryManager: memory,
+      hooks: [trace],  // ← 透传到两个 fork 内部
+    }),
+  ],
+})
+
+await agent.run("重构 src/core/agent.ts")
+// → .kagent-traces/trace-reflection-demo.html
+//   时间线包含：主 Agent + 错题本 Fork + 记忆提取 Fork
+```
+
+### Trace 文件结构
+
+打开生成的 HTML 文件，页面分为三个独立区域：
+
+- **主 Agent 时间线**：Thought、LLM 调用、工具调用、Final Answer
+- **🔀 Fork Agents**（折叠区）：
+  - `error-reflection` fork：`read_file` / `grep_search`、LLM token 消耗、JSON 输出（评分 + 问题分类）
+  - `memory-extraction` fork：工具调用、LLM 交互、提取到的 memory 列表
+- **🤖 Sub-Agents**（折叠区，如果有的话）：`spawn_subagent` 派生的子 Agent
+
+两个 fork 各自标记 `kind: "fork"`，与 sub-agent（`kind: "subagent"`）分区域展示，不会混在一起。
+
+### 取消 / 超时时的轨迹
+
+两个 Fork 各自有 5 分钟 AbortController 硬超时。即使超时取消，TraceLogger 仍会通过 `addChildTrace` + 自动 `flush()` 将取消前的完整事件推入父 trace 并刷新 HTML 文件。
+
 ## 最佳实践
 
 1. **反思使用高性能模型**：推荐 GPT-4o 或 Claude Sonnet

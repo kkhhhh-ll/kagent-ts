@@ -131,23 +131,30 @@ try {
 - ReAct 循环在下次检查 `isCancelled` 时退出
 - `onFinish` 钩子正常触发，TraceLogger 会生成完整的 trace 文件（包含取消前所有事件）
 
-## 钩子透传
+## 钩子透传与 Trace 可视化
 
-`hooks` 参数让 fork 内部的 `ReActAgent` 也受到与主 Agent 相同的钩子覆盖。TraceLogger 会收到 fork 内部的 `onToolStart` / `onToolEnd` / `onLLMStart` 等事件，生成完整的子 Agent 轨迹：
+传入 `hooks` 的 `TraceLogger` 实例会被 **自动替换为 fork 专用子 trace**（通过 `TraceLogger.wrapHooksForFork()`），fork 内部的事件不会污染主 Agent 时间线。
 
 ```ts
-// 主 Agent 创建 TraceLogger
 const trace = new TraceLogger({ sessionId: 'main' });
 
-// Fork 也受 TraceLogger 追踪
+// Fork 自动获得独立的子 TraceLogger
 const result = await forkAgent(input, {
   llm,
   systemPrompt: '...',
-  hooks: [trace],  // ← fork 内部事件全部记录
+  hooks: [trace],  // ← 自动 wrap 为 fork child trace
 });
 ```
 
-Fork 作为子 Agent 时，TraceLogger 的 `onFinish` 会调用 `parent.addChildTrace()`，将子轨迹嵌入父 trace HTML 文件中，形成嵌套的时间线视图。
+生成的 HTML trace 文件分为三个独立区域：
+
+| 区域 | 图标 | 内容 |
+|------|------|------|
+| 主 Agent 时间线 | 📤📥 | Thought、LLM 调用、工具调用、Final Answer |
+| 🔀 Fork Agents | 🔀 | Precipitation / Reflection / Memory 等 fork 的内部轨迹 |
+| 🤖 Sub-Agents | 🤖 | `spawn_subagent` 工具派生的子 Agent 轨迹 |
+
+Fork 和 Sub-Agent 在 trace HTML 中**分区域展示**，不会混在一起。Fork 标记 `kind: "fork"`，Sub-Agent 标记 `kind: "subagent"`。
 
 ## 框架内部使用
 

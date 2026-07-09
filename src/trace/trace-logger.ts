@@ -98,6 +98,8 @@ export class TraceLogger implements AgentHooks {
   private subTraceId: string = ""; // set on child traces to link with parent events
   private childrenTraces: Array<{
     traceId: string;
+    /** 'subagent' | 'fork' — distinguishes sub-agents from fork agents in the UI. */
+    kind: "subagent" | "fork";
     agentLabel: string;
     events: AgentTraceEvent[];
     sessionCounters: { llmCalls: number; toolCalls: number; promptTokens: number; completionTokens: number };
@@ -171,7 +173,54 @@ export class TraceLogger implements AgentHooks {
     // are serialised into the parent trace instead of a separate file.
     child.parent = this;
     child.subTraceId = runId;
+    (child as any)._childKind = "subagent";
     return child;
+  }
+
+  /**
+   * Create a child TraceLogger for a fork agent run (precipitation,
+   * reflection, memory extraction).
+   *
+   * Works identically to {@link createChildTrace} but marks the child
+   * with `kind: "fork"` so the UI renders forks in a separate section
+   * from sub-agents.
+   */
+  createForkChildTrace(forkLabel: string): TraceLogger {
+    const sessionId = `fork-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const child = new TraceLogger({
+      sessionId,
+      outputDir: this.outputDir,
+      agentLabel: `${this.agentLabel} › ${forkLabel}`,
+      modelName: this.modelName,
+      logger: this.logger,
+      pricing: this.pricing,
+    });
+    child.parent = this;
+    child.subTraceId = sessionId;
+    (child as any)._childKind = "fork";
+    return child;
+  }
+
+  /**
+   * Wrap an existing hooks array so any {@link TraceLogger} instances
+   * inside are replaced with fork-specific child traces. Non-TraceLogger
+   * hooks pass through unchanged.
+   *
+   * Use this when passing hooks from a main agent to a fork agent
+   * (precipitation / reflection / memory extraction) so the fork's
+   * events appear as a nested child trace instead of merging into the
+   * parent timeline.
+   */
+  static wrapHooksForFork(
+    hooks: AgentHooks | AgentHooks[] | undefined,
+    forkLabel: string,
+  ): AgentHooks | AgentHooks[] | undefined {
+    if (!hooks) return undefined;
+    const arr = Array.isArray(hooks) ? hooks : [hooks];
+    const wrapped = arr.map((h) =>
+      h instanceof TraceLogger ? h.createForkChildTrace(forkLabel) : h,
+    );
+    return wrapped;
   }
 
   /**
@@ -236,6 +285,7 @@ export class TraceLogger implements AgentHooks {
     // Push to parent trace if this is a sub-agent, otherwise flush to file.
     if (this.parent) {
       this.parent.addChildTrace({
+        kind: (this as any)._childKind ?? "subagent",
         traceId: this.subTraceId,
         agentLabel: this.agentLabel,
         events: this.events,
@@ -319,8 +369,9 @@ export class TraceLogger implements AgentHooks {
     this.addEvent("finish", "Final Answer", { answer });
 
     if (this.parent) {
-      // Sub-agent: push trace data into the parent instead of writing a file.
+      // Sub-agent or fork: push trace data into the parent instead of writing a file.
       this.parent.addChildTrace({
+        kind: (this as any)._childKind ?? "subagent",
         traceId: this.subTraceId,
         agentLabel: this.agentLabel,
         events: this.events,
@@ -349,6 +400,10 @@ export class TraceLogger implements AgentHooks {
       this.childrenTraces.shift(); // drop oldest
     }
     this.childrenTraces.push(child);
+    // Re-flush the parent HTML so new child traces are immediately reflected.
+    // Safe to call multiple times (each fork/sub-agent that finishes triggers
+    // a flush, overwriting the file with the latest state).
+    this.flush();
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────
@@ -505,6 +560,22 @@ export class TraceLogger implements AgentHooks {
   .kv-table th { background: #0d1117; color: #8b949e; font-weight: 500; white-space: nowrap; }
 
   /* ── Child Trace (Sub-Agent) ── */
+  /* ── Children Sections (Forks / Sub-Agents) ── */
+  .children-section {
+    margin-top: 24px; border: 1px solid #30363d; border-radius: 12px;
+    background: #0d1117; overflow: hidden;
+  }
+  .children-section-header {
+    padding: 10px 16px; font-size: 14px; font-weight: 600;
+    background: #161b22; border-bottom: 1px solid #30363d;
+    color: #8b949e; letter-spacing: .3px;
+  }
+  .children-section .child-trace {
+    margin-top: 0; border: none; border-bottom: 1px solid #21262d;
+    border-radius: 0; background: transparent;
+  }
+  .children-section .child-trace:last-child { border-bottom: none; }
+
   .child-trace {
     margin-top: 16px; border: 1px solid #30363d; border-radius: 10px;
     background: #161b22; overflow: hidden;
@@ -577,14 +648,17 @@ ${this.childrenTraces.length > 0 ? this.renderChildTraces() : ""}
 
   /** Render collapsible child-trace sections below the main timeline. */
   private renderChildTraces(): string {
-    return this.childrenTraces.map((child, i) => {
+    const forks = this.childrenTraces.filter((c) => c.kind === "fork");
+    const subAgents = this.childrenTraces.filter((c) => c.kind !== "fork");
+
+    const renderOne = (child: typeof this.childrenTraces[number], i: number, prefix: string): string => {
       const duration = ((child.endTime - child.startTime) / 1000).toFixed(1);
       const totalTokens = child.sessionCounters.promptTokens + child.sessionCounters.completionTokens;
       const eventCards = child.events.map((e) => this.renderEventCard(e)).join("\n");
       return `
-  <div class="child-trace" id="child-trace-${i}">
-    <div class="child-trace-header" onclick="document.getElementById('child-trace-${i}').classList.toggle('open')">
-      <span class="icon">🤖</span>
+  <div class="child-trace" id="child-trace-${prefix}-${i}">
+    <div class="child-trace-header" onclick="document.getElementById('child-trace-${prefix}-${i}').classList.toggle('open')">
+      <span class="icon">${child.kind === "fork" ? "🔀" : "🤖"}</span>
       <span class="label">${this.escapeHtml(child.agentLabel)}</span>
       <span class="badge">${child.events.length} events</span>
       <span class="badge">${this.fmtNum(totalTokens)} tok</span>
@@ -603,7 +677,29 @@ ${eventCards}
       </div>
     </div>
   </div>`;
-    }).join("\n");
+    };
+
+    const parts: string[] = [];
+
+    if (forks.length > 0) {
+      parts.push(
+        `<div class="children-section">
+  <div class="children-section-header">🔀 Fork Agents (${forks.length})</div>
+  ${forks.map((f, i) => renderOne(f, i, "fork")).join("\n")}
+</div>`,
+      );
+    }
+
+    if (subAgents.length > 0) {
+      parts.push(
+        `<div class="children-section">
+  <div class="children-section-header">🤖 Sub-Agents (${subAgents.length})</div>
+  ${subAgents.map((s, i) => renderOne(s, i, "sub")).join("\n")}
+</div>`,
+      );
+    }
+
+    return parts.join("\n");
   }
 
   private renderEventCard(event: AgentTraceEvent): string {

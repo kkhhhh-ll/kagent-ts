@@ -295,6 +295,21 @@ export interface AgentConfig {
   subAgentsDir?: string;
 
   /**
+   * When true, the agent does NOT register SubAgentManager even if
+   * `subAgentsDir` is configured. Use this to explicitly disable
+   * sub-agent discovery (e.g. in fork agents that should only run
+   * read-only tools).
+   */
+  disableSubAgents?: boolean;
+
+  /**
+   * When true, `init()` skips auto-registration of side-effect tools
+   * (`remember`, `recall`, `skill`, `list_errors`). Use this for
+   * fork agents that should only have explicitly-configured tools.
+   */
+  skipAutoTools?: boolean;
+
+  /**
    * LLM provider for sub-agents spawned by the main agent.
    *
    * When set, sub-agents use this provider instead of the main agent's LLM.
@@ -512,6 +527,12 @@ export abstract class Agent {
   /** Sub-agent definitions directory (from AgentConfig). */
   protected subAgentsDir?: string;
 
+  /** When true, sub-agent manager init is skipped. */
+  protected disableSubAgents: boolean;
+
+  /** When true, auto-registration of side-effect tools is skipped. */
+  protected skipAutoTools: boolean;
+
   /** LLM provider for sub-agents (defaults to main llm if not set). */
   protected subAgentLLM?: LLMProvider;
 
@@ -595,6 +616,8 @@ export abstract class Agent {
       this.logger,
     );
     this.subAgentsDir = config.subAgentsDir ?? "./subagents/";
+    this.disableSubAgents = config.disableSubAgents ?? false;
+    this.skipAutoTools = config.skipAutoTools ?? false;
     this.subAgentHooks = config.subAgentHooks;
     this.skillsDir = config.skillsDir;
     this.workdir = config.workdir;
@@ -1553,7 +1576,9 @@ export abstract class Agent {
     this._mcpInitialized = true;
 
     // ── Error tracking tool ──────────────────────────────────────────
-    try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { this.logger.debug("Init", `"list_errors" already registered — keeping existing.`); }
+    if (!this.skipAutoTools) {
+      try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { this.logger.debug("Init", `"list_errors" already registered — keeping existing.`); }
+    }
 
     // ── MCP connections ──────────────────────────────────────────────
     if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {
@@ -1569,7 +1594,7 @@ export abstract class Agent {
     }
 
     // ── Sub-agent registry ───────────────────────────────────────────
-    if (this.subAgentsDir) {
+    if (!this.disableSubAgents && this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
       this.subAgentManager.setLogger(this.logger);
       this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir, undefined, undefined, this.subAgentLLM, this.subAgentHooks);
@@ -1593,16 +1618,20 @@ export abstract class Agent {
     }
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────
-    try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { this.logger.debug("Init", `"skill" already registered — keeping existing.`); }
+    if (!this.skipAutoTools) {
+      try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { this.logger.debug("Init", `"skill" already registered — keeping existing.`); }
+    }
 
     // ── Precipitate skill tool (LLM-driven skill saving) ──────────────
-    if (this.skillsDir) {
+    if (!this.skipAutoTools && this.skillsDir) {
       try { this.toolRegistry.register(createPrecipitateSkillTool(this.skillManager, this.skillsDir)); } catch { this.logger.debug("Init", `"precipitate_skill" already registered — keeping existing.`); }
     }
 
     // ── Remember / Recall tools (long-term memory) ────────────────────
-    try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { this.logger.debug("Init", `"remember" already registered — keeping existing.`); }
-    try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { this.logger.debug("Init", `"recall" already registered — keeping existing.`); }
+    if (!this.skipAutoTools) {
+      try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { this.logger.debug("Init", `"remember" already registered — keeping existing.`); }
+      try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { this.logger.debug("Init", `"recall" already registered — keeping existing.`); }
+    }
   }
 
   /**

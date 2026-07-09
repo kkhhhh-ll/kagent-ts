@@ -7,6 +7,7 @@ import { mkdir, writeFile } from "fs/promises";
 import * as path from "path";
 import { forkAgent } from "../core/fork.js";
 import type { AgentHooks } from "../core/hooks";
+import { TraceLogger } from "../trace/trace-logger.js";
 import {
   validateSkillName,
   buildSkillMarkdown,
@@ -241,12 +242,23 @@ function buildTaskPrompt(input: PrecipitationInput): string {
 function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
   // Extract JSON from the answer using the framework's robust parser
   // (handles nested fences, markdown noise, malformed newlines).
-  const raw = extractJSON(answer) ?? answer;
+  const json = extractJSON(answer);
+
+  // No JSON at all — the LLM chose not to output structured data.
+  // This is not an error; it means the LLM decided nothing was worth
+  // extracting. Return empty rather than throwing.
+  if (!json) {
+    logger.info("Precipitation", "LLM output contained no JSON — no skills extracted.");
+    return [];
+  }
+
   let parsed: PrecipitationResponse;
 
   try {
-    parsed = JSON.parse(raw) as PrecipitationResponse;
+    parsed = JSON.parse(json) as PrecipitationResponse;
   } catch (err: unknown) {
+    // JSON was found but is malformed — this IS a bug (LLM violated
+    // the output contract). Throw so the caller can distinguish.
     throw new Error(
       `Failed to parse skill candidates from LLM output: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -483,7 +495,7 @@ export class PrecipitateAgent {
       maxIterations: this.maxIterations,
       logger: this.logger,
       signal,
-      hooks: this.hooks,
+      hooks: TraceLogger.wrapHooksForFork(this.hooks, "precipitation"),
     });
   }
 

@@ -5,6 +5,7 @@ import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { forkAgent } from "../core/fork.js";
 import type { AgentHooks } from "../core/hooks";
+import { TraceLogger } from "../trace/trace-logger.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,13 @@ function parseMemories(answer: string, logger: Logger): ExtractedMemory[] {
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (fenceMatch) raw = fenceMatch[1];
 
+  // No JSON-like content — the LLM chose natural language over structured
+  // output. Not an error, just means nothing worth remembering.
+  if (!fenceMatch && !raw.startsWith("{") && !raw.startsWith("[")) {
+    logger.info("MemoryReflector", "LLM output contained no JSON — no memories extracted.");
+    return [];
+  }
+
   let parsed: MemoryExtractionResponse;
 
   try {
@@ -357,7 +365,7 @@ export class MemoryReflector {
       maxIterations: this.maxIterations,
       logger: this.logger,
       signal,
-      hooks: this.hooks,
+      hooks: TraceLogger.wrapHooksForFork(this.hooks, "memory-extraction"),
     });
   }
 }

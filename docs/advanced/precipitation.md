@@ -187,6 +187,99 @@ await agent.run("帮我记住怎么配置这个项目的 CI/CD")
 // LLM 发现可复用模式，主动调用 precipitate_skill 工具
 ```
 
+## 追踪与调试
+
+Precipitation 的 fork 内部运行在独立上下文中，控制台默认看不到 fork 的工具调用和 LLM 交互。通过 `TraceLogger` 可以完整记录这些事件。
+
+### 基本用法
+
+```ts
+import {
+  ReActAgent, OpenAIProvider, BUILTIN_TOOLS, TraceLogger,
+} from "kagent-ts"
+
+// 1. 创建 TraceLogger
+const trace = new TraceLogger({
+  sessionId: "precipitate-demo",
+  outputDir: ".kagent-traces",  // trace 文件输出目录
+})
+
+// 2. 放入主 Agent 的 hooks
+const agent = new ReActAgent({
+  llm: new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: "gpt-4o",
+  }),
+  tools: BUILTIN_TOOLS,
+  skillsDir: "./skills",
+  precipitation: "post-hoc",
+  hooks: [trace],   // ← TraceLogger 自动透传到 fork 内部
+})
+
+await agent.run("帮我审查 src/precipitation/ 目录下的代码")
+
+// 3. 查看生成的 trace 文件
+// → .kagent-traces/trace-precipitate-demo.html
+```
+
+### Trace 文件里能看到什么
+
+打开生成的 HTML 文件，页面结构如下：
+
+- **主 Agent 时间线**：Thought、LLM 调用、工具调用、Final Answer
+- **🔀 Fork Agents 区域**（独立折叠区）：
+  - Precipitation fork 内部的 `read_file` / `grep_search` 调用及参数
+  - Fork 内部每轮 LLM 调用的 token 消耗
+  - Fork 的最终 JSON 输出（分析结果 + 提取的技能）
+- **🤖 Sub-Agents 区域**（独立折叠区，如果有的话）：
+  - 通过 `spawn_subagent` 工具派生的子 Agent 轨迹
+
+Fork 和 Sub-Agent 在两个独立区域中展示，不会混在一起，一眼就能区分"后台沉淀的 fork"和"LLM 主动 spawn 的子 Agent"。
+
+> **原理**：传给 fork 的 `hooks` 中的 `TraceLogger` 会被自动替换为 `createForkChildTrace()` 创建的子实例。Fork 的事件写入子 trace，fork 完成后子 trace 数据推入父 trace 的 `childrenTraces` 数组并标记 `kind: "fork"`，父 trace HTML 文件自动重新刷新。
+
+### 只用自动沉淀（ReAct / PlanSolve / Fusion Agent）
+
+无需额外配置——Agent 构造时把 `hooks` 放进去即可，`runPrecipitation()` 内部会把 `this.hooks` 传给 fork：
+
+```ts
+// ReActAgent
+new ReActAgent({ ..., hooks: [trace], precipitation: "post-hoc" })
+
+// FusionAgent
+new FusionAgent({ ..., hooks: [trace], precipitation: "post-hoc" })
+```
+
+### 直接调用 PrecipitateAgent
+
+手动传 `hooks`：
+
+```ts
+const precipitator = new PrecipitateAgent({
+  llm,
+  skillsDir: "./skills",
+  skillManager,
+  hooks: [trace],   // ← 手动传
+})
+
+const candidates = await precipitator.precipitate({ ... })
+```
+
+或通过静态方法：
+
+```ts
+await PrecipitateAgent.runFromAgent({
+  input, answer, skillsDir, skillManager, llm,
+  sessionId, maxIterations: 15, logger,
+  contextMessages,
+  hooks: [trace],   // ← 手动传
+})
+```
+
+### 取消 / 超时时的轨迹
+
+即使 fork 被 5 分钟硬超时取消，TraceLogger 也会在 `onFinish` 中正常生成 trace 文件。轨迹包含取消前所有已完成的事件，`finish` 事件的 `answer` 字段为取消消息。
+
 ## 下一步
 
 - [Fork — Agent 派生](/core/fork) — 沉淀子 Agent 使用的轻量派生机制
