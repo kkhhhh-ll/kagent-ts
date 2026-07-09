@@ -1,1 +1,1 @@
-export { Logger, ConsoleLogger, SilentLogger } from "./logger";
+export { Logger, LogLevel, ConsoleLogger, SilentLogger } from "./logger";
