@@ -22,6 +22,12 @@ export interface ForkOptions {
   preventSubAgents?: boolean;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
+  /**
+   * Optional AbortSignal. When the signal fires, the fork agent's in-flight
+   * LLM request is cancelled and its ReAct loop terminates. Use this to
+   * enforce a hard deadline without leaking LLM API calls.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -36,7 +42,7 @@ export interface ForkOptions {
  *
  * @example
  * ```ts
- * const result = await forkAgent(llm, "Analyze this session...", {
+ * const result = await forkAgent("Analyze this session...", {
  *   systemPrompt: "You are a code reviewer...",
  *   maxIterations: 5,
  * });
@@ -67,7 +73,28 @@ export async function forkAgent(
     subAgentsDir: preventSubAgents ? "" : undefined,
   });
 
-  const result = await agent.run(input);
-  logger.info("ForkAgent", "Fork completed.");
-  return result;
+  // Wire the external signal to the agent's built-in cancellation mechanism.
+  // `agent.cancel()` aborts the in-flight LLM request AND sets the
+  // `_cancelled` flag so the ReAct loop terminates at the next check.
+  let onAbort: (() => void) | undefined;
+  if (options.signal) {
+    if (options.signal.aborted) {
+      agent.cancel();
+      throw new Error("Fork aborted before execution.");
+    }
+    onAbort = () => agent.cancel();
+    options.signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  try {
+    const result = await agent.run(input);
+    logger.info("ForkAgent", "Fork completed.");
+    return result;
+  } finally {
+    // Clean up the listener to avoid leaks on repeated forkAgent calls
+    // sharing the same signal across multiple executions.
+    if (onAbort && options.signal) {
+      options.signal.removeEventListener("abort", onAbort);
+    }
+  }
 }

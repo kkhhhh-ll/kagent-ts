@@ -5,6 +5,7 @@ import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { mkdir, writeFile } from "fs/promises";
 import * as path from "path";
+import { forkAgent } from "../core/fork.js";
 import {
   validateSkillName,
   buildSkillMarkdown,
@@ -372,28 +373,32 @@ export class PrecipitateAgent {
     // the process indefinitely. Precipitation is non-critical post-hoc
     // work — it should fail fast rather than hang forever.
     //
-    // The timer is explicitly cleared in the finally block to prevent
-    // a timer leak that would keep the Node.js event loop alive for
-    // the full timeout duration after the fork completes.
-    let timerId: ReturnType<typeof setTimeout> | undefined;
+    // An AbortController is used (not just a plain timer) so the
+    // timeout signal propagates to the fork → ReActAgent → LLM chat() call,
+    // cancelling the in-flight HTTP request and avoiding wasted API quota.
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(
+      () => abortController.abort(),
+      PrecipitateAgent.PRECIPITATION_TIMEOUT_MS,
+    );
 
     try {
-      const answer = await Promise.race([
-        this.forkAndRun(taskPrompt),
-        new Promise<string>((_, reject) => {
-          timerId = setTimeout(
-            () => reject(new Error(`Precipitation fork timed out after ${PrecipitateAgent.PRECIPITATION_TIMEOUT_MS / 1000}s`)),
-            PrecipitateAgent.PRECIPITATION_TIMEOUT_MS,
-          );
-        }),
-      ]);
+      const answer = await this.forkAndRun(taskPrompt, abortController.signal);
 
       const candidates = parseCandidates(answer, this.logger);
 
       // Persist to disk and reload
       return await this.persistCandidates(candidates);
+    } catch (err: unknown) {
+      // Distinguish "cancelled by timeout" from genuine failures
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `Precipitation fork timed out after ${PrecipitateAgent.PRECIPITATION_TIMEOUT_MS / 1000}s`,
+        );
+      }
+      throw err;
     } finally {
-      if (timerId !== undefined) clearTimeout(timerId);
+      clearTimeout(timeoutId);
     }
   }
 
@@ -459,14 +464,17 @@ export class PrecipitateAgent {
   /**
    * Fork a minimal ReActAgent and run it to completion.
    * Returns the agent's final answer string.
+   *
+   * @param signal — forwarded to the fork so the timeout in {@link precipitate}
+   *                 can cancel in-flight LLM requests.
    */
-  private async forkAndRun(userPrompt: string): Promise<string> {
-    const { forkAgent } = await import("../core/fork.js");
+  private forkAndRun(userPrompt: string, signal?: AbortSignal): Promise<string> {
     return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: PRECIPITATION_SYSTEM_PROMPT,
       maxIterations: this.maxIterations,
       logger: this.logger,
+      signal,
     });
   }
 

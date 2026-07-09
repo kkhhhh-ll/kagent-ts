@@ -3,6 +3,7 @@ import { MessageData, Role } from "../messages/types";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import { forkAgent } from "../core/fork.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -294,20 +295,17 @@ export class MemoryReflector {
 
     const taskPrompt = buildTaskPrompt(input, existingNames);
 
-    // Enforce a hard timeout. The timer is explicitly cleared in the
-    // finally block to prevent a timer leak.
-    let timerId: ReturnType<typeof setTimeout> | undefined;
+    // Enforce a hard timeout. The AbortController propagates the
+    // cancellation signal to the fork agent's LLM call, preventing
+    // wasted API quota on timed-out extractions.
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(
+      () => abortController.abort(),
+      MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS,
+    );
 
     try {
-      const answer = await Promise.race([
-        this.forkAndRun(taskPrompt),
-        new Promise<string>((_, reject) => {
-          timerId = setTimeout(
-            () => reject(new Error(`Memory extraction fork timed out after ${MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS / 1000}s`)),
-            MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS,
-          );
-        }),
-      ]);
+      const answer = await this.forkAndRun(taskPrompt, abortController.signal);
 
       const extracted = parseMemories(answer, this.logger);
 
@@ -329,8 +327,15 @@ export class MemoryReflector {
       }
 
       return saved;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `Memory extraction fork timed out after ${MemoryReflector.MEMORY_REFLECTION_TIMEOUT_MS / 1000}s`,
+        );
+      }
+      throw err;
     } finally {
-      if (timerId !== undefined) clearTimeout(timerId);
+      clearTimeout(timeoutId);
     }
   }
 
@@ -340,13 +345,13 @@ export class MemoryReflector {
    * Fork a minimal ReActAgent and run it to completion.
    * Returns the agent's final answer string.
    */
-  private async forkAndRun(userPrompt: string): Promise<string> {
-    const { forkAgent } = await import("../core/fork.js");
+  private forkAndRun(userPrompt: string, signal?: AbortSignal): Promise<string> {
     return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: MEMORY_EXTRACTION_SYSTEM_PROMPT,
       maxIterations: this.maxIterations,
       logger: this.logger,
+      signal,
     });
   }
 }
