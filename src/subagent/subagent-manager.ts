@@ -599,6 +599,7 @@ export class SubAgentManager {
       systemPrompt,
       toolRegistry,
       skillManager,
+      name: definition.name,
       maxIterations: 10,
       // Prevent infinite recursion: sub-agents should NOT auto-register
       // sub-agents from the project directory.

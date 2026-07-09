@@ -58,6 +58,15 @@ export interface AgentConfig {
   contextManager?: ContextManager;
 
   /**
+   * Human-readable name for this agent. Used in log output to distinguish
+   * the main agent ("main") from sub-agents (their definition name, e.g.
+   * "code-reviewer") and fork agents ("fork").
+   *
+   * Default: "main".
+   */
+  name?: string;
+
+  /**
    * Plain tool array (legacy). If `toolRegistry` is provided, this is ignored.
    * If neither is set, defaults to an empty tool list.
    */
@@ -453,6 +462,9 @@ export abstract class Agent {
   protected toolRegistry: ToolRegistry;
   protected skillManager: SkillManager;
 
+  /** Human-readable agent name for distinguishing agents in log output. */
+  protected agentName: string;
+
   /** Long-term memory (rules + project facts) persisted across sessions. */
   protected memoryManager!: MemoryManager;
 
@@ -548,6 +560,7 @@ export abstract class Agent {
   constructor(config: AgentConfig) {
     this._cancelled = false;
     this.llm = config.llm;
+    this.agentName = config.name ?? "main";
     this.logger = config.logger ?? new ConsoleLogger();
     this.onToolApproval = config.onToolApproval;
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 120_000;

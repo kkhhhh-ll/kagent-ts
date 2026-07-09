@@ -75,6 +75,7 @@ export async function forkAgent(
     llm,
     systemPrompt,
     toolRegistry: tools,
+    name: "fork",
     maxIterations,
     logger,
     hooks: options.hooks,

@@ -122,7 +122,7 @@ export class ReActAgent extends Agent {
 
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
-      this.logger.info("ReAct", `Iteration ${iteration + 1}/${this.maxIterations}`);
+      this.logger.info(this.agentName === "main" ? "ReAct" : `ReAct:${this.agentName}`, `Iteration ${iteration + 1}/${this.maxIterations}`);
       // Fresh AbortController per iteration so the signal's listener
       // count doesn't accumulate across LLM calls and retries.
       this._abortController = new AbortController();
@@ -383,7 +383,7 @@ export class ReActAgent extends Agent {
     }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
-      this.logger.info("ReAct", `Iteration ${iteration + 1}/${this.maxIterations}`);
+      this.logger.info(this.agentName === "main" ? "ReAct" : `ReAct:${this.agentName}`, `Iteration ${iteration + 1}/${this.maxIterations}`);
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
