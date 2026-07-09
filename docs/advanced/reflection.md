@@ -265,7 +265,8 @@ const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 2. **合理设置 maxIterations**：错题本 3-4 足够，记忆提取可稍多（4-5）
 3. **定期审查**：错题本和记忆都是跨 session 积累的，定期清理过时内容
 4. **结合 Eval**：反思结果可以作为 Eval 评估的输入
-5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，失败以 `error` 级别记录日志。每个 Fork 有 5 分钟硬超时保护，防止 LLM 调用卡住导致进程无法退出。
+5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，失败以 `error` 级别记录日志。每个 Fork 有 5 分钟 AbortController 硬超时——超时后真正中止 LLM HTTP 请求，而非让后台继续消耗 API 配额。
+6. **TraceLogger 可查看子 Agent 轨迹**：通过 `hooks` 参数将 TraceLogger 透传到 fork 内部，fork 的工具调用和 LLM 交互都会出现在 trace HTML 文件中。
 
 ## 下一步
 

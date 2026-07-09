@@ -181,6 +181,7 @@ const hook = createReflectionHook({
   maxErrorIterations: 4,         // 可选
   maxMemoryIterations: 5,        // 可选
   logger: new ConsoleLogger(),   // 可选
+  hooks: [traceLogger],          // 可选，透传到 fork 子 Agent
   onReflectionComplete: (entryCount, memoryCount) => {
     console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
   },

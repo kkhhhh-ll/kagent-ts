@@ -25,7 +25,9 @@ runPrecipitation()
         skillManager.reloadFromDirectory() → 下次 Agent 调用时自动加载
 ```
 
-PrecipitateAgent Fork 一个轻量的 ReAct Agent，拥有独立上下文和只读工具，不污染主 Agent 上下文。沉淀在后台执行，失败不阻塞——每个 Agent 类型的调用方用 `try-catch` 包裹，沉淀失败以 `error` 级别记录日志，不会影响用户拿到的答案。整个沉淀过程有 5 分钟硬超时保护，防止 LLM 调用卡住导致进程无法退出。新技能在下一次 Agent 调用时自动生效。
+PrecipitateAgent Fork 一个轻量的 ReAct Agent，拥有独立上下文和只读工具，不污染主 Agent 上下文。沉淀在后台执行，失败不阻塞——每个 Agent 类型的调用方用 `try-catch` 包裹，沉淀失败以 `error` 级别记录日志，不会影响用户拿到的答案。
+
+整个沉淀过程有 **5 分钟硬超时**保护：通过 `AbortController` 将取消信号传递到 fork → ReActAgent → LLM `chat()` 调用，**真正中止** HTTP 请求，而非仅让 Promise 超时后后台继续消耗 API 配额。主 Agent 的 `hooks`（如 TraceLogger）自动透传到 fork 子 Agent，fork 内部的工具调用和 LLM 交互都会出现在 trace 文件中。新技能在下一次 Agent 调用时自动生效。
 
 ## 触发条件
 
@@ -145,7 +147,8 @@ precipitated: true
 | LLM 幻觉写入低质量技能 | 技能惰性加载，LLM 需显式激活才会生效 |
 | 技能名路径遍历 | 正则检查（同 `FileSkillLoader`） |
 | 技能数量膨胀 | `precipitated: true` 标记方便人工审查清理 |
-| 沉淀失败阻塞主流程 | 调用方 try-catch + 5 分钟硬超时，失败记录 error 日志 |
+| 沉淀失败阻塞主流程 | 调用方 try-catch + 5 分钟 AbortController 硬超时（中止 LLM 请求） |
+| Fork 内部事件不可见 | hooks 自动透传（TraceLogger 可记录 fork 内的工具调用和 LLM 交互） |
 
 ## 完整示例
 

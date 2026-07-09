@@ -72,6 +72,16 @@ interface ForkOptions {
   preventSubAgents?: boolean
   /** Logger 实例（默认 ConsoleLogger）。 */
   logger?: Logger
+  /**
+   * 可选 AbortSignal。信号触发时取消正在进行的 LLM 请求，
+   * fork 的 ReAct 循环终止，避免浪费 API 配额。
+   */
+  signal?: AbortSignal
+  /**
+   * 可选钩子（如 TraceLogger），转发给 fork 内部的 ReActAgent。
+   * 不传则 fork 无钩子埋点。
+   */
+  hooks?: AgentHooks | AgentHooks[]
 }
 ```
 
@@ -96,6 +106,48 @@ class MyAgent extends Agent {
 ```
 
 **注意**：`fork()` 是 `protected` 方法，只能在 `Agent` 子类内部使用。外部用户请使用 `forkAgent()`。
+
+## 超时与取消
+
+通过 `signal` 参数可以设置 fork 的硬超时：
+
+```ts
+const abortController = new AbortController();
+const timeoutId = setTimeout(() => abortController.abort(), 5 * 60 * 1000); // 5 分钟
+
+try {
+  const result = await forkAgent(input, {
+    llm,
+    systemPrompt: '...',
+    signal: abortController.signal,
+  });
+} finally {
+  clearTimeout(timeoutId);
+}
+```
+
+超时发生后：
+- `AbortController.abort()` → `agent.cancel()` → 中止当前 LLM HTTP 请求
+- ReAct 循环在下次检查 `isCancelled` 时退出
+- `onFinish` 钩子正常触发，TraceLogger 会生成完整的 trace 文件（包含取消前所有事件）
+
+## 钩子透传
+
+`hooks` 参数让 fork 内部的 `ReActAgent` 也受到与主 Agent 相同的钩子覆盖。TraceLogger 会收到 fork 内部的 `onToolStart` / `onToolEnd` / `onLLMStart` 等事件，生成完整的子 Agent 轨迹：
+
+```ts
+// 主 Agent 创建 TraceLogger
+const trace = new TraceLogger({ sessionId: 'main' });
+
+// Fork 也受 TraceLogger 追踪
+const result = await forkAgent(input, {
+  llm,
+  systemPrompt: '...',
+  hooks: [trace],  // ← fork 内部事件全部记录
+});
+```
+
+Fork 作为子 Agent 时，TraceLogger 的 `onFinish` 会调用 `parent.addChildTrace()`，将子轨迹嵌入父 trace HTML 文件中，形成嵌套的时间线视图。
 
 ## 框架内部使用
 
