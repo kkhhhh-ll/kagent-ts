@@ -7,7 +7,8 @@ import { Tool } from "../types";
  * Read a file from disk.
  *
  * Parameters:
- * - file_path (required): Absolute path to the file.
+ * - file_path (required): Absolute or relative path to the file.
+ *   Relative paths are resolved against the working directory.
  * - offset (optional): 1-based line number to start from.
  * - limit  (optional): Max number of lines to return.
  */
@@ -23,7 +24,8 @@ export const ReadFileTool: Tool = {
     properties: {
       file_path: {
         type: "string",
-        description: "Absolute path to the file to read.",
+        description:
+          "Path to the file to read. Can be absolute or relative to the working directory.",
       },
       offset: {
         type: "number",

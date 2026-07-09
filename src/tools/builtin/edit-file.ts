@@ -7,7 +7,8 @@ import { Tool } from "../types";
  * Edit a file by finding and replacing exact text.
  *
  * Parameters:
- * - file_path  (required): Absolute path to the file to edit.
+ * - file_path  (required): Absolute or relative path to the file to edit.
+ *   Relative paths are resolved against the working directory.
  * - old_string (required): The exact text to find (must match exactly).
  * - new_string (required): The replacement text.
  * - replace_all (optional): Replace all occurrences (default: false).
@@ -23,7 +24,8 @@ export const EditFileTool: Tool = {
     properties: {
       file_path: {
         type: "string",
-        description: "Absolute path to the file to edit.",
+        description:
+          "Path to the file to edit. Can be absolute or relative to the working directory.",
       },
       old_string: {
         type: "string",

@@ -6,7 +6,8 @@ import { Tool } from "../types";
  * Write content to a file (creates or overwrites).
  *
  * Parameters:
- * - file_path (required): Absolute path to write to.
+ * - file_path (required): Absolute or relative path to write to.
+ *   Relative paths are resolved against the working directory.
  * - content   (required): Content to write.
  */
 export const WriteFileTool: Tool = {
@@ -19,7 +20,8 @@ export const WriteFileTool: Tool = {
     properties: {
       file_path: {
         type: "string",
-        description: "Absolute path of the file to write.",
+        description:
+          "Path of the file to write. Can be absolute or relative to the working directory.",
       },
       content: {
         type: "string",
