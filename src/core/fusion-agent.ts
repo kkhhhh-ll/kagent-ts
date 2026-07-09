@@ -1091,6 +1091,7 @@ export class FusionAgent extends Agent {
         maxIterations: this.precipitationMaxIterations,
         logger: this.logger,
         contextMessages: this.contextManager.getContextMessages(),
+        hooks: this.hooks,
       });
     } catch (err: unknown) {
       this.logger.error(

@@ -4,6 +4,7 @@ import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { forkAgent } from "../core/fork.js";
+import type { AgentHooks } from "../core/hooks";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -238,6 +239,8 @@ export interface MemoryReflectorConfig {
   maxIterations?: number;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
+  /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
+  hooks?: AgentHooks | AgentHooks[];
 }
 
 /**
@@ -267,6 +270,7 @@ export class MemoryReflector {
   private memoryManager: MemoryManager;
   private maxIterations: number;
   private logger: Logger;
+  private hooks: AgentHooks | AgentHooks[] | undefined;
 
   /** Hard timeout for the entire memory extraction fork (5 minutes). */
   private static readonly MEMORY_REFLECTION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -276,6 +280,7 @@ export class MemoryReflector {
     this.memoryManager = config.memoryManager;
     this.maxIterations = config.maxIterations ?? 5;
     this.logger = config.logger ?? new ConsoleLogger();
+    this.hooks = config.hooks;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -352,6 +357,7 @@ export class MemoryReflector {
       maxIterations: this.maxIterations,
       logger: this.logger,
       signal,
+      hooks: this.hooks,
     });
   }
 }

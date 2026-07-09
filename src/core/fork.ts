@@ -5,6 +5,7 @@ import { ReadFileTool } from "../tools/builtin/read-file";
 import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { Tool } from "./types";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import type { AgentHooks } from "./hooks";
 
 /**
  * Options for {@link forkAgent}.
@@ -28,6 +29,11 @@ export interface ForkOptions {
    * enforce a hard deadline without leaking LLM API calls.
    */
   signal?: AbortSignal;
+  /**
+   * Optional hooks (e.g. TraceLogger) forwarded to the fork's ReActAgent.
+   * When omitted, the fork runs without hook instrumentation.
+   */
+  hooks?: AgentHooks | AgentHooks[];
 }
 
 /**
@@ -71,6 +77,7 @@ export async function forkAgent(
     toolRegistry: tools,
     maxIterations,
     subAgentsDir: preventSubAgents ? "" : undefined,
+    hooks: options.hooks,
   });
 
   // Wire the external signal to the agent's built-in cancellation mechanism.

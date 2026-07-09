@@ -6,6 +6,7 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 import { mkdir, writeFile } from "fs/promises";
 import * as path from "path";
 import { forkAgent } from "../core/fork.js";
+import type { AgentHooks } from "../core/hooks";
 import {
   validateSkillName,
   buildSkillMarkdown,
@@ -68,6 +69,8 @@ export interface RunFromAgentOptions {
   logger: Logger;
   /** Full conversation messages (for context). */
   contextMessages: MessageData[];
+  /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
+  hooks?: AgentHooks | AgentHooks[];
 }
 
 /**
@@ -299,6 +302,8 @@ export interface PrecipitateAgentConfig {
   maxIterations?: number;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
+  /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
+  hooks?: AgentHooks | AgentHooks[];
 }
 
 /**
@@ -336,6 +341,7 @@ export class PrecipitateAgent {
   private skillManager: SkillManager;
   private maxIterations: number;
   private logger: Logger;
+  private hooks: AgentHooks | AgentHooks[] | undefined;
 
   /** Hard timeout for the entire precipitation fork (5 minutes). */
   private static readonly PRECIPITATION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -346,6 +352,7 @@ export class PrecipitateAgent {
     this.skillManager = config.skillManager;
     this.maxIterations = config.maxIterations ?? 15;
     this.logger = config.logger ?? new ConsoleLogger();
+    this.hooks = config.hooks;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -429,6 +436,7 @@ export class PrecipitateAgent {
       skillManager: opts.skillManager,
       maxIterations: opts.maxIterations,
       logger: opts.logger,
+      hooks: opts.hooks,
     });
 
     const existingSkills = opts.skillManager.getAll();
@@ -475,6 +483,7 @@ export class PrecipitateAgent {
       maxIterations: this.maxIterations,
       logger: this.logger,
       signal,
+      hooks: this.hooks,
     });
   }
 

@@ -21,6 +21,8 @@ export interface ReflectionHookConfig {
   maxErrorIterations?: number;
   /** Max ReAct iterations for the memory reflector sub-agent (default: 5). */
   maxMemoryIterations?: number;
+  /** Hooks (e.g. TraceLogger) forwarded to both fork sub-agents. */
+  hooks?: AgentHooks | AgentHooks[];
   /**
    * Callback invoked when reflection completes.
    * Receives counts for both error entries and new memories.
@@ -70,6 +72,7 @@ export function createReflectionHook(
         notebook,
         maxIterations: config.maxErrorIterations,
         logger,
+        hooks: config.hooks,
       })
     : null;
 
@@ -79,6 +82,7 @@ export function createReflectionHook(
         memoryManager,
         maxIterations: config.maxMemoryIterations,
         logger,
+        hooks: config.hooks,
       })
     : null;
 
