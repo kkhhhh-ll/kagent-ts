@@ -72,6 +72,12 @@ ReAct Agent **不要求模型输出 JSON**。判定逻辑非常简单：
 interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
+
+  /** 技能沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+
+  /** 沉淀子 Agent 最大迭代次数 (默认: 5) */
+  precipitationMaxIterations?: number
 }
 ```
 

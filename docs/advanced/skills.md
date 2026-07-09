@@ -165,6 +165,7 @@ await agent.run('帮我审查 src/core/ 目录下的代码质量')
 
 ## 下一步
 
+- [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
 - [Sub-Agent 子代理](/advanced/subagents) — 子代理的配置与调度
 - [Memory 记忆](/advanced/memory) — 长期记忆管理
 - [Reflection 反思](/advanced/reflection) — 执行后反思

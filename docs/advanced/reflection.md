@@ -266,6 +266,7 @@ const rulesPrompt = notebook.buildRulesPrompt(10, 1)
 
 ## 下一步
 
+- [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
 - [Memory 记忆](/advanced/memory) — MemoryManager 和长期记忆
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量
 - [Fusion Agent](/core/fusion-agent) — 内置反思的 Agent 范式

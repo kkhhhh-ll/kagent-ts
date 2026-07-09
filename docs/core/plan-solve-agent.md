@@ -77,6 +77,12 @@ interface PlanSolveAgentConfig extends AgentConfig {
    * 默认: 2
    */
   replanThreshold?: number
+
+  /** 技能沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+
+  /** 沉淀子 Agent 最大迭代次数 (默认: 5) */
+  precipitationMaxIterations?: number
 }
 ```
 

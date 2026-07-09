@@ -9,6 +9,7 @@ import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
+import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 
 /**
  * Default system prompt for ReAct-style reasoning.
@@ -35,6 +36,12 @@ ${TOOL_ERROR_RECOVERY}${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
 export interface ReActAgentConfig extends AgentConfig {
   /** Maximum iterations for the ReAct loop (default: 10). */
   maxIterations?: number;
+
+  /** Skill precipitation mode. Default: "off". */
+  precipitation?: "off" | "post-hoc";
+
+  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  precipitationMaxIterations?: number;
 }
 
 /**
@@ -54,6 +61,8 @@ export interface ReActAgentConfig extends AgentConfig {
  */
 export class ReActAgent extends Agent {
   private maxIterations: number;
+  private precipitationMode: "off" | "post-hoc";
+  private precipitationMaxIterations: number;
 
   constructor(config: ReActAgentConfig) {
     const mergedConfig: ReActAgentConfig = {
@@ -63,6 +72,8 @@ export class ReActAgent extends Agent {
     super(mergedConfig);
 
     this.maxIterations = config.maxIterations ?? 10;
+    this.precipitationMode = config.precipitation ?? "off";
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -98,6 +109,17 @@ export class ReActAgent extends Agent {
     // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
+
+    // Track tool failures → trigger precipitation on hard-won success
+    let consecutiveFailures = 0;
+    const FAILURE_PRECIPITATE_THRESHOLD = 2;
+
+    // Determine if precipitation should run (mode + signals)
+    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
+      shouldPrecipitate = true;
+      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
 
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -238,7 +260,16 @@ export class ReActAgent extends Agent {
         }
 
         const mcpWarnedServers = new Set<string>();
-        await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        if (hadFailure) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
+        } else {
+          consecutiveFailures = 0;
+        }
 
         // Inject continuation AFTER tool execution (Anthropic API pairing)
         if (isTruncated) {
@@ -296,6 +327,12 @@ export class ReActAgent extends Agent {
       this.logger.info("Answer", answer);
       for (const h of this.hooks) h.onFinish?.(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+      // ── Skill precipitation (best-effort, post-hoc) ─────────────────
+      if (shouldPrecipitate) {
+        await this.runPrecipitation(input, answer);
+      }
+
       return answer;
     }
 
@@ -509,6 +546,34 @@ export class ReActAgent extends Agent {
   async resume(sessionId: string, input: string): Promise<string> {
     this.loadAndRestoreSession(sessionId);
     return this.run(input);
+  }
+
+  // ─── Precipitation ───────────────────────────────────────────────────
+
+  /**
+   * Run post-hoc skill extraction after a successful completion.
+   * Best-effort — failures are logged but never affect the answer.
+   */
+  private async runPrecipitation(
+    input: string,
+    answer: string,
+  ): Promise<void> {
+    if (!this.skillsDir) {
+      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
+      return;
+    }
+
+    await PrecipitateAgent.runFromAgent(
+      input,
+      answer,
+      this.skillsDir,
+      this.skillManager,
+      this.llm,
+      this.sessionManager?.getSessionId() ?? "unknown",
+      this.precipitationMaxIterations,
+      this.logger,
+      this.contextManager.getContextMessages(),
+    );
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────

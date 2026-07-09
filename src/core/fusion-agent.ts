@@ -19,6 +19,7 @@ import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
 import { ReflectionAgent } from "../reflection/reflection-agent";
 import { ErrorNotebook } from "../reflection/error-notebook";
+import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 
 // ─── System Prompt ────────────────────────────────────────────────────────
 
@@ -126,6 +127,17 @@ export interface FusionAgentConfig extends AgentConfig {
    * Set to 0 to disable auto-replanning hints. Default: 2.
    */
   replanThreshold?: number;
+
+  // ── Precipitation ──────────────────────────────────────────────────
+
+  /**
+   * Skill precipitation. Runs after Phase 4 (Reflection).
+   * Default: "off".
+   */
+  precipitation?: "off" | "post-hoc";
+
+  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  precipitationMaxIterations?: number;
 }
 
 // ─── FusionAgent ──────────────────────────────────────────────────────────
@@ -170,6 +182,8 @@ export class FusionAgent extends Agent {
   private notebook?: ErrorNotebook;
   private maxIterations: number;
   private replanThreshold: number;
+  private precipitationMode: "off" | "post-hoc";
+  private precipitationMaxIterations: number;
 
   // ── Runtime state ───────────────────────────────────────────────────
 
@@ -209,6 +223,8 @@ export class FusionAgent extends Agent {
     this.notebook = config.notebook;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
+    this.precipitationMode = config.precipitation ?? "off";
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
 
     // Validate: notebook required for post-hoc/both modes
     if (
@@ -318,6 +334,19 @@ export class FusionAgent extends Agent {
 
     // ── Phase 4: Reflection ───────────────────────────────────────────
     await this.runReflection(input, answer);
+
+    // ── Phase 5: Precipitation (skill extraction) ─────────────────────
+    // Trigger on: post-hoc mode, or hard-won success (failures→success), or user intent
+    const FAILURE_THRESHOLD = 2;
+    const shouldPrecipitate =
+      this.precipitationMode === "post-hoc" ||
+      (this.precipitationMode !== "off" &&
+        this.consecutiveFailures >= FAILURE_THRESHOLD) ||
+      (this.precipitationMode !== "off" &&
+        /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
+    if (shouldPrecipitate) {
+      await this.runPrecipitation(input, answer);
+    }
 
     for (const h of this.hooks) h.onFinish?.(answer);
     return answer;
@@ -1030,6 +1059,38 @@ export class FusionAgent extends Agent {
         "Reflection",
         `Post-hoc reflection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  // ─── Phase 5: Precipitation ──────────────────────────────────────────
+
+  /**
+   * Run the configured skill precipitation strategy.
+   */
+  private async runPrecipitation(
+    input: string,
+    answer: string,
+  ): Promise<void> {
+    if (!this.skillsDir) {
+      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
+      return;
+    }
+
+    await PrecipitateAgent.runFromAgent(
+      input,
+      answer,
+      this.skillsDir,
+      this.skillManager,
+      this.llm,
+      this.sessionManager?.getSessionId() ?? "unknown",
+      this.precipitationMaxIterations,
+      this.logger,
+      this.contextManager.getContextMessages(),
+    );
+
+    // Rebuild system prompt so new skills show up immediately
+    if (this.skillManager.getAll().length > 0) {
+      this.rebuildSystemPrompt();
     }
   }
 

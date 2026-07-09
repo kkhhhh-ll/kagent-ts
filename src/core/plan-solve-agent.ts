@@ -9,6 +9,7 @@ import { TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { wrapAndScan } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
+import { PrecipitateAgent } from "../precipitation/precipitate-agent";
 import { SessionState, SessionStatus } from "../session/session-types";
 
 /**
@@ -49,6 +50,12 @@ export interface PlanSolveAgentConfig extends AgentConfig {
    * Set to 0 to disable auto-replan triggering (default: 2).
    */
   replanThreshold?: number;
+
+  /** Skill precipitation mode. Default: "off". */
+  precipitation?: "off" | "post-hoc";
+
+  /** Max iterations for the precipitation sub-agent. Default: 5. */
+  precipitationMaxIterations?: number;
 }
 
 /**
@@ -72,6 +79,8 @@ export interface PlanSolveAgentConfig extends AgentConfig {
 export class PlanSolveAgent extends Agent {
   private maxIterations: number;
   private maxPlanSteps: number;
+  private precipitationMode: "off" | "post-hoc";
+  private precipitationMaxIterations: number;
 
   /** The current plan steps (empty until the plan is created). */
   private currentPlan: string[] = [];
@@ -104,6 +113,8 @@ export class PlanSolveAgent extends Agent {
     this.maxIterations = config.maxIterations ?? 15;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.replanThreshold = config.replanThreshold ?? 2;
+    this.precipitationMode = config.precipitation ?? "off";
+    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 5;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -152,6 +163,14 @@ export class PlanSolveAgent extends Agent {
     // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
+
+    // Determine if precipitation should run (mode + signals)
+    const FAILURE_PRECIPITATE_THRESHOLD = 2;
+    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
+      shouldPrecipitate = true;
+      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
 
     // ── Main Plan-Solve loop ────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -320,6 +339,10 @@ export class PlanSolveAgent extends Agent {
         // Update consecutive failure count and step progress
         if (roundHadFailure) {
           this.consecutiveFailures++;
+          if (this.consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
           this.logger.info(
             "Replan",
             `Consecutive failures: ${this.consecutiveFailures}` +
@@ -400,6 +423,12 @@ export class PlanSolveAgent extends Agent {
           this.saveCheckpoint("completed");
         }
         for (const h of this.hooks) h.onFinish?.(parsed.answer);
+
+        // ── Skill precipitation (best-effort, post-hoc) ─────────────────
+        if (shouldPrecipitate) {
+          await this.runPrecipitation(input, parsed.answer);
+        }
+
         return parsed.answer;
       }
 
@@ -852,5 +881,33 @@ export class PlanSolveAgent extends Agent {
       );
     }
     return undefined;
+  }
+
+  // ─── Precipitation ───────────────────────────────────────────────────
+
+  /**
+   * Run post-hoc skill extraction after a successful completion.
+   * Best-effort — failures are logged but never affect the answer.
+   */
+  private async runPrecipitation(
+    input: string,
+    answer: string,
+  ): Promise<void> {
+    if (!this.skillsDir) {
+      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
+      return;
+    }
+
+    await PrecipitateAgent.runFromAgent(
+      input,
+      answer,
+      this.skillsDir,
+      this.skillManager,
+      this.llm,
+      this.sessionManager?.getSessionId() ?? "unknown",
+      this.precipitationMaxIterations,
+      this.logger,
+      this.contextManager.getContextMessages(),
+    );
   }
 }

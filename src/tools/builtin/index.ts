@@ -41,6 +41,7 @@ export const BUILTIN_TOOL_NAMES = new Set([
   "list_errors",
   "search_knowledge",
   "list_knowledge_documents",
+  "precipitate_skill",
 ]);
 
 // Re-export individual tools
@@ -57,6 +58,7 @@ export { createListErrorsTool } from "./list-errors";
 export { createSkillTool } from "./skill";
 export { createRememberTool } from "./remember";
 export { createRecallTool } from "./recall";
+export { createPrecipitateSkillTool } from "./precipitate-skill";
 export { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../../rag/search-knowledge";
 
 /**

@@ -25,6 +25,11 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   ├── 评分 (0-100)
   └── 记录到 ErrorNotebook
   ↓
+[PRECIPITATE] (可选，post-hoc):
+  ├── PrecipitateAgent 提取可复用技能
+  ├── 写入 SKILL.md 文件
+  └── 对比已有 Skills 去重
+  ↓
 Final Answer
 ```
 
@@ -54,6 +59,11 @@ const agent = new FusionAgent({
   reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
   reflectionInterval: 3,       // 每 N 次迭代触发内省反思 (默认: 3)
   // notebook: new ErrorNotebook(),  // post-hoc / both 模式必填
+
+  // ── 沉淀配置 ──
+  skillsDir: './skills',               // 技能存储目录
+  precipitation: 'post-hoc',           // "off" | "post-hoc"
+  precipitationMaxIterations: 5,       // (默认: 5)
 })
 ```
 
@@ -83,6 +93,10 @@ interface FusionAgentConfig extends AgentConfig {
   maxIterations?: number              // (默认: 15)
   maxPlanSteps?: number               // (默认: 12)
   replanThreshold?: number            // (默认: 2，设为 0 禁用)
+
+  // ── 沉淀配置 ──
+  precipitation?: 'off' | 'post-hoc'  // (默认: "off")
+  precipitationMaxIterations?: number // (默认: 5)
 }
 ```
 
@@ -126,6 +140,23 @@ LLM: {"complexity": "simple", "reason": "单步工具调用即可完成"}
 ### Both (`"both"`)
 
 同时启用 Inline 和 Post-hoc 反思。
+
+## 技能沉淀
+
+在 Reflection 完成之后，Fusion Agent 还可以运行 Phase 5：Skill Precipitation（技能沉淀）。详见 [Precipitation 沉淀](/advanced/precipitation)。
+
+```ts
+const agent = new FusionAgent({
+  // ...
+  skillsDir: './skills',
+  precipitation: 'post-hoc',  // 开启技能沉淀
+})
+```
+
+沉淀触发条件：
+- `"post-hoc"` 模式：每次成功完成都触发
+- 踩坑后成功（`consecutiveFailures >= 2`）：框架自动检测
+- 用户说"记住"：输入关键词匹配
 
 ## 计划确认
 

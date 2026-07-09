@@ -30,6 +30,7 @@ import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 import { createListErrorsTool } from "../tools/builtin/list-errors";
 import { createSkillTool } from "../tools/builtin/skill";
+import { createPrecipitateSkillTool } from "../tools/builtin/precipitate-skill";
 import { createRememberTool } from "../tools/builtin/remember";
 import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
@@ -390,6 +391,31 @@ export interface AgentConfig {
    * each sub-agent at its isolated git worktree.
    */
   workdir?: string;
+
+  // ─── Skill Precipitation ─────────────────────────────────────────────
+
+  /**
+   * Skill precipitation mode.
+   *
+   * After the agent completes a task, a sub-agent analyzes the session to
+   * extract reusable skills from successful patterns. These skills are
+   * written as SKILL.md files to `skillsDir` and become available for
+   * future sessions.
+   *
+   * - "off":       No precipitation (default).
+   * - "post-hoc":  After execution, fork a PrecipitateAgent to extract skills.
+   *
+   * Requires `skillsDir` to be set.
+   *
+   * Default: "off".
+   */
+  precipitation?: "off" | "post-hoc";
+
+  /**
+   * Maximum iterations for the precipitation sub-agent's ReAct loop.
+   * Default: 5.
+   */
+  precipitationMaxIterations?: number;
 }
 
 /**
@@ -1520,6 +1546,11 @@ export abstract class Agent {
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────
     try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { this.logger.debug("Init", `"skill" already registered — keeping existing.`); }
+
+    // ── Precipitate skill tool (LLM-driven skill saving) ──────────────
+    if (this.skillsDir) {
+      try { this.toolRegistry.register(createPrecipitateSkillTool(this.skillManager, this.skillsDir)); } catch { this.logger.debug("Init", `"precipitate_skill" already registered — keeping existing.`); }
+    }
 
     // ── Remember / Recall tools (long-term memory) ────────────────────
     try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { this.logger.debug("Init", `"remember" already registered — keeping existing.`); }

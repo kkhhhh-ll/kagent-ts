@@ -265,6 +265,14 @@ export type {
 export { createReflectionHook } from "./reflection/reflection-hook";
 export type { ReflectionHookConfig } from "./reflection/reflection-hook";
 
+// Precipitation — post-execution skill extraction
+export { PrecipitateAgent } from "./precipitation/precipitate-agent";
+export type {
+  PrecipitateAgentConfig,
+  PrecipitationInput,
+  SkillCandidate,
+} from "./precipitation/precipitate-agent";
+
 // Evaluation — tool call metrics, end-to-end testing, regression benchmarks
 export { ToolCallEvaluator, EvalRunner, Benchmark } from "./eval";
 export type {
