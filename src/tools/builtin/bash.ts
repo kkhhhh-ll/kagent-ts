@@ -55,7 +55,14 @@ export const BashTool: Tool = {
           cwd: workdir ?? process.cwd(),
           timeout: timeoutMs,
           maxBuffer: MAX_OUTPUT_BYTES,
-          shell: process.env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/sh"),
+          // On Windows, always use cmd.exe regardless of SHELL.  LLMs
+          // generate Windows-style commands with backslash paths (e.g.
+          // "dir src\eval\analysis\"), which bash interprets as escape
+          // sequences — mangling the path and producing confusing
+          // "0 files" results even when the files actually exist.
+          shell: process.platform === "win32"
+            ? "cmd.exe"
+            : (process.env.SHELL || "/bin/sh"),
         },
         (error, stdout, stderr) => {
           const exitCode =
