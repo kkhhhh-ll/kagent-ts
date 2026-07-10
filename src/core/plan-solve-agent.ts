@@ -707,7 +707,12 @@ export class PlanSolveAgent extends Agent {
       }
 
       for (const h of this.hooks) {
-        h.onLLMEnd?.({ content: rawContent, tool_calls: toolCalls, usage: streamUsage });
+        h.onLLMEnd?.({
+          content: rawContent,
+          tool_calls: toolCalls,
+          usage: streamUsage,
+          providerMeta: { model: this.llm.model, isFallback: false },
+        });
       }
 
       const parsed = parsePlanSolveResponse(rawContent);

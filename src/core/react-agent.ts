@@ -478,7 +478,12 @@ export class ReActAgent extends Agent {
 
       // Hook: LLM end
       for (const h of this.hooks) {
-        h.onLLMEnd?.({ content: rawContent, tool_calls: toolCalls, usage: usageInfo });
+        h.onLLMEnd?.({
+          content: rawContent,
+          tool_calls: toolCalls,
+          usage: usageInfo,
+          providerMeta: { model: this.llm.model, isFallback: false },
+        });
       }
 
       const parsed = parseReActResponse(rawContent);

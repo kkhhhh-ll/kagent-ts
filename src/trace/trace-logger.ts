@@ -270,10 +270,20 @@ export class TraceLogger implements AgentHooks {
       this.totalPromptTokens += response.usage.prompt_tokens;
       this.totalCompletionTokens += response.usage.completion_tokens;
     }
+
+    // Auto-detect model name from the provider metadata on first LLM call.
+    // FallbackProvider sets providerMeta to the actual model that responded,
+    // and primary providers set it to their own model — so this covers all
+    // paths (direct, ModelRouter, FallbackProvider).
+    if (this.modelName === "unknown" && response.providerMeta?.model) {
+      this.modelName = response.providerMeta.model;
+    }
+
     this.addEvent("llm_end", "LLM Response", {
       content: response.content,
       tool_calls: response.tool_calls,
       usage: response.usage,
+      model: response.providerMeta?.model ?? this.modelName,
     });
   }
 

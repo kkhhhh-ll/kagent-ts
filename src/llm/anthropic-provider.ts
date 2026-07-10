@@ -208,7 +208,7 @@ export class AnthropicProvider implements LLMProvider {
       anthropicRetryCallbacks,
     );
 
-    return AnthropicProvider.convertResponse(response);
+    return AnthropicProvider.convertResponse(response, this.model);
   }
 
   async *chatStream(
@@ -379,7 +379,7 @@ export class AnthropicProvider implements LLMProvider {
    * - Usage → mapped from Anthropic's input_tokens/output_tokens
    * - Stop reason → preserved for agents to detect truncation / tool-use
    */
-  private static convertResponse(response: Anthropic.Messages.Message): LLMResponse {
+  private static convertResponse(response: Anthropic.Messages.Message, model: string): LLMResponse {
     const textBlocks = response.content.filter(
       (b) => b.type === "text",
     ) as Array<{ type: "text"; text: string }>;
@@ -423,6 +423,10 @@ export class AnthropicProvider implements LLMProvider {
           }
         : undefined,
       stop_reason: response.stop_reason ?? undefined,
+      providerMeta: {
+        model,
+        isFallback: false,
+      },
     };
 
     // Flag response-level quality issues

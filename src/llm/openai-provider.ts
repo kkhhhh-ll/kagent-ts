@@ -185,6 +185,10 @@ export class OpenAIProvider implements LLMProvider {
           }
         : undefined,
       stop_reason: choice.finish_reason ?? undefined,
+      providerMeta: {
+        model: this.model,
+        isFallback: false,
+      },
     };
 
     // Flag response-level quality issues
