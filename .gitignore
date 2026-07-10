@@ -11,6 +11,7 @@ temp/
 .kagent-traces/
 .vscode/
 .memory/
+resume-agent-harness.md
 skills/
 subagents/
 .claude/
