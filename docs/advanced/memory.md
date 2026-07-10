@@ -155,7 +155,7 @@ import { MemoryReflector, MemoryManager } from 'kagent-ts'
 const memory = new MemoryManager('.memory')
 
 const reflector = new MemoryReflector({
-  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),  // 记忆提取用轻量模型即可
   memoryManager: memory,
   maxIterations: 5,           // Fork 子 Agent 的最大 ReAct 迭代（默认: 5）
 })
@@ -169,15 +169,23 @@ const newMemories = await reflector.reflect({
 })
 // 新记忆已自动写入 MemoryManager
 
-// 或者通过 createReflectionHook 自动集成
+// 或者通过 createReflectionHook 自动集成，记忆和错题本各自独立配置 LLM
 import { createReflectionHook, ErrorNotebook } from 'kagent-ts'
 
 const hook = createReflectionHook({
-  llm,
+  llm: mainProvider,                    // fallback
+  memoryLLM: new OpenAIProvider({       // 记忆提取专用（可选，默认复用 llm）
+    apiKey: '...', model: 'gpt-4o-mini',
+  }),
+  reflectionLLM: new OpenAIProvider({   // 错题本专用（可选）
+    apiKey: '...', model: 'gpt-4o',
+  }),
   notebook: new ErrorNotebook(),
-  memoryManager: memory,      // 错题本和记忆可独立配置，按需启用
+  memoryManager: memory,
 })
 ```
+
+**LLM 决策优先级**：显式 `memoryLLM` → `llm` → 主模型
 
 `MemoryReflector` Fork 一个独立的子 Agent，拥有只读工具（`read_file`、`grep_search`），会审查对话历史并提取值得跨 session 保留的规则和项目事实。已有的同名记忆会自动跳过。
 

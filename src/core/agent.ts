@@ -347,6 +347,28 @@ export interface AgentConfig {
   subAgentLLM?: LLMProvider;
 
   /**
+   * LLM provider for post-execution skill precipitation.
+   *
+   * When set, the precipitation sub-agent uses this provider instead of the
+   * main agent's LLM. Precipitation reviews completed sessions to extract
+   * reusable skills — using a cheaper/faster model here saves cost on
+   * non-user-facing background work.
+   *
+   * When omitted and `llm` is a {@link ModelRouter}, the router's
+   * `forPrecipitation()` route is used. Otherwise falls back to `llm`.
+   *
+   * @example
+   * ```ts
+   * const agent = new ReActAgent({
+   *   llm: new OpenAIProvider({ model: "gpt-4o" }),
+   *   precipitationLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),
+   *   precipitation: "post-hoc",
+   * });
+   * ```
+   */
+  precipitationLLM?: LLMProvider;
+
+  /**
    * Lifecycle hooks for sub-agents spawned by the main agent.
    *
    * These hooks are passed to every sub-agent created via `spawn_subagent`,
@@ -556,6 +578,9 @@ export abstract class Agent {
   /** LLM provider for sub-agents (defaults to main llm if not set). */
   protected subAgentLLM?: LLMProvider;
 
+  /** LLM provider for skill precipitation (defaults to main llm if not set). */
+  protected precipitationLLM?: LLMProvider;
+
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
@@ -652,6 +677,16 @@ export abstract class Agent {
       this.subAgentLLM = config.subAgentLLM;
     } else if (config.llm instanceof ModelRouter) {
       this.subAgentLLM = config.llm.forSubAgent();
+    }
+
+    // Resolve precipitation LLM:
+    // 1. Explicit `precipitationLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forPrecipitation()
+    // 3. Fallback → precipitation shares the main `llm`
+    if (config.precipitationLLM) {
+      this.precipitationLLM = config.precipitationLLM;
+    } else if (config.llm instanceof ModelRouter) {
+      this.precipitationLLM = config.llm.forPrecipitation();
     }
 
     // Token budget — session-level cost control

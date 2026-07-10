@@ -9,7 +9,7 @@ interface AgentConfig {
   /** 系统提示词 — 定义 Agent 的行为和角色 */
   systemPrompt: string
 
-  /** LLM Provider 实例 */
+  /** LLM Provider 实例（支持 ModelRouter 自动路由） */
   llm: LLMProvider
 
   /** 工具列表 */
@@ -45,24 +45,45 @@ interface AgentConfig {
   /** RAG 知识检索配置 */
   rag?: RAGConfig
 
-  /** 子代理定义 */
-  subAgents?: SubAgentDefinition[]
+  /** 子代理定义目录 */
+  subAgentsDir?: string
 
   /** 子代理生命周期钩子（支持静态/数组/工厂函数） */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  /** Memory 管理器配置 */
-  memoryConfig?: MemoryConfig
+  /** 子 Agent 专用 LLM Provider（默认复用 llm） */
+  subAgentLLM?: LLMProvider
 
-  /** 是否启用反思 */
-  enableReflection?: boolean
+  /** Skill 沉淀专用 LLM Provider（默认复用 llm） */
+  precipitationLLM?: LLMProvider
+
+  /** Skill 沉淀模式 */
+  precipitation?: "off" | "post-hoc"
+
+  /** 记忆存储目录 (默认: ".memory") */
+  memoryDir?: string
 
   /** Token 预算配置 */
   tokenBudget?: TokenBudgetConfig
 }
 ```
 
+### 子系统的 LLM 分配
+
+Memory、Reflection、Precipitation 三个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
+
+| 子系统 | 配置方式 | 决策链 |
+| ------ | -------- | ------ |
+| **Precipitation** | AgentConfig 中 `precipitationLLM` | 显式 → ModelRouter → llm |
+| **Reflection** | `createReflectionHook({ reflectionLLM })` | 显式 → llm → 主模型 |
+| **Memory** | `createReflectionHook({ memoryLLM })` | 显式 → llm → 主模型 |
+| **SubAgent** | AgentConfig 中 `subAgentLLM` | 显式 → ModelRouter → llm |
+
+推荐使用 `ModelRouter` 集中管理所有模型路由，详见 [Model Router](/llm/model-router)。
+
 ## LLM Provider 配置
+
+> **推荐**：使用 `ModelRouter` 为不同任务分配不同模型（主循环 / 子代理 / 反思 / 记忆提取 / 沉淀），详见 [Model Router](/llm/model-router)。
 
 ### OpenAI
 

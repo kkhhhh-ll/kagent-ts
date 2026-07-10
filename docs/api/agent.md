@@ -14,6 +14,12 @@ const agent = new ReActAgent(config: ReActAgentConfig)
 interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
+
+  /** Skill 沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+
+  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
+  precipitationMaxIterations?: number
 }
 ```
 
@@ -86,6 +92,12 @@ interface FusionAgentConfig extends AgentConfig {
 
   /** 连续工具失败 N 次后注入 replan 提示 (默认: 2，设为 0 禁用) */
   replanThreshold?: number
+
+  /** Skill 沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+
+  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
+  precipitationMaxIterations?: number
 }
 
 type PlanConfirmCallback = (
@@ -152,6 +164,18 @@ interface AgentConfig {
    * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks | AgentHooks[]。
    */
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
+
+  /**
+   * 子 Agent 专用 LLM Provider。
+   * 不设置时：如果 llm 是 ModelRouter，则走 forSubAgent()；否则复用主 llm。
+   */
+  subAgentLLM?: LLMProvider
+
+  /**
+   * Skill 沉淀专用 LLM Provider。
+   * 不设置时：如果 llm 是 ModelRouter，则走 forPrecipitation()；否则复用主 llm。
+   */
+  precipitationLLM?: LLMProvider
 
   tokenBudget?: TokenBudgetConfig
 }

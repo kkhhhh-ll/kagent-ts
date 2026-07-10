@@ -11,8 +11,30 @@ import { Logger, ConsoleLogger } from "../logging/logger";
  * Configuration for the reflection hook.
  */
 export interface ReflectionHookConfig {
-  /** LLM provider (shared with the main agent). */
+  /**
+   * LLM provider for both error reflection and memory extraction.
+   *
+   * When `reflectionLLM` or `memoryLLM` are set, those take precedence
+   * for their respective subsystems — `llm` becomes the fallback for
+   * whichever subsystem doesn't have its own provider.
+   */
   llm: LLMProvider;
+
+  /**
+   * LLM provider for error reflection only.
+   * Default: `llm`.
+   * Using a different model here provides an independent review perspective.
+   */
+  reflectionLLM?: LLMProvider;
+
+  /**
+   * LLM provider for memory extraction only.
+   * Default: `llm`.
+   * Memory extraction is a distinct task from error reflection — using a
+   * separate model lets you tune cost/quality independently for each.
+   */
+  memoryLLM?: LLMProvider;
+
   /** ErrorNotebook for persisting error reflection findings. Independently configurable — omit to disable error reflection. */
   notebook?: ErrorNotebook;
   /** MemoryManager for persisting extracted memories. Independently configurable — omit to disable memory extraction. */
@@ -35,21 +57,37 @@ export interface ReflectionHookConfig {
 /**
  * Create an AgentHooks implementation that runs post-execution
  * reflection. Error reflection and memory extraction are independently
- * configurable — enable either, both, or neither.
+ * configurable — enable either, both, or neither. Each can use its own
+ * LLM provider (or fall back to the shared `llm`).
  *
  * When both are configured, the two forks run in parallel with their
  * own isolated contexts — neither blocks the main agent's response.
  *
  * ```ts
- * // Both error reflection and memory extraction
- * const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
- * const memory = new MemoryManager({ storageDir: ".memory" });
- * const hook = createReflectionHook({ llm, notebook, memoryManager: memory });
+ * // Both error reflection and memory extraction, with separate models
+ * const router = new ModelRouter({
+ *   main: new OpenAIProvider({ model: "gpt-4o" }),
+ *   reflection: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
+ *   memory: new OpenAIProvider({ model: "gpt-4o-mini" }),
+ * });
  *
- * // Memory extraction only (no error reflection)
- * const hook2 = createReflectionHook({ llm, memoryManager: memory });
+ * const hook = createReflectionHook({
+ *   llm: router.forReflection(),           // fallback for both
+ *   memoryLLM: router.forMemory(),          // separate model for memory
+ *   notebook: errorNotebook,
+ *   memoryManager: memoryManager,
+ * });
  *
- * const agent = new ReActAgent({ llm, hooks: hook });
+ * // Or use explicit providers directly:
+ * const hook2 = createReflectionHook({
+ *   llm: mainProvider,
+ *   reflectionLLM: new OpenAIProvider({ model: "gpt-4o" }),
+ *   memoryLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),
+ *   notebook: errorNotebook,
+ *   memoryManager: memoryManager,
+ * });
+ *
+ * const agent = new ReActAgent({ llm: router, hooks: hook });
  * const answer = await agent.run("...");
  * // After answer is returned, configured forks run in parallel:
  * //   1. Error reflector (if configured) → finds mistakes → persists to notebook
@@ -60,6 +98,8 @@ export function createReflectionHook(
   config: ReflectionHookConfig,
 ): AgentHooks & { readonly notebook: ErrorNotebook | null; readonly memoryManager: MemoryManager | null } {
   const { llm, notebook, memoryManager } = config;
+  const reflectionLLM = config.reflectionLLM ?? llm;
+  const memoryLLM = config.memoryLLM ?? llm;
   const logger = config.logger ?? new ConsoleLogger();
 
   // Accumulate state across hook calls
@@ -68,7 +108,7 @@ export function createReflectionHook(
 
   const errorReflector = notebook
     ? new ReflectionAgent({
-        llm,
+        llm: reflectionLLM,
         notebook,
         maxIterations: config.maxErrorIterations,
         logger,
@@ -78,7 +118,7 @@ export function createReflectionHook(
 
   const memoryReflector = memoryManager
     ? new MemoryReflector({
-        llm,
+        llm: memoryLLM,
         memoryManager,
         maxIterations: config.maxMemoryIterations,
         logger,

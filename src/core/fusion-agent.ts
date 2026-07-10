@@ -1089,7 +1089,7 @@ export class FusionAgent extends Agent {
         answer,
         skillsDir: this.skillsDir,
         skillManager: this.skillManager,
-        llm: this.llm,
+        llm: this.precipitationLLM ?? this.llm,
         sessionId: this.sessionManager?.getSessionId() ?? "unknown",
         maxIterations: this.precipitationMaxIterations,
         logger: this.logger,

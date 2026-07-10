@@ -29,12 +29,13 @@ ReflectionHook.onFinish()
 
 ## 通过 Hook 使用
 
-推荐方式——任何 Agent 类型都可以通过 `createReflectionHook` 添加反思。`notebook` 和 `memoryManager` **独立可选**，可以按需组合：
+推荐方式——任何 Agent 类型都可以通过 `createReflectionHook` 添加反思。`notebook` 和 `memoryManager` **独立可选**，可以按需组合。错题本和记忆提取可以各自使用**独立的 LLM**：
 
 ```ts
 import {
   ReActAgent,
   OpenAIProvider,
+  AnthropicProvider,
   ErrorNotebook,
   MemoryManager,
   createReflectionHook,
@@ -45,7 +46,13 @@ const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
 const memory = new MemoryManager('.memory')
 
 const hook = createReflectionHook({
-  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),  // fallback
+  reflectionLLM: new AnthropicProvider({                         // 可选：错题本专用
+    apiKey: '...', model: 'claude-haiku-4-5-20251001',
+  }),
+  memoryLLM: new OpenAIProvider({                                // 可选：记忆提取专用
+    apiKey: '...', model: 'gpt-4o-mini',
+  }),
   notebook,                       // 可选：不传则跳过错题本反思
   memoryManager: memory,          // 可选：不传则跳过记忆提取
   maxErrorIterations: 4,          // 可选，默认 4
@@ -60,6 +67,19 @@ const hook = createReflectionHook({
 // createReflectionHook({ llm, notebook })            // 只要错题本
 // createReflectionHook({ llm, memoryManager: mem })  // 只要记忆提取
 
+// 通过 ModelRouter 集中管理
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: 'gpt-4o' }),
+  reflection: new AnthropicProvider({ model: 'claude-haiku-4-5-20251001' }),
+  memory: new OpenAIProvider({ model: 'gpt-4o-mini' }),
+})
+const hook2 = createReflectionHook({
+  llm: router.forReflection(),          // fallback
+  reflectionLLM: router.forReflection(),
+  memoryLLM: router.forMemory(),
+  notebook, memoryManager: memory,
+})
+
 const agent = new ReActAgent({
   llm: mainProvider,
   systemPrompt: '...',
@@ -70,9 +90,12 @@ const agent = new ReActAgent({
 // 执行完成后，hook 自动并行运行两个 Fork
 const answer = await agent.run('用 kebab-case 命名所有文件')
 // → 用户看到 answer
-// → 后台 Fork 1: 找错 → notebook
-// → 后台 Fork 2: 提取 "用户要求 kebab-case 命名" (rule) 或 "用户偏好 pnpm" (preference) → memory
+// → 后台 Fork 1: 找错 → notebook (使用 reflectionLLM)
+// → 后台 Fork 2: 提取 "用户要求 kebab-case 命名" (rule) 或 "用户偏好 pnpm" (preference) → memory (使用 memoryLLM)
 ```
+
+**LLM 决策优先级**（错题本）：显式 `reflectionLLM` → `llm` → 主模型
+**LLM 决策优先级**（记忆提取）：显式 `memoryLLM` → `llm` → 主模型
 
 ## ReflectionAgent (错题本 Fork)
 
@@ -214,6 +237,7 @@ const agent = new FusionAgent({
 import {
   ReActAgent,
   OpenAIProvider,
+  ModelRouter,
   ErrorNotebook,
   MemoryManager,
   createReflectionHook,
@@ -222,13 +246,22 @@ import {
 const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
 const memory = new MemoryManager('.memory')
 
+// 推荐：通过 ModelRouter 集中管理各子系统的模型
+const router = new ModelRouter({
+  main: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  reflection: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  memory: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
+})
+
 const agent = new ReActAgent({
-  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: router,
   systemPrompt: '你是一个经验丰富的软件工程师。',
   tools: BUILTIN_TOOLS,
   hooks: [
     createReflectionHook({
-      llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+      llm: router.forReflection(),           // fallback
+      reflectionLLM: router.forReflection(),  // 错题本专用
+      memoryLLM: router.forMemory(),          // 记忆提取专用
       notebook,
       memoryManager: memory,
       onReflectionComplete: (e, m) => {
@@ -284,6 +317,8 @@ const agent = new ReActAgent({
     trace,   // ← 主 Agent 事件
     createReflectionHook({
       llm: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),
+      reflectionLLM: new OpenAIProvider({ apiKey: "...", model: "gpt-4o" }),   // 可选
+      memoryLLM: new OpenAIProvider({ apiKey: "...", model: "gpt-4o-mini" }),  // 可选
       notebook,
       memoryManager: memory,
       hooks: [trace],  // ← 透传到两个 fork 内部
@@ -314,12 +349,14 @@ await agent.run("重构 src/core/agent.ts")
 
 ## 最佳实践
 
-1. **反思使用高性能模型**：推荐 GPT-4o 或 Claude Sonnet
-2. **合理设置 maxIterations**：错题本 3-4 足够，记忆提取可稍多（4-5）
-3. **定期审查**：错题本和记忆都是跨 session 积累的，定期清理过时内容
-4. **结合 Eval**：反思结果可以作为 Eval 评估的输入
-5. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，失败以 `error` 级别记录日志。每个 Fork 有 5 分钟 AbortController 硬超时——超时后真正中止 LLM HTTP 请求，而非让后台继续消耗 API 配额。
-6. **TraceLogger 可查看子 Agent 轨迹**：通过 `hooks` 参数将 TraceLogger 透传到 fork 内部，fork 的工具调用和 LLM 交互都会出现在 trace HTML 文件中。
+1. **错题本反思使用不同的模型**：用与主 Agent 不同的模型（如 Claude Haiku / GPT-4o-mini）可获得独立审查视角
+2. **记忆提取使用轻量模型**：记忆提取是模式识别任务，用 GPT-4o-mini 级别即可
+3. **合理设置 maxIterations**：错题本 3-4 足够，记忆提取可稍多（4-5）
+4. **定期审查**：错题本和记忆都是跨 session 积累的，定期清理过时内容
+5. **结合 Eval**：反思结果可以作为 Eval 评估的输入
+6. **Fork 失败不阻塞主流程**：反思和记忆提取都是 best-effort，失败以 `error` 级别记录日志。每个 Fork 有 5 分钟 AbortController 硬超时——超时后真正中止 LLM HTTP 请求，而非让后台继续消耗 API 配额。
+7. **TraceLogger 可查看子 Agent 轨迹**：通过 `hooks` 参数将 TraceLogger 透传到 fork 内部，fork 的工具调用和 LLM 交互都会出现在 trace HTML 文件中。
+8. **使用 ModelRouter 集中管理**：将所有 route（main / reflection / memory / precipitation）集中在一个 `ModelRouter` 中，Agent 和 Hook 各自取对应的 route。
 
 ## 下一步
 

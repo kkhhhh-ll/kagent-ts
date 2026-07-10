@@ -57,6 +57,37 @@ const agent = new ReActAgent({
 })
 ```
 
+### 自定义 Precipitation 的 LLM
+
+默认情况下，沉淀子 Agent 复用主 Agent 的 `llm`。你可以通过 `precipitationLLM` 指定独立模型——沉淀是后台非用户感知的任务，用便宜模型可以节省成本：
+
+```ts
+const agent = new ReActAgent({
+  llm: new OpenAIProvider({ model: "gpt-4o" }),
+  precipitationLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),  // 沉淀专用
+  skillsDir: "./skills",
+  precipitation: "post-hoc",
+})
+```
+
+也可以使用 `ModelRouter` 集中管理：
+
+```ts
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o" }),
+  precipitation: new OpenAIProvider({ model: "gpt-4o-mini" }),
+})
+
+const agent = new ReActAgent({
+  llm: router,                     // Agent 自动检测 ModelRouter
+  // precipitationLLM 不设置 → 自动走 router.forPrecipitation()
+  skillsDir: "./skills",
+  precipitation: "post-hoc",
+})
+```
+
+**LLM 决策优先级**：显式 `precipitationLLM` → `ModelRouter.forPrecipitation()` → 主模型 `llm`
+
 ### Fusion Agent
 
 ```ts
@@ -65,10 +96,11 @@ const agent = new FusionAgent({
   skillsDir: "./skills",
   precipitation: "post-hoc",
   precipitationMaxIterations: 15,
+  precipitationLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),  // 可选：沉淀专用模型
 })
 ```
 
-Fusion Agent 中沉淀作为 **Phase 5** 在后台运行（与 Phase 4 Reflection 一样，均为 fire-and-forget，不阻塞最终答案的返回）。
+Fusion Agent 中沉淀作为 **Phase 5** 在后台运行（与 Phase 4 Reflection 一样，均为 fire-and-forget，不阻塞最终答案的返回）。`precipitationLLM` 的支持与 ReActAgent 一致。
 
 ## PrecipitateAgent（Fork 子 Agent）
 
@@ -156,13 +188,33 @@ precipitated: true
 import {
   ReActAgent,
   OpenAIProvider,
+  ModelRouter,
+  BUILTIN_TOOLS,
 } from "kagent-ts"
 
+// 方式 1：显式指定沉淀模型
 const agent = new ReActAgent({
   llm: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: "gpt-4o",
   }),
+  precipitationLLM: new OpenAIProvider({   // 沉淀专用（可选，默认复用 llm）
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: "gpt-4o-mini",
+  }),
+  systemPrompt: "你是一个全栈工程师。",
+  tools: BUILTIN_TOOLS,
+  skillsDir: "./skills",
+  precipitation: "post-hoc",
+})
+
+// 方式 2：通过 ModelRouter 集中管理
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o" }),
+  precipitation: new OpenAIProvider({ model: "gpt-4o-mini" }),
+})
+const agent2 = new ReActAgent({
+  llm: router,  // 自动检测 → precipitation 走 router.forPrecipitation()
   systemPrompt: "你是一个全栈工程师。",
   tools: BUILTIN_TOOLS,
   skillsDir: "./skills",

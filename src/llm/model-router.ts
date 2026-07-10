@@ -10,7 +10,7 @@ import { Logger, ConsoleLogger } from "../logging/logger";
  * Each category maps to a model provider. When a category has no explicit
  * provider configured, it falls back to `main`.
  */
-export type ModelRoute = "main" | "subAgent" | "reflection" | "lightweight";
+export type ModelRoute = "main" | "subAgent" | "reflection" | "lightweight" | "precipitation" | "memory";
 
 /**
  * Configuration for the ModelRouter.
@@ -37,6 +37,23 @@ export interface ModelRouterConfig {
    * Default: `main`.
    */
   lightweight?: LLMProvider;
+
+  /**
+   * Model for post-execution skill precipitation.
+   * Default: `main`.
+   * Precipitation reviews completed sessions to extract reusable skills —
+   * using a cheaper model here saves cost on non-user-facing work.
+   */
+  precipitation?: LLMProvider;
+
+  /**
+   * Model for memory extraction (user preferences, project decisions, etc.).
+   * Default: `main`.
+   * Memory extraction reviews sessions to find lasting facts worth
+   * persisting — independent of error reflection so the two can use
+   * different models.
+   */
+  memory?: LLMProvider;
 
   /**
    * Shared fallback providers tried in order when the primary for
@@ -150,6 +167,26 @@ export class ModelRouter implements LLMProvider {
     return this.route("lightweight");
   }
 
+  /**
+   * Get the LLM provider for post-execution skill precipitation.
+   *
+   * Delegates to `precipitation` when configured, otherwise falls back to `main`.
+   * Wraps the provider with any shared fallback chain.
+   */
+  forPrecipitation(): LLMProvider {
+    return this.route("precipitation");
+  }
+
+  /**
+   * Get the LLM provider for memory extraction.
+   *
+   * Delegates to `memory` when configured, otherwise falls back to `main`.
+   * Wraps the provider with any shared fallback chain.
+   */
+  forMemory(): LLMProvider {
+    return this.route("memory");
+  }
+
   // ─── Internal ────────────────────────────────────────────────────────
 
   /**
@@ -183,6 +220,10 @@ export class ModelRouter implements LLMProvider {
         return this.config.reflection ?? this.config.main;
       case "lightweight":
         return this.config.lightweight ?? this.config.main;
+      case "precipitation":
+        return this.config.precipitation ?? this.config.main;
+      case "memory":
+        return this.config.memory ?? this.config.main;
     }
   }
 
