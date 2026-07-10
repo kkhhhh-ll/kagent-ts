@@ -716,17 +716,6 @@ export class PlanSolveAgent extends Agent {
       const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
       this.contextManager.addMessage(assistantMessage.toDict());
 
-      // ── Truncation → continue in next iteration ────────────────────
-      if (isTruncated) {
-        this.contextManager.addMessage(
-          Message.user(
-            "Your previous response was cut off (max output tokens reached). " +
-            "Continue exactly where you left off — do NOT repeat any content already written."
-          ).toDict(),
-        );
-        continue;
-      }
-
       // ── Tool calls → execute and continue ─────────────────────────
       if (toolCalls.length > 0) {
         consecutiveEmptyIterations = 0;
@@ -736,6 +725,17 @@ export class PlanSolveAgent extends Agent {
         }
         const mcpWarnedServers = new Set<string>();
         const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+
+        // Inject truncation continuation AFTER tool execution so the
+        // assistant(tool_calls) → tool_result pairing is preserved.
+        if (isTruncated) {
+          this.contextManager.addMessage(
+            Message.user(
+              "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written."
+            ).toDict(),
+          );
+        }
 
         if (hadFailure) {
           this.consecutiveFailures++;
@@ -752,6 +752,17 @@ export class PlanSolveAgent extends Agent {
           }
         }
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
+        continue;
+      }
+
+      // ── Truncation without tool calls ─────────────────────────────
+      if (isTruncated) {
+        this.contextManager.addMessage(
+          Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          ).toDict(),
+        );
         continue;
       }
 

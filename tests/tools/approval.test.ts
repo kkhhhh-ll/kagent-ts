@@ -32,7 +32,7 @@ describe("Tool Approval (Human-in-the-loop)", () => {
       toolRegistry: registry,
       logger: new SilentLogger(),
       maxIterations: 2,
-      onToolApproval: async () => true,
+      onToolApproval: async (_name, _args, _signal) => true,
     });
 
     const result = await agent.run("do something");
@@ -58,7 +58,7 @@ describe("Tool Approval (Human-in-the-loop)", () => {
       toolRegistry: registry,
       logger: new SilentLogger(),
       maxIterations: 3,
-      onToolApproval: async () => false,
+      onToolApproval: async (_name, _args, _signal) => false,
     });
 
     const result = await agent.run("do something");
@@ -107,7 +107,7 @@ describe("Tool Approval (Human-in-the-loop)", () => {
       toolRegistry: registry,
       logger: new SilentLogger(),
       maxIterations: 3,
-      onToolApproval: async () => { throw new Error("should not be called"); },
+      onToolApproval: async (_name, _args, _signal) => { throw new Error("should not be called"); },
     });
 
     const result = await agent.run("test");

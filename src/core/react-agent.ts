@@ -487,7 +487,51 @@ export class ReActAgent extends Agent {
       const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
       this.contextManager.addMessage(assistantMessage.toDict());
 
-      // ── Truncation → continue in next iteration ────────────────────
+      // ── Tool calls → execute and continue ───────────────────────────
+      if (toolCalls.length > 0) {
+        if (parsed.thought) {
+          for (const h of this.hooks) h.onThought?.(parsed.thought);
+        }
+        const mcpWarnedServers = new Set<string>();
+        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+
+        // Inject truncation continuation AFTER tool execution so the
+        // assistant(tool_calls) → tool_result pairing is preserved.
+        if (isTruncated) {
+          consecutiveTruncations++;
+          if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+            const fallback = parsed.answer
+              ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+              : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+                "Please try breaking your request into smaller steps.";
+            yield fallback;
+            this.fireOnFinish(fallback);
+            return;
+          }
+          this.contextManager.addMessage(
+            Message.user(
+              "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written."
+            ).toDict(),
+          );
+        } else {
+          consecutiveTruncations = 0;
+        }
+
+        if (hadFailure) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
+              && this.precipitationMode !== "off") {
+            shouldPrecipitate = true;
+          }
+        } else {
+          consecutiveFailures = 0;
+        }
+        if (this.checkpointingEnabled) this.saveCheckpoint("active");
+        continue;
+      }
+
+      // ── Truncation without tool calls ──────────────────────────────
       if (isTruncated) {
         consecutiveTruncations++;
         if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
@@ -508,26 +552,6 @@ export class ReActAgent extends Agent {
         continue;
       }
       consecutiveTruncations = 0;
-
-      // ── Tool calls → execute and continue ───────────────────────────
-      if (toolCalls.length > 0) {
-        if (parsed.thought) {
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
-        }
-        const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
-        if (hadFailure) {
-          consecutiveFailures++;
-          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
-        } else {
-          consecutiveFailures = 0;
-        }
-        if (this.checkpointingEnabled) this.saveCheckpoint("active");
-        continue;
-      }
 
       // ── No tool calls → final answer (already streamed) ─────────────
       const answer = parsed.answer || rawContent;

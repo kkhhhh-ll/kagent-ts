@@ -475,11 +475,12 @@ export class FusionAgent extends Agent {
 
     const parsed = parseFusionResponse(response.content);
 
-    // Store the assistant message in context
-    const assistantMessage = Message.assistant(
-      response.content,
-      response.tool_calls,
-    );
+    // Store the assistant message in context.
+    // Deliberately strip tool_calls — the planning phase passes no tools
+    // to the LLM, but some providers may still hallucinate tool_calls.
+    // Orphaned tool_calls in context would break subsequent API calls
+    // (which require every tool_call to have a matching tool result).
+    const assistantMessage = Message.assistant(response.content);
     this.contextManager.addMessage(assistantMessage.toDict());
 
     if (parsed.plan && parsed.plan.length > 0) {
@@ -1380,17 +1381,6 @@ export class FusionAgent extends Agent {
       const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
       this.contextManager.addMessage(assistantMessage.toDict());
 
-      // ── Truncation → continue in next iteration ────────────────────
-      if (isTruncated) {
-        this.contextManager.addMessage(
-          Message.user(
-            "Your previous response was cut off (max output tokens reached). " +
-            "Continue exactly where you left off — do NOT repeat any content already written."
-          ).toDict(),
-        );
-        continue;
-      }
-
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {
         consecutiveEmptyIterations = 0;
@@ -1399,6 +1389,19 @@ export class FusionAgent extends Agent {
         }
         const mcpWarnedServers = new Set<string>();
         const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+
+        // Inject truncation continuation AFTER tool execution so the
+        // assistant(tool_calls) → tool_result pairing is preserved.
+        // If inserted before, the API rejects the request because tool
+        // results must immediately follow the tool_calls message.
+        if (isTruncated) {
+          this.contextManager.addMessage(
+            Message.user(
+              "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written."
+            ).toDict(),
+          );
+        }
 
         if (hadFailure) {
           this.consecutiveFailures++;
@@ -1429,6 +1432,17 @@ export class FusionAgent extends Agent {
         }
 
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
+        continue;
+      }
+
+      // ── Truncation without tool calls ─────────────────────────────
+      if (isTruncated) {
+        this.contextManager.addMessage(
+          Message.user(
+            "Your previous response was cut off (max output tokens reached). " +
+            "Continue exactly where you left off — do NOT repeat any content already written."
+          ).toDict(),
+        );
         continue;
       }
 
