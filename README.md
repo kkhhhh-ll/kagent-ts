@@ -107,7 +107,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    U["User Request"] --> D["1. Decompose\nLLM generates TaskGraph DAG"]
+    U["User Request"] --> D["1. Decompose\nLLM analyzes request\ninto a DAG"]
 
     D --> DAG["TaskGraph DAG\nA: researcher\nB: writer (depends on A)\nC: reviewer (depends on B)"]
 
@@ -168,7 +168,7 @@ flowchart LR
 flowchart TD
     O["OrchestratorAgent\nassigns task node"] --> NODE["TaskNode\ncode-reviewer:\nreview auth module"]
 
-    NODE --> WT_CREATE["git worktree add\n.kagent-worktrees/node_1/"]
+    NODE --> WT_CREATE["git worktree add\n.kagent-worktrees/\n  node_1/"]
 
     WT_CREATE --> WT["Isolated worktree\nbranch: kagent/node_1\n(changes scoped here)"]
 
