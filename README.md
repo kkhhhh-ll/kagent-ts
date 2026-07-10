@@ -107,29 +107,29 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    U["👤 User Request"] --> D["🧠 Phase 1: Decompose<br/>LLM analyses request → TaskGraph (DAG)"]
+    U["User Request"] --> D["1. Decompose\nLLM generates TaskGraph DAG"]
 
-    D --> DAG["📋 TaskGraph<br/>[A] researcher → [B] writer (depends on A)<br/>[C] reviewer → (depends on B)"]
+    D --> DAG["TaskGraph DAG\nA: researcher\nB: writer (depends on A)\nC: reviewer (depends on B)"]
 
-    DAG --> DISPATCH["🚀 Phase 2: Dispatch<br/>Topological wave-front dispatch<br/>Ready nodes run in parallel"]
+    DAG --> DISPATCH["2. Dispatch\nTopological wave-front\nReady nodes run in parallel"]
 
-    DISPATCH --> POLL["⏳ Poll until all dispatched nodes complete"]
+    DISPATCH --> POLL["Poll until all\nnodes complete"]
 
-    POLL --> RETRY{"Any failures?"}
-    RETRY -->|"Yes + retries remain"| RETRY_ACTION["🔄 Retry: subtree / all / continue"]
+    POLL --> RETRY{"Failures?"}
+    RETRY -->|"retries remain"| RETRY_ACTION["Retry subtree\nor retry all\nor continue"]
     RETRY_ACTION --> DISPATCH
-    RETRY -->|"No / exhausted"| SYNTH["🔍 Phase 3: Synthesize<br/>LLM reviews all results → isComplete?"]
+    RETRY -->|"no / exhausted"| SYNTH["3. Synthesize\nLLM reviews all results\nisComplete?"]
 
-    SYNTH -->|"✅ Complete"| FINAL["📝 Final Answer"]
-    SYNTH -->|"❌ Incomplete"| GAPS{"Gaps found?"}
-    GAPS -->|"Yes"| ADAPT["🔧 Phase 4: Adapt<br/>LLM generates new task nodes<br/>Append to DAG"]
+    SYNTH -->|"complete"| FINAL["4. Final Answer"]
+    SYNTH -->|"incomplete"| GAPS{"Gaps found?"}
+    GAPS -->|"yes"| ADAPT["5. Adapt\nLLM generates new\nnodes for remaining gaps"]
     ADAPT --> DISPATCH
-    GAPS -->|"No"| FORCE["⚡ Force Synthesize<br/>Best-effort answer"]
+    GAPS -->|"no"| FORCE["Force Synthesize\nBest-effort answer"]
 
     FORCE --> FINAL
-    FINAL --> REFLECT["💭 Post-hoc Reflection<br/>(optional) ReflectionAgent + ErrorNotebook"]
-    REFLECT --> PRECIPITATE["⚗️ Skill Precipitation<br/>(optional) Extract reusable SKILL.md"]
-    PRECIPITATE --> OUT["✅ Final Answer to User"]
+    FINAL --> REFLECT["Post-hoc Reflection\nReflectionAgent +\nErrorNotebook"]
+    REFLECT --> PRECIPITATE["Skill Precipitation\nExtract reusable\nSKILL.md patterns"]
+    PRECIPITATE --> OUT["Final Answer\nto User"]
 
     style D fill:#4a90d9,color:#fff
     style DISPATCH fill:#d97706,color:#fff
@@ -142,22 +142,22 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    U["👤 User Input"] --> ROUTE{"Phase 1: Route<br/>LLM judges complexity"}
+    U["User Input"] --> ROUTE{"1. Route\nLLM judges\ntask complexity"}
 
-    ROUTE -->|"SIMPLE"| REACT["Phase 3: ReAct Execute<br/>Direct tool-using loop"]
-    ROUTE -->|"COMPLEX"| PLAN["Phase 2: Plan<br/>LLM generates step-by-step plan"]
+    ROUTE -->|"simple"| REACT["3. ReAct Execute\nDirect tool-using\nloop"]
+    ROUTE -->|"complex"| PLAN["2. Plan\nLLM generates\nstep-by-step plan"]
 
-    PLAN --> CONFIRM{"Confirm?"}
-    CONFIRM -->|"auto: risky tools detected"| ASK["Ask user approval"]
-    CONFIRM -->|"never / approved"| EXEC["Phase 3: ReAct Execute<br/>with plan tracking + replan support"]
+    PLAN --> CONFIRM{"Confirm\nplan?"}
+    CONFIRM -->|"risky tools"| ASK["Ask user\napproval"]
+    CONFIRM -->|"approved\nor never"| EXEC["3. ReAct Execute\nwith plan tracking\nplus replan support"]
 
     ASK -->|"approved"| EXEC
-    ASK -->|"rejected"| RETURN["Return plan as answer"]
+    ASK -->|"rejected"| RETURN["Return plan\nas answer"]
 
     REACT --> REFLECT
     EXEC --> REFLECT
 
-    REFLECT["Phase 4: Reflect<br/>off | inline | post-hoc | both"] --> ANSWER["Final Answer"]
+    REFLECT["4. Reflect\noff | inline |\npost-hoc | both"] --> ANSWER["Final Answer"]
 ```
 
 ---
@@ -166,29 +166,24 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    subgraph "Orchestrator"
-        O["OrchestratorAgent"] --> NODE["TaskNode: code-reviewer<br/>input: 'review auth module'"]
-    end
+    O["OrchestratorAgent\nassigns task node"] --> NODE["TaskNode\ncode-reviewer:\nreview auth module"]
 
-    subgraph "Git Repository"
-        MAIN["main branch<br/>~/repo/"] --> WT_CREATE["git worktree add<br/>~/repo/.kagent-worktrees/node_1/"]
-        WT_CREATE --> WT["Isolated worktree<br/>branch: kagent/node_1"]
-    end
+    NODE --> WT_CREATE["git worktree add\n.kagent-worktrees/node_1/"]
 
-    subgraph "Sub-Agent Execution"
-        WT --> SA["ReActAgent spawns<br/>workdir = ~/repo/.kagent-worktrees/node_1/"]
-        SA --> TOOLS["Tools: read_file, edit, bash<br/>(scoped to worktree)"]
-        TOOLS --> RESULT["Result: text output + file changes"]
-    end
+    WT_CREATE --> WT["Isolated worktree\nbranch: kagent/node_1\n(changes scoped here)"]
 
-    subgraph "Cleanup"
-        RESULT --> CHOICE{"autoMergeWorktrees?"}
-        CHOICE -->|"true"| MERGE["git merge → main<br/>delete branch & worktree"]
-        CHOICE -->|"false (default)"| DISCARD["force delete worktree<br/>discard all file changes"]
-    end
+    WT --> SA["ReActAgent spawns\nworkdir = worktree path"]
 
-    RESULT --> CTX["Text output injected<br/>into orchestrator context"]
-    CTX --> SYNTH["Synthesizer evaluates quality"]
+    SA --> TOOLS["Tools execute\nread_file, edit, bash\n(all scoped to worktree)"]
+
+    TOOLS --> RESULT["Result produced\ntext output\nplus file changes"]
+
+    RESULT --> CHOICE{"autoMerge\nWorktrees?"}
+    CHOICE -->|"true"| MERGE["git merge back to main\ndelete branch\nclean up worktree"]
+    CHOICE -->|"false (default)"| DISCARD["force delete worktree\ndiscard all file changes\nbranch deleted"]
+
+    RESULT --> CTX["Text output injected\ninto orchestrator context"]
+    CTX --> SYNTH["Orchestrator synthesizer\nevaluates result quality"]
 
     style WT fill:#059669,color:#fff
     style DISCARD fill:#dc2626,color:#fff
@@ -200,30 +195,20 @@ flowchart TD
 ## Tool Execution & Circuit Breaker
 
 ```mermaid
-stateDiagram-v2
-    [*] --> CLOSED: Normal operation
+flowchart LR
+    CLOSED["CLOSED (normal)\n────────────\nfailures: 0\navailable: yes"] -->|"1st failure"| HALF_OPEN
 
-    CLOSED --> HALF_OPEN: 1st failure<br/>(retries remain)
-    HALF_OPEN --> HALF_OPEN: Retry failure<br/>(retries remain)
-    HALF_OPEN --> CLOSED: Success<br/>(reset counter)
-    HALF_OPEN --> OPEN: Retries exhausted<br/>(consecutive failures > threshold)
+    HALF_OPEN["HALF_OPEN (degraded)\n────────────\nfailures: 1 to retryCount\navailable: yes\nLLM sees [RETRYABLE:...]"] -->|"success\n(reset)"| CLOSED
 
-    OPEN --> [*]: LLM sees [FATAL:CIRCUIT_OPEN]<br/>must use alternative approach
+    HALF_OPEN -->|"retry failure\n(still have retries)"| HALF_OPEN
 
-    note right of CLOSED
-        failures: 0
-        available: true
-    end note
-    note right of HALF_OPEN
-        failures: 1..retryCount
-        available: true (degraded)
-        LLM sees [RETRYABLE:...]
-    end note
-    note right of OPEN
-        failures: retryCount + 1
-        available: false
-        LLM sees [FATAL:CIRCUIT_OPEN]
-    end note
+    HALF_OPEN -->|"retries exhausted\n(failures > retryCount)"| OPEN
+
+    OPEN["OPEN (blocked)\n────────────\nfailures: retryCount + 1\navailable: NO\nLLM sees [FATAL:CIRCUIT_OPEN]\nmust try different approach"]
+
+    style CLOSED fill:#059669,color:#fff
+    style HALF_OPEN fill:#d97706,color:#fff
+    style OPEN fill:#dc2626,color:#fff
 ```
 
 ---
