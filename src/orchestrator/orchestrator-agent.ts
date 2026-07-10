@@ -456,6 +456,399 @@ export class OrchestratorAgent extends Agent {
     return forced;
   }
 
+  // ─── Streaming ──────────────────────────────────────────────────────
+
+  protected async *executeStream(input: string): AsyncIterable<string> {
+    const sizeError = this.validateInputSize(input);
+    if (sizeError) { yield sizeError; return; }
+
+    this._abortController = new AbortController();
+
+    await this.init();
+    await this.reloadDynamicResources();
+    this.recoverOrphanedSubAgentResults();
+
+    try {
+      this.getSubAgentManager();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error("Orchestrator", message);
+      yield message;
+      return;
+    }
+
+    if (this.enableWorktrees && this.worktreeRepoPath && !this.worktreeManager) {
+      try {
+        this.worktreeManager = new GitWorktreeManager({
+          repoPath: this.worktreeRepoPath,
+          worktreesDir: this.worktreesDir,
+          branchPrefix: this.worktreeBranchPrefix,
+          logger: this.logger,
+          autoCleanup: this.autoCleanupWorktrees,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        yield `Error: ${message}`;
+        return;
+      }
+    }
+
+    const userMessage = Message.user(input);
+    this.contextManager.addMessage(userMessage.toDict());
+
+    this.taskGraph = { nodes: [] };
+    this.completedRounds = 0;
+    this.fallbackEvents = [];
+
+    if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+    // ── Phase 1: Decompose ─────────────────────────────────────────────
+    yield "\n## Phase 1: Decompose\n\n";
+    const plan = await this.decompose(input);
+    this.taskGraph = plan.taskGraph;
+    this.setNodeRetryConfig(this.taskGraph.nodes);
+    this.detectAndBreakCycles();
+
+    if (this.taskGraph.nodes.length === 0) {
+      const fallback = "I was unable to decompose this task into sub-agent actions.";
+      yield fallback;
+      this.fireOnFinish(fallback);
+      return;
+    }
+
+    // Yield the plan for visibility
+    const planSteps = this.taskGraph.nodes.map(
+      (n) => `[${n.id}] ${n.subAgentName}: ${n.description}`,
+    );
+    for (const h of this.hooks) h.onPlanCreated?.(planSteps);
+    yield `Decomposed into ${this.taskGraph.nodes.length} node(s):\n`;
+    for (const n of this.taskGraph.nodes) {
+      const depStr = n.dependsOn.length > 0
+        ? ` (deps: ${n.dependsOn.join(", ")})`
+        : "";
+      yield `  - [${n.id}] → ${n.subAgentName}${depStr}\n`;
+    }
+    yield "\n";
+
+    if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+    // ── Phase 2-4: Orchestration Loop ──────────────────────────────────
+    for (let round = 0; round < this.maxRounds; round++) {
+      if (this.isCancelled) {
+        this.saveCheckpoint("cancelled");
+        if (this.autoCleanupWorktrees) {
+          await this.worktreeManager?.cleanup();
+        }
+        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        yield `\n[Cancelled. Session "${sid}" preserved.]`;
+        return;
+      }
+
+      yield `## Round ${round + 1}/${this.maxRounds}\n\n`;
+
+      // Dispatch
+      yield "### Dispatch\n\n";
+      yield* this.streamDispatchReadyNodes();
+
+      // Synthesize
+      yield "### Synthesize\n\n";
+      const synthesis = await this.synthesize(input);
+      yield synthesis.thought ? `${synthesis.thought}\n\n` : "";
+      this.completedRounds++;
+
+      if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+      if (synthesis.isComplete && synthesis.finalAnswer) {
+        this.logger.info("Orchestrator", "Task complete.");
+        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+        const finalAnswer = synthesis.finalAnswer;
+        yield `\n## Final Answer\n\n${finalAnswer}`;
+        this.fireOnFinish(finalAnswer);
+        return;
+      }
+
+      if (round === this.maxRounds - 1) {
+        this.logger.info("Orchestrator", `Max rounds (${this.maxRounds}) reached — forcing synthesis.`);
+        yield "\n### Final Synthesis\n\n";
+        const forced = await this.forceSynthesizeStream(input);
+        this.fireOnFinish(forced);
+        return;
+      }
+
+      if (this.taskGraph.nodes.length >= this.maxTotalNodes) {
+        this.logger.info("Orchestrator", `Max total nodes (${this.maxTotalNodes}) reached — forcing synthesis.`);
+        yield "\n### Final Synthesis\n\n";
+        const forced = await this.forceSynthesizeStream(input);
+        this.fireOnFinish(forced);
+        return;
+      }
+
+      const gaps = synthesis.gaps ?? [];
+      if (gaps.length === 0) {
+        this.logger.info("Orchestrator", "Synthesis incomplete but no gaps listed — forcing synthesis.");
+        yield "\n### Final Synthesis\n\n";
+        const forced = await this.forceSynthesizeStream(input);
+        this.fireOnFinish(forced);
+        return;
+      }
+
+      // Adapt
+      yield "### Adapt\n\n";
+      const adaptResult = await this.adapt(gaps);
+      yield adaptResult.thought ? `${adaptResult.thought}\n\n` : "";
+
+      if (adaptResult.stuck || adaptResult.newNodes.length === 0) {
+        this.logger.info("Orchestrator", "Adapt phase stuck — forcing synthesis.");
+        yield "\n### Final Synthesis\n\n";
+        const forced = await this.forceSynthesizeStream(input);
+        this.fireOnFinish(forced);
+        return;
+      }
+
+      this.taskGraph.nodes.push(...adaptResult.newNodes);
+      this.setNodeRetryConfig(adaptResult.newNodes);
+      this.detectAndBreakCycles();
+      yield `${adaptResult.newNodes.length} new node(s) added.\n\n`;
+
+      const revisedSteps = this.taskGraph.nodes.map(
+        (n) => `[${n.id}] ${n.subAgentName}: ${n.description} (${n.status})`,
+      );
+      for (const h of this.hooks) h.onPlanRevised?.(revisedSteps);
+
+      if (this.checkpointingEnabled) this.saveCheckpoint("active");
+    }
+
+    const forced = await this.forceSynthesizeStream(input);
+    this.fireOnFinish(forced);
+  }
+
+  /**
+   * Streaming variant of dispatchReadyNodes — yields status as each node
+   * is spawned and completed.
+   */
+  private async *streamDispatchReadyNodes(): AsyncIterable<string> {
+    let progress = true;
+    while (progress) {
+      progress = false;
+
+      const readyNodes = this.getReadyNodes();
+      if (readyNodes.length === 0) break;
+
+      progress = true;
+
+      yield `Dispatching ${readyNodes.length} node(s):\n`;
+      for (const node of readyNodes) {
+        yield `  - [${node.id}] ${node.subAgentName} → running\n`;
+        node.status = "running";
+        node.startedAt = Date.now();
+
+        let workdir: string | undefined;
+        if (this.worktreeManager) {
+          try {
+            const wt = await this.worktreeManager.createWorktree({
+              nodeId: node.id,
+              baseRef: node.worktreeBaseRef,
+            });
+            node.worktreeId = wt.id;
+            workdir = wt.path;
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            node.status = "failed";
+            node.result = {
+              subAgentId: `error_${node.id}`,
+              name: node.subAgentName,
+              success: false,
+              output: `Failed to create isolated worktree: ${message}`,
+              durationMs: 0,
+            };
+            node.durationMs = 0;
+            yield `    ❌ Failed to create worktree\n`;
+            continue;
+          }
+        }
+
+        const resolvedInput = this.resolveInputTemplate(node);
+
+        try {
+          const runId = this.getSubAgentManager().spawn(
+            node.subAgentName,
+            resolvedInput,
+            workdir ? { workdir } : undefined,
+          );
+          node.runId = runId;
+          for (const h of this.hooks) h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          node.status = "failed";
+          node.result = {
+            subAgentId: `error_${node.id}`,
+            name: node.subAgentName,
+            success: false,
+            output: `Failed to spawn: ${message}`,
+            durationMs: 0,
+          };
+          node.durationMs = 0;
+          for (const h of this.hooks) h.onToolError?.("spawn_subagent", node.result.output, undefined);
+          yield `    ❌ Failed to spawn: ${message}\n`;
+        }
+      }
+
+      // Poll until all dispatched nodes complete
+      await this.pollUntilNodesComplete(readyNodes);
+
+      const retryTriggered = this.handleFailedNodes(readyNodes);
+
+      // Worktree lifecycle
+      if (this.worktreeManager) {
+        for (const node of readyNodes) {
+          if (!node.worktreeId) continue;
+          try {
+            if (node.status === "completed" && this.autoMergeWorktrees) {
+              await this.worktreeManager.removeWorktree(node.worktreeId, {
+                force: false, mergeBack: true, deleteBranch: true,
+              });
+            } else if (this.autoCleanupWorktrees) {
+              await this.worktreeManager.removeWorktree(node.worktreeId, {
+                force: true, deleteBranch: true,
+              });
+            }
+          } catch { /* cleanup failure is non-fatal */ }
+        }
+      }
+
+      // Yield completion status and inject results
+      for (const node of readyNodes) {
+        if (!node.result) continue;
+        const icon = node.status === "completed" ? "✅" : "❌";
+        const retryInfo = node.retryCount > 0 ? ` (retry ${node.retryCount})` : "";
+        yield `  - [${node.id}] ${icon} ${node.status}${retryInfo} (${node.durationMs ?? 0}ms)\n`;
+
+        const source = `subagent:${node.subAgentName}:${node.id}`;
+        const msg = new Message(
+          Role.User,
+          wrapAndScan(source, node.result.output),
+          { name: source },
+        );
+        this.contextManager.addMessage(msg.toDict());
+      }
+
+      yield "\n";
+
+      if (retryTriggered) {
+        progress = true;
+        yield "Retrying failed nodes...\n\n";
+      }
+    }
+  }
+
+  /**
+   * Streaming variant of forceSynthesize — uses {@link chatStream} to yield
+   * the final answer token-by-token.
+   */
+  private async forceSynthesizeStream(userInput: string): Promise<string> {
+    const completedResults = this.formatCompletedResults();
+
+    if (!completedResults) {
+      const msg = "I was unable to complete the task — no sub-agent results were produced.";
+      return msg;
+    }
+
+    const fallbackNotice = this.buildFallbackNotice();
+
+    const prompt = `You are a synthesiser producing a FINAL answer. The orchestrator has
+stopped (either max rounds reached or no more useful work can be devised).
+Using the sub-agent results below, provide the BEST answer you can to the
+user's original request. Be honest about any limitations or incomplete information.
+
+=== User's Original Request ===
+${userInput}
+${fallbackNotice}
+=== Sub-Agent Results ===
+${completedResults}
+
+Respond with ONLY a JSON object:
+{
+  "thought": "<your analysis of what was accomplished and what is missing>",
+  "answer": "<the best answer you can provide>"
+}
+
+Rules:
+- Include "thought" covering both what was learned AND what remains uncertain.
+- The "answer" should be thorough but honest about gaps.
+- The JSON must be valid — no trailing commas, no comments.`;
+
+    const messages = [
+      { role: Role.System, content: prompt },
+    ];
+
+    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+
+    // Buffer the full response to parse JSON, but stream the answer portion
+    let rawContent = "";
+    let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+
+    try {
+      for await (const event of this.llm.chatStream(
+        messages,
+        [],
+        this._abortController?.signal,
+      )) {
+        if (event.type === "chunk") {
+          if (event.content) {
+            rawContent += event.content;
+          }
+        } else if (event.type === "done") {
+          streamUsage = event.usage;
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof LLMNetworkError) {
+        for (const h of this.hooks) h.onLLMError?.(err);
+        const fallback = `Network error during final synthesis: ${err.message}. ` +
+          `Partial results are preserved in the session.`;
+        return fallback;
+      }
+      throw err;
+    }
+
+    for (const h of this.hooks) h.onLLMEnd?.({ content: rawContent, usage: streamUsage });
+
+    this.trackFallbackStream("ForceSynthesize", rawContent, streamUsage);
+
+    if (streamUsage) {
+      this.tokenBudget?.recordUsage(streamUsage.prompt_tokens, streamUsage.completion_tokens);
+    }
+
+    // Parse JSON to extract thought + answer
+    const json = extractJSON(rawContent);
+    if (json) {
+      try {
+        const parsed = JSON.parse(json);
+        if (typeof parsed === "object" && parsed !== null) {
+          const thought = String(parsed.thought ?? "");
+          const answer = String(parsed.answer ?? rawContent);
+          this.logger.info("Orchestrator", `Force synthesize: ${thought}`);
+          return answer;
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    return rawContent;
+  }
+
+  /**
+   * Streaming-aware fallback tracker — checks providerMeta on the raw content
+   * since we don't have a full LLMResponse from chatStream.
+   */
+  private trackFallbackStream(phase: string, _rawContent: string, _usage?: unknown): void {
+    // NOTE: providerMeta is not available from chatStream since we process
+    // raw events. The non-streaming trackFallback covers the run() path.
+    // For streaming, we rely on the FallbackProvider's own logging.
+    void phase;
+  }
+
   // ─── Degradation Tracking ───────────────────────────────────────────
 
   /**

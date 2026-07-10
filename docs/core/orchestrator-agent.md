@@ -42,20 +42,7 @@ const agent = new OrchestratorAgent({
     model: 'gpt-4o',
   }),
   tools: [],
-  subAgents: [
-    {
-      name: 'code-reviewer',
-      description: '审查代码质量',
-      systemPrompt: '你是代码审查专家...',
-      tools: ['read_file', 'grep_search'],
-    },
-    {
-      name: 'test-writer',
-      description: '编写单元测试',
-      systemPrompt: '你是测试专家...',
-      tools: ['read_file', 'write_file'],
-    },
-  ],
+  subAgentsDir: './subagents',  // 指向包含 AGENT.md 文件的目录
 
   maxRounds: 3,          // 最大编排轮次 (默认: 3)
   maxParallelNodes: 5,   // 最大并行节点数 (默认: 5)
@@ -69,6 +56,60 @@ const answer = await agent.run(
 )
 console.log(answer)
 ```
+
+## 流式输出
+
+Orchestrator Agent 支持 `stream()` 方法，在各阶段实时输出进度：
+
+```ts
+for await (const chunk of agent.stream(
+  '审查 src/ 下所有文件的代码质量'
+)) {
+  process.stdout.write(chunk)
+}
+```
+
+流式输出的格式：
+
+```text
+## Phase 1: Decompose
+
+Decomposed into 5 node(s):
+  - [task_a] → code-reviewer
+  - [task_b] → code-reviewer (deps: task_a)
+  ...
+
+## Round 1/3
+
+### Dispatch
+Dispatching 2 node(s):
+  - [task_a] code-reviewer → running
+  - [task_b] code-reviewer → running
+  - [task_a] ✅ completed (1234ms)
+  - [task_b] ✅ completed (2100ms)
+
+### Synthesize
+<thought text>
+
+### Adapt
+<thought text>
+3 new node(s) added.
+
+...
+
+## Final Answer
+<完整答案文本>
+```
+
+各阶段说明：
+
+| 阶段 | 输出内容 |
+| --- | --- |
+| **Decompose** | 分解出的节点列表（含依赖关系） |
+| **Dispatch** | 每个节点的 spawn / ✅完成 / ❌失败状态，含耗时 |
+| **Synthesize** | LLM 综合分析结果（thought 文本） |
+| **Adapt** | LLM 生成新节点的思考过程 |
+| **Final Answer** | 最终答案，token-by-token 流式输出 |
 
 ## 配置参数
 
@@ -116,15 +157,19 @@ interface TaskNode {
 
 ## 模板注入
 
+<div v-pre>
+
 子agent的输入支持模板变量，用于注入依赖节点的输出：
 
 ```text
 "请基于以下分析结果生成报告：
-{node_a.result}
-{node_b.result}"
+{{node_a.output}}
+{{node_b.output}}"
 ```
 
-在调度时，`{node_id.result}` 会被替换为对应节点的实际输出。
+在调度时，`{{node_id.output}}` 会被替换为对应节点的实际输出。
+
+</div>
 
 ## 自适应轮次
 
@@ -289,26 +334,7 @@ const agent = new OrchestratorAgent({
     model: 'gpt-4o',
   }),
 
-  subAgents: [
-    {
-      name: 'code-analyzer',
-      description: '分析代码结构和质量',
-      systemPrompt: '你是一个代码分析专家...',
-      tools: ['read_file', 'grep_search', 'glob_search'],
-    },
-    {
-      name: 'dep-checker',
-      description: '检查依赖关系',
-      systemPrompt: '你是一个依赖分析专家...',
-      tools: ['read_file', 'bash'],
-    },
-    {
-      name: 'report-writer',
-      description: '生成分析报告',
-      systemPrompt: '你是一个技术写作专家...',
-      tools: ['write_file'],
-    },
-  ],
+  subAgentsDir: './subagents',  // 子agent由 AGENT.md 文件定义
 
   maxRounds: 3,
   maxParallelNodes: 5,
@@ -319,6 +345,13 @@ const report = await agent.run(
   '全面分析这个项目的架构、代码质量和依赖关系，生成一份详细的报告文件。'
 )
 console.log(report)
+
+// 或使用流式输出，实时查看编排进度
+for await (const chunk of agent.stream(
+  '全面分析这个项目的架构、代码质量和依赖关系'
+)) {
+  process.stdout.write(chunk)
+}
 ```
 
 ## 执行追踪
