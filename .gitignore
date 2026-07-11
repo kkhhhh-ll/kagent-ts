@@ -18,3 +18,4 @@ subagents/
 mcp.json
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+analysis/

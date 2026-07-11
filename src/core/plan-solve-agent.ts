@@ -1120,7 +1120,7 @@ export class PlanSolveAgent extends Agent {
 
     try {
       const reflector = new ReflectionAgent({
-        llm: this.llm,
+        llm: this.reflectionLLM ?? this.llm,
         notebook,
         maxIterations: this.reflectionMaxIterations,
       });

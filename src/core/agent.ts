@@ -15,7 +15,11 @@ import { SkillManager } from "../skills/skill-manager";
 import { MemoryManager } from "../memory/memory-manager";
 import { ProjectRules } from "../rules/project-rules";
 import { SessionManager } from "../session/session-manager";
-import { SessionState, SessionStatus, AgentType } from "../session/session-types";
+import {
+  SessionState,
+  SessionStatus,
+  AgentType,
+} from "../session/session-types";
 import { countTokens } from "../utils/token-counter";
 import { PreferenceManager } from "../preferences/preference-manager";
 import { AgentHooks } from "./hooks";
@@ -25,7 +29,10 @@ import { SubAgentManager } from "../subagent/subagent-manager";
 import type { SubAgentResult } from "../subagent/subagent-types";
 import { RAGManager } from "../rag/rag-manager";
 import type { RAGConfig } from "../rag/rag-types";
-import { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../rag/search-knowledge";
+import {
+  createSearchKnowledgeTool,
+  createListKnowledgeDocumentsTool,
+} from "../rag/search-knowledge";
 import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 import { createListErrorsTool } from "../tools/builtin/list-errors";
@@ -36,6 +43,7 @@ import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
+import { z } from "zod/v4";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -65,13 +73,7 @@ export interface AgentConfig {
   llm: LLMProvider;
   contextManager?: ContextManager;
 
-  /**
-   * Human-readable name for this agent. Used in log output to distinguish
-   * the main agent ("main") from sub-agents (their definition name, e.g.
-   * "code-reviewer") and fork agents ("fork").
-   *
-   * Default: "main".
-   */
+  /** Human-readable agent name for log output. Default: `"main"`. */
   name?: string;
 
   /**
@@ -91,7 +93,8 @@ export interface AgentConfig {
    * When a tool returns a result larger than this, the first 2 KB are kept
    * in context and the full output is saved to disk for on-demand reading.
    *
-   * Set to 0 (default) to disable truncation.
+   * Omit or set to `undefined` to disable truncation. Must be a positive
+   * integer when set (validated at runtime via Zod).
    *
    * Only used when `toolRegistry` is NOT provided (the framework creates
    * its own registry).
@@ -119,38 +122,24 @@ export interface AgentConfig {
   skillManager?: SkillManager;
 
   /**
-   * Path to a directory of file-based skills.
-   *
-   * Each subdirectory should contain a `SKILL.md` file with YAML-like
-   * frontmatter (name, description, keywords) and a body that serves
-   * as the system prompt. Optional `reference/` and `scripts/`
-   * subdirectories provide additional context and tools.
-   *
-   * Skills are lazily loaded: only metadata is registered upfront;
-   * full content loads on activation.
+   * Path to a directory of file-based skills (each with a `SKILL.md`).
+   * Skills are lazily loaded: metadata at startup, full content on activation.
    */
   skillsDir?: string;
 
   /**
-   * Path to the long-term memory storage directory.
-   * Default: ".memory". The MemoryManager persists facts, rules, and
-   * decisions across sessions using an index (MEMORY.md) + individual
-   * markdown files.
+   * Path to long-term memory storage (default: `".memory"`). Persists facts,
+   * rules, and decisions via `MEMORY.md` index + individual markdown files.
    */
   memoryDir?: string;
 
   /**
-   * Path to a project rules file (e.g. "RULES.md") or directory (e.g.
-   * ".rules/"). Rules are user-authored, always injected into the system
-   * prompt, and reloaded at the start of each run.
+   * Path to a project rules file (e.g. `"RULES.md"`) or directory
+   * (e.g. `".rules/"`). User-authored, always injected, auto-reloaded.
    */
   rulesPath?: string;
 
-  /**
-   * Optional system prompt string appended to the default system prompt.
-   * Provides a base instruction layer that is always injected into the
-   * system prompt for every run.
-   */
+  /** Optional system prompt appended to the default system prompt. */
   systemPrompt?: string;
 
   /**
@@ -160,36 +149,18 @@ export interface AgentConfig {
   hooks?: AgentHooks | AgentHooks[];
 
   /**
-   * Human-in-the-loop approval callback.
-   *
-   * Called before executing tools marked `requireApproval: true`.
-   * Return `true` to approve, `false` to deny (the tool is skipped and
-   * an APPROVAL_DENIED result is injected into context).
-   *
-   * If not provided, tools with `requireApproval: true` are ALWAYS DENIED
-   * (safe default — no silent execution of dangerous tools).
+   * Human-in-the-loop approval callback. Called before executing tools
+   * marked `requireApproval: true`. Return `true` to approve. If not
+   * provided, such tools are ALWAYS DENIED (safe default).
    */
   onToolApproval?: ApprovalCallback;
 
-  /**
-   * Maximum time (ms) to wait for the `onToolApproval` callback before
-   * applying the timeout strategy. Prevents the agent from hanging
-   * indefinitely when the human reviewer is unavailable.
-   *
-   * Default: 120_000 (2 minutes).
-   */
+  /** Max ms to wait for onToolApproval before applying timeout strategy. Default: 120_000. */
   approvalTimeoutMs?: number;
 
   /**
-   * What to do when `onToolApproval` does not respond within
-   * `approvalTimeoutMs`.
-   *
-   * - `"deny"` (default): Treat the tool as denied. Safe for destructive
-   *   operations — the LLM must find a different approach.
-   * - `"allow"`: Execute the tool anyway. Use only for non-destructive
-   *   tools in trusted environments.
-   *
-   * Default: "deny".
+   * Timeout strategy: `"deny"` (default, safe) or `"allow"` (use only for
+   * non-destructive tools in trusted environments).
    */
   approvalTimeoutStrategy?: "deny" | "allow";
 
@@ -222,294 +193,146 @@ export interface AgentConfig {
    */
   sessionDir?: string;
 
-  /**
-   * Enable automatic checkpoint saving during the run loop.
-   * When true, snapshots are saved after each LLM+tools cycle so the
-   * session can be resumed after a network interruption.
-   *
-   * Default: false (existing consumers see no behavior change).
-   */
+  /** Auto-save checkpoints after each LLM+tools cycle for session resume. Default: false. */
   enableCheckpointing?: boolean;
 
   // ─── MCP Server Configuration ─────────────────────────────────────────
 
-  /**
-   * MCP (Model Context Protocol) server configurations for dynamic tool
-   * discovery. Each key is the server name used as a prefix for discovered
-   * tools (e.g., a server named "filesystem" exposing tool "read" becomes
-   * available as "filesystem_read").
-   *
-   * Servers are connected asynchronously when `run()` is called (the
-   * constructor is synchronous). If a connection fails, a warning is
-   * logged and the other servers still connect.
-   *
-   * Prefer {@link mcpConfigPath} for persistent, shareable configuration.
-   * Inline `mcpServers` takes precedence over file-based config when the
-   * same server name appears in both.
-   *
-   * @example
-   * ```ts
-   * mcpServers: {
-   *   filesystem: {
-   *     command: "npx",
-   *     args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
-   *   },
-   * }
-   * ```
-   */
+  /** MCP server configs for dynamic tool discovery. Inline takes precedence over file-based. */
   mcpServers?: Record<string, McpServerConfig>;
 
-  /**
-   * Path to a JSON file containing MCP server configurations.
-   *
-   * The file should contain a JSON object mapping server names to
-   * {@link McpServerConfig} objects — the same shape as {@link mcpServers}.
-   *
-   * Loaded at construction time (synchronously). Merged with inline
-   * `mcpServers` — inline entries with the same name take precedence.
-   *
-   * This is the recommended way to configure MCP servers: keep
-   * credentials and server details in a standalone file that can be
-   * gitignored, shared across agents, or generated by tooling.
-   *
-   * @example mcp.json
-   * ```json
-   * {
-   *   "filesystem": {
-   *     "command": "npx",
-   *     "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
-   *   },
-   *   "weather": {
-   *     "url": "http://localhost:3001/sse"
-   *   }
-   * }
-   * ```
-   */
+  /** Path to a JSON file of MCP server configs (same shape as {@link mcpServers}). */
   mcpConfigPath?: string;
 
   // ─── Sub-Agent Configuration ───────────────────────────────────────────
 
   /**
-   * Path to a directory of sub-agent definitions (AGENT.md files).
-   *
-   * Each subdirectory should contain an `AGENT.md` file with YAML-like
-   * frontmatter (name, description, tools, skills) and a body that serves
-   * as the system prompt.
-   *
-   * Sub-agents can be spawned by the main agent via the `spawn_subagent`
-   * tool. They run asynchronously; results are injected back as user
-   * messages.
-   *
-   * @example
-   * ```
-   * subagents/
-   * ├── code-reviewer/
-   * │   └── AGENT.md
-   * └── researcher/
-   *     └── AGENT.md
-   * ```
+   * Path to a directory of sub-agent definitions (AGENT.md files with
+   * YAML frontmatter). Each subdirectory = one agent. Default: `"./subagents/"`.
    */
   subAgentsDir?: string;
 
-  /**
-   * When true, the agent does NOT register SubAgentManager even if
-   * `subAgentsDir` is configured. Use this to explicitly disable
-   * sub-agent discovery (e.g. in fork agents that should only run
-   * read-only tools).
-   */
+  /** When true, skip SubAgentManager even if `subAgentsDir` is configured. */
   disableSubAgents?: boolean;
 
-  /**
-   * When true, `init()` skips auto-registration of side-effect tools
-   * (`remember`, `recall`, `skill`, `list_errors`). Use this for
-   * fork agents that should only have explicitly-configured tools.
-   */
+  /** When true, skip auto-registration of `remember`, `recall`, `skill`, `list_errors`. */
   skipAutoTools?: boolean;
 
   /**
-   * LLM provider for sub-agents spawned by the main agent.
-   *
-   * When set, sub-agents use this provider instead of the main agent's LLM.
-   * This enables model routing — use a cheaper/faster model for simple
-   * sub-agent tasks while keeping the main model for complex reasoning.
-   *
-   * When omitted, sub-agents inherit the main agent's `llm` provider.
-   *
-   * @example
-   * ```ts
-   * const agent = new ReActAgent({
-   *   llm: new OpenAIProvider({ model: "gpt-4o" }),
-   *   subAgentLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),
-   *   subAgentsDir: "./subagents",
-   * });
-   * ```
+   * LLM provider for sub-agents. When omitted, inherits the main `llm`
+   * (or `ModelRouter.forSubAgent()` if using a router). Use a cheaper model
+   * for sub-agent tasks to save cost.
    */
   subAgentLLM?: LLMProvider;
 
   /**
-   * LLM provider for post-execution skill precipitation.
-   *
-   * When set, the precipitation sub-agent uses this provider instead of the
-   * main agent's LLM. Precipitation reviews completed sessions to extract
-   * reusable skills — using a cheaper/faster model here saves cost on
-   * non-user-facing background work.
-   *
-   * When omitted and `llm` is a {@link ModelRouter}, the router's
-   * `forPrecipitation()` route is used. Otherwise falls back to `llm`.
-   *
-   * @example
-   * ```ts
-   * const agent = new ReActAgent({
-   *   llm: new OpenAIProvider({ model: "gpt-4o" }),
-   *   precipitationLLM: new OpenAIProvider({ model: "gpt-4o-mini" }),
-   *   precipitation: "post-hoc",
-   * });
-   * ```
+   * LLM provider for skill precipitation. When omitted, resolves via
+   * `ModelRouter.forPrecipitation()` or falls back to `llm`. Use a cheaper
+   * model — precipitation is background work.
    */
   precipitationLLM?: LLMProvider;
 
   /**
-   * Lifecycle hooks for sub-agents spawned by the main agent.
-   *
-   * These hooks are passed to every sub-agent created via `spawn_subagent`,
-   * enabling tracing, metrics, and logging of sub-agent execution. If not
-   * set, sub-agents run without hooks (their internal execution is invisible
-   * to the main agent's observers).
-   *
-   * Accepts a single {@link AgentHooks}, an array, or a factory function
-   * `(name, runId) => AgentHooks | AgentHooks[]` called each time a
-   * sub-agent is spawned — use the factory to create per-sub-agent
-   * {@link TraceLogger} instances for isolated trace files.
-   *
-   * **WARNING**: Be careful with hooks that spawn MORE sub-agents (e.g.
-   * {@link ReflectionHook}) — passing them here causes unbounded recursion.
-   * Only pass pure-observation hooks ({@link TraceLogger}, evaluators, etc.).
-   *
-   * @example
-   * ```ts
-   * const mainTrace = new TraceLogger({ sessionId: "main" });
-   * const agent = new ReActAgent({
-   *   llm: provider,
-   *   hooks: mainTrace,
-   *   subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId),
-   *   subAgentsDir: "./subagents",
-   * });
-   * ```
+   * Hooks for sub-agents. Accepts a single {@link AgentHooks}, an array, or a
+   * factory `(name, runId) => AgentHooks | AgentHooks[]`. **WARNING**: Do NOT
+   * pass hooks that spawn sub-agents (e.g. ReflectionHook) — unbounded recursion.
    */
-  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
+  subAgentHooks?:
+    | AgentHooks
+    | AgentHooks[]
+    | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
   /**
-   * RAG (Retrieval-Augmented Generation) configuration.
-   *
-   * When set, documents from `documentsDir` are indexed at startup and the
-   * `search_knowledge` tool is registered so the LLM can retrieve relevant
-   * context before answering.
-   *
-   * @example
-   * ```ts
-   * rag: {
-   *   documentsDir: "./docs",
-   *   embeddingProvider: new OpenAIEmbeddingProvider({ apiKey: "..." }),
-   *   topK: 5,
-   * }
-   * ```
+   * RAG configuration. When set, documents are indexed at startup and the
+   * `search_knowledge` tool is registered for context retrieval.
    */
   rag?: RAGConfig;
 
   /**
-   * Token budget configuration for session-level cost control.
-   * When set, the agent stops making LLM calls when cumulative token
-   * consumption exceeds `maxTotalTokens`. The budget resets on
-   * `clearConversation()` and `reset()`.
+   * Token budget for session-level cost control. Stops LLM calls when
+   * cumulative consumption exceeds `maxTotalTokens`. Resets on clear/reset.
    */
   tokenBudgetConfig?: TokenBudgetConfig;
 
   /**
-   * Enable parallel execution of tool calls within a single LLM response.
-   *
-   * When `true` (default), tool calls from the same LLM response that are
-   * all parallel-safe (no `sequential: true` marks) execute concurrently
-   * via `Promise.allSettled`. This reduces per-turn latency from
-   * `sum(latency)` to `max(latency)`.
-   *
-   * Set to `false` to always execute tools one at a time (legacy behaviour).
+   * Enable parallel tool execution. When `true` (default), parallel-safe
+   * tools in the same LLM response execute concurrently via `Promise.allSettled`,
+   * reducing per-turn latency from `sum(latency)` to `max(latency)`.
    */
   enableParallelToolExecution?: boolean;
 
-  /**
-   * Working directory for this agent.
-   *
-   * When set, sub-agents spawned by this agent receive this as their
-   * working directory so file operations and bash commands are scoped
-   * to the correct location.  Used by the OrchestratorAgent to point
-   * each sub-agent at its isolated git worktree.
-   */
+  /** Working directory scoped to sub-agents for file/bash operations. */
   workdir?: string;
 
   // ─── Skill Precipitation ─────────────────────────────────────────────
 
   /**
-   * Skill precipitation mode.
-   *
-   * After the agent completes a task, a sub-agent analyzes the session to
-   * extract reusable skills from successful patterns. These skills are
-   * written as SKILL.md files to `skillsDir` and become available for
-   * future sessions.
-   *
-   * - "off":       No precipitation (default).
-   * - "post-hoc":  After execution, fork a PrecipitateAgent to extract skills.
-   *
-   * Requires `skillsDir` to be set.
-   *
-   * Default: "off".
+   * Skill precipitation mode. After the agent completes a task, extracts
+   * reusable skills as SKILL.md files. Requires `skillsDir`. Default: `"off"`.
    */
   precipitation?: "off" | "post-hoc";
 
-  /**
-   * Maximum iterations for the precipitation sub-agent's ReAct loop.
-   * Default: 15.
-   */
+  /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 
   // ─── Memory Reflection ──────────────────────────────────────────────
 
   /**
-   * Memory reflection mode.
-   *
-   * After the agent completes a task, a sub-agent analyzes the session to
-   * extract lasting memories: user rules, project decisions, and preferences.
-   * These are persisted to {@link memoryDir} (default `.memory/`) and become
-   * available as context in future sessions.
-   *
-   * - "off":       No memory reflection (default).
-   * - "post-hoc":  After execution, fork a MemoryReflector to extract memories.
-   *
-   * Does NOT require any additional setup — MemoryManager is always created
-   * by the base Agent constructor.
-   *
-   * Default: "off".
+   * Memory reflection mode. After the agent completes a task, extracts
+   * lasting memories (rules, decisions, preferences) to `memoryDir`.
+   * Default: `"off"`.
    */
   memoryReflection?: "off" | "post-hoc";
 
-  /**
-   * Maximum iterations for the memory reflection sub-agent's ReAct loop.
-   * Default: 5.
-   */
+  /** Max iterations for the memory reflection sub-agent. Default: 5. */
   memoryReflectionMaxIterations?: number;
 
   /**
-   * LLM provider for post-hoc memory extraction.
-   *
-   * When set, this provider is used for the memory reflection sub-agent.
-   * When not set, the resolution order is:
-   * 1. `ModelRouter.forMemory()` if the main `llm` is a ModelRouter
-   * 2. Otherwise falls back to the main `llm`
-   *
-   * Use a cheaper/faster model here — memory extraction is a background
-   * task that shouldn't compete with the main conversation.
+   * LLM provider for memory reflection. When omitted, resolves via
+   * `ModelRouter.forMemory()` or falls back to `llm`. Use a cheaper
+   * model — memory extraction is background work.
    */
   memoryReflectorLLM?: LLMProvider;
+
+  /**
+   * LLM provider for post-hoc error reflection.
+   *
+   * When set, this provider is used for the ReflectionAgent fork.
+   * When not set, the resolution order is:
+   * 1. `ModelRouter.forReflection()` if the main `llm` is a ModelRouter
+   * 2. Otherwise falls back to the main `llm`
+   */
+  reflectionLLM?: LLMProvider;
 }
+
+/**
+ * Zod schema for validating {@link AgentConfig} at runtime.
+ *
+ * Catches invalid values (negative numbers, wrong types) at the boundary
+ * so internal code can trust the data without defensive checks.
+ */
+const AgentConfigSchema = z.object({
+  // ── Numbers ──────────────────────────────────────────────────────────
+  toolOutputMaxBytes: z.number().int().positive().optional(),
+  approvalTimeoutMs: z.number().int().positive().default(120_000),
+  toolRetryCount: z.number().int().nonnegative().optional(),
+  precipitationMaxIterations: z.number().int().positive().optional(),
+  memoryReflectionMaxIterations: z.number().int().positive().optional(),
+
+  // ── Strings ──────────────────────────────────────────────────────────
+  name: z.string().default("main"),
+  approvalTimeoutStrategy: z.enum(["deny", "allow"]).default("deny"),
+  subAgentsDir: z.string().default("./subagents/"),
+
+  // ── Booleans ─────────────────────────────────────────────────────────
+  enableParallelToolExecution: z.boolean().default(true),
+  disableSubAgents: z.boolean().default(false),
+  skipAutoTools: z.boolean().default(false),
+  enableCheckpointing: z.boolean().default(false),
+
+  // ── Arrays ───────────────────────────────────────────────────────────
+  tools: z.array(z.unknown()).nonempty().optional(),
+}).loose();
 
 /**
  * Abstract base Agent class.
@@ -623,8 +446,14 @@ export abstract class Agent {
   /** LLM provider for memory reflection (defaults to main llm if not set). */
   protected memoryReflectorLLM?: LLMProvider;
 
+  /** LLM provider for error reflection (defaults to main llm if not set). */
+  protected reflectionLLM?: LLMProvider;
+
   /** Hooks for sub-agents (from AgentConfig). */
-  protected subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
+  protected subAgentHooks?:
+    | AgentHooks
+    | AgentHooks[]
+    | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
   /** Skills directory path (from AgentConfig). */
   protected skillsDir?: string;
@@ -633,121 +462,134 @@ export abstract class Agent {
   protected workdir?: string;
 
   constructor(config: AgentConfig) {
+    // Validate & apply defaults at the boundary — internal code trusts this.
+    const cfg = AgentConfigSchema.parse(config) as unknown as AgentConfig;
     this._cancelled = false;
-    this.llm = config.llm;
-    this.agentName = config.name ?? "main";
-    this.logger = config.logger ?? new ConsoleLogger();
-    this.onToolApproval = config.onToolApproval;
-    this.approvalTimeoutMs = config.approvalTimeoutMs ?? 120_000;
-    this.approvalTimeoutStrategy = config.approvalTimeoutStrategy ?? "deny";
-    this.enableParallelToolExecution = config.enableParallelToolExecution ?? true;
-    this.contextManager = config.contextManager ?? new ContextManager(undefined, this.logger);
+    this.llm = cfg.llm;
+    this.agentName = cfg.name!;
+    this.logger = cfg.logger ?? new ConsoleLogger();
+    this.onToolApproval = cfg.onToolApproval;
+    this.approvalTimeoutMs = cfg.approvalTimeoutMs!;
+    this.approvalTimeoutStrategy = cfg.approvalTimeoutStrategy!;
+    this.enableParallelToolExecution = cfg.enableParallelToolExecution!;
+    this.contextManager =
+      cfg.contextManager ?? new ContextManager(undefined, this.logger);
 
     // Prefer toolRegistry; fall back to plain tools array
-    if (config.toolRegistry) {
-      this.toolRegistry = config.toolRegistry;
+    if (cfg.toolRegistry) {
+      this.toolRegistry = cfg.toolRegistry;
     } else {
-      const truncator = (config.toolOutputMaxBytes && config.toolOutputMaxBytes > 0)
-        ? new ToolOutputTruncator(config.toolOutputMaxBytes)
+      const truncator = cfg.toolOutputMaxBytes
+        ? new ToolOutputTruncator(cfg.toolOutputMaxBytes)
         : undefined;
       this.toolRegistry = new ToolRegistry(
-        config.toolRetryCount,
-        config.toolErrorTracker,
+        cfg.toolRetryCount,
+        cfg.toolErrorTracker,
         truncator,
       );
-      if (config.tools && config.tools.length > 0) {
-        this.toolRegistry.registerMany(config.tools);
+      if (cfg.tools) {
+        this.toolRegistry.registerMany(cfg.tools);
       }
     }
 
     // Skill manager — file-based progressive disclosure
-    if (config.skillManager) {
-      this.skillManager = config.skillManager;
+    if (cfg.skillManager) {
+      this.skillManager = cfg.skillManager;
     } else {
       this.skillManager = new SkillManager(this.logger);
     }
 
     // Register file-based skills if a directory is configured
-    if (config.skillsDir) {
-      this.skillManager.registerFromDirectory(config.skillsDir);
+    if (cfg.skillsDir) {
+      this.skillManager.registerFromDirectory(cfg.skillsDir);
     }
 
     // Memory — long-term facts, rules, and project context
-    this.memoryManager = new MemoryManager(config.memoryDir);
+    this.memoryManager = new MemoryManager(cfg.memoryDir);
 
     // Project rules — user-authored, always injected
-    this.projectRules = new ProjectRules(config.rulesPath, this.logger);
+    this.projectRules = new ProjectRules(cfg.rulesPath, this.logger);
 
     // Store core system prompt and set it
-    this.coreSystemPrompt = config.systemPrompt ?? "";
+    this.coreSystemPrompt = cfg.systemPrompt ?? "";
     if (this.coreSystemPrompt) {
       this.contextManager.setSystemMessage(this.coreSystemPrompt);
     }
 
     // Session manager — only created when session ID or session dir is provided
-    if (config.sessionId || config.sessionDir) {
+    if (cfg.sessionId || cfg.sessionDir) {
       this.sessionManager = new SessionManager({
-        sessionId: config.sessionId,
-        sessionDir: config.sessionDir,
+        sessionId: cfg.sessionId,
+        sessionDir: cfg.sessionDir,
       });
     }
-    this.checkpointingEnabled = config.enableCheckpointing ?? false;
-    // Auto-load mcp.json from project root when not explicitly configured.
-    // Skip auto-discovery for sub-agents (they inherit MCP tools from the
-    // parent's ToolRegistry — no need to re-connect).
-    const effectiveMcpPath = config.toolRegistry
-      ? undefined  // sub-agent: parent's ToolRegistry already has MCP tools
-      : (config.mcpConfigPath ?? "mcp.json");
+    this.checkpointingEnabled = cfg.enableCheckpointing!;
+    this.subAgentsDir = cfg.subAgentsDir!;
+    this.disableSubAgents = cfg.disableSubAgents!;
+    this.skipAutoTools = cfg.skipAutoTools!;
+
+    // Auto-load mcp.json from project root; skip for sub-agents
+    // (they inherit MCP tools from the parent's ToolRegistry).
+    const effectiveMcpPath = cfg.toolRegistry
+      ? undefined
+      : (cfg.mcpConfigPath ?? "mcp.json");
     this.mcpServerConfigs = Agent.loadMcpConfig(
       effectiveMcpPath,
-      config.mcpServers,
+      cfg.mcpServers,
       this.logger,
     );
-    this.subAgentsDir = config.subAgentsDir ?? "./subagents/";
-    this.disableSubAgents = config.disableSubAgents ?? false;
-    this.skipAutoTools = config.skipAutoTools ?? false;
-    this.subAgentHooks = config.subAgentHooks;
-    this.skillsDir = config.skillsDir;
-    this.workdir = config.workdir;
-    this.ragConfig = config.rag;
+    this.subAgentHooks = cfg.subAgentHooks;
+    this.skillsDir = cfg.skillsDir;
+    this.workdir = cfg.workdir;
+    this.ragConfig = cfg.rag;
 
     // Resolve sub-agent LLM:
     // 1. Explicit `subAgentLLM` → use it directly
     // 2. `llm` is a ModelRouter → use router.forSubAgent()
     // 3. Fallback → sub-agents share the main `llm`
-    if (config.subAgentLLM) {
-      this.subAgentLLM = config.subAgentLLM;
-    } else if (config.llm instanceof ModelRouter) {
-      this.subAgentLLM = config.llm.forSubAgent();
+    if (cfg.subAgentLLM) {
+      this.subAgentLLM = cfg.subAgentLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.subAgentLLM = cfg.llm.forSubAgent();
     }
 
     // Resolve precipitation LLM:
     // 1. Explicit `precipitationLLM` → use it directly
     // 2. `llm` is a ModelRouter → use router.forPrecipitation()
     // 3. Fallback → precipitation shares the main `llm`
-    if (config.precipitationLLM) {
-      this.precipitationLLM = config.precipitationLLM;
-    } else if (config.llm instanceof ModelRouter) {
-      this.precipitationLLM = config.llm.forPrecipitation();
+    if (cfg.precipitationLLM) {
+      this.precipitationLLM = cfg.precipitationLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.precipitationLLM = cfg.llm.forPrecipitation();
     }
 
     // Resolve memory reflector LLM:
     // 1. Explicit `memoryReflectorLLM` → use it directly
     // 2. `llm` is a ModelRouter → use router.forMemory()
     // 3. Fallback → memory reflection shares the main `llm`
-    if (config.memoryReflectorLLM) {
-      this.memoryReflectorLLM = config.memoryReflectorLLM;
-    } else if (config.llm instanceof ModelRouter) {
-      this.memoryReflectorLLM = config.llm.forMemory();
+    if (cfg.memoryReflectorLLM) {
+      this.memoryReflectorLLM = cfg.memoryReflectorLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.memoryReflectorLLM = cfg.llm.forMemory();
+    }
+
+    // Resolve reflection LLM:
+    // 1. Explicit `reflectionLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forReflection()
+    // 3. Fallback → reflection shares the main `llm`
+    if (cfg.reflectionLLM) {
+      this.reflectionLLM = cfg.reflectionLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.reflectionLLM = cfg.llm.forReflection();
     }
 
     // Token budget — session-level cost control
-    if (config.tokenBudgetConfig) {
-      this.tokenBudget = new TokenBudget(config.tokenBudgetConfig);
+    if (cfg.tokenBudgetConfig) {
+      this.tokenBudget = new TokenBudget(cfg.tokenBudgetConfig);
     }
 
     // ── Hooks ──────────────────────────────────────────────────────────────
-    const rawHooks = config.hooks ?? [];
+    const rawHooks = cfg.hooks ?? [];
     this.hooks = Array.isArray(rawHooks) ? rawHooks : [rawHooks];
 
     // Auto-derive subAgentHooks from a TraceLogger in this.hooks when the
@@ -757,10 +599,13 @@ export abstract class Agent {
     // avoid an import dependency on the trace package from core.
     if (!this.subAgentHooks) {
       const traceLogger = this.hooks.find(
-        (h) => typeof (h as Record<string, unknown>).createChildTrace === "function",
+        (h) =>
+          typeof (h as Record<string, unknown>).createChildTrace === "function",
       );
       if (traceLogger) {
-        const createChild = (traceLogger as Record<string, Function>).createChildTrace.bind(traceLogger);
+        const createChild = (
+          traceLogger as Record<string, Function>
+        ).createChildTrace.bind(traceLogger);
         this.subAgentHooks = (name: string, runId: string) =>
           createChild(name, runId) as AgentHooks | AgentHooks[];
       }
@@ -768,7 +613,7 @@ export abstract class Agent {
 
     // ── User Preferences ─────────────────────────────────────────────────
     this.preferenceManager = new PreferenceManager(
-      { filePath: config.preferencesPath ?? ".kagent/preferences.md" },
+      { filePath: cfg.preferencesPath ?? ".kagent/preferences.md" },
       this.logger,
     );
   }
@@ -793,14 +638,7 @@ export abstract class Agent {
   getToolRegistry(): ToolRegistry {
     return this.toolRegistry;
   }
-
-  /**
-   * Fire the {@link AgentHooks.onFinish} hook for every registered observer.
-   *
-   * Each hook is called in a fire-and-forget fashion — promise rejections
-   * are caught and logged so a failing hook (e.g. background reflection)
-   * never crashes the main agent loop.
-   */
+  /** Fire the `onFinish` hook for every registered observer (fire-and-forget). */
   protected fireOnFinish(answer: string): void {
     for (const h of this.hooks) {
       Promise.resolve(h.onFinish?.(answer)).catch((err: unknown) =>
@@ -813,20 +651,8 @@ export abstract class Agent {
   }
 
   /**
-   * Fork a lightweight ReActAgent to run a self-contained task.
-   *
-   * The fork runs inline (not via SubAgentManager), uses this agent's LLM
-   * by default, and returns the final answer as a string. Ideal for
-   * post-hoc analysis, extraction, or verification that should not
-   * modify the main agent's context.
-   *
-   * @example
-   * ```ts
-   * const summary = await this.fork("Summarize the conversation above.", {
-   *   systemPrompt: "You are a summarizer.",
-   *   maxIterations: 3,
-   * });
-   * ```
+   * Fork a lightweight ReActAgent for a self-contained task. Runs inline
+   * (not via SubAgentManager), uses this agent's LLM by default.
    */
   protected async fork(
     input: string,
@@ -839,23 +665,17 @@ export abstract class Agent {
     },
   ): Promise<string> {
     const { forkAgent } = await import("./fork.js");
-    return forkAgent(input, { llm: this.llm, ...options });
+    return forkAgent(input, {
+      llm: this.llm,
+      ...options,
+      signal: this._abortController?.signal,
+    });
   }
 
   /**
-   * Stream the agent's response, yielding text chunks as they arrive.
-   *
-   * Uses `chatStream()` under the hood for the LLM generation phase.
-   * Tool calls are handled transparently — when the LLM requests tools,
-   * they're executed and results are fed back into context before the
-   * next LLM call (non-streamed).
-   *
-   * Usage:
-   * ```ts
-   * for await (const chunk of agent.stream("Hello!")) {
-   *   process.stdout.write(chunk);
-   * }
-   * ```
+   * Stream the agent's response. Tool calls are handled transparently —
+   * when the LLM requests tools they're executed and results are fed back
+   * before the next LLM call.
    */
   async *stream(input: string): AsyncIterable<string> {
     yield* this.executeStream(input);
@@ -879,8 +699,7 @@ export abstract class Agent {
   }
 
   /**
-   * Activate a skill by name and rebuild the system prompt to include it.
-   *
+   * Activate a skill by name and rebuild the system prompt.
    * @returns true if the skill was newly activated.
    */
   activateSkill(name: string): boolean {
@@ -902,33 +721,16 @@ export abstract class Agent {
     return deactivated;
   }
 
-  /**
-   * Register an additional lifecycle hook.
-   * Multiple hooks can be registered to observe agent execution.
-   */
+  /** Register an additional lifecycle hook. */
   addHook(hook: AgentHooks): void {
     this.hooks.push(hook);
   }
 
   /**
-   * Rebuild the system message.
-   *
-   * Sections are assembled in priority order:
-   *   1. Core prompt           (agent identity + instructions)
-   *   2. Project rules         (user-authored, always injected)
-   *   3. Preferences           (user-set language / verbosity / style)
-   *   4. Error recovery rules  (tool failure recovery guidance)
-   *   5. Long-term memories    (index of persisted facts + rules)
-   *   6. Available skills      (inactive skills the LLM can activate)
-   *   7. Active skill content  (full instructions for activated skills)
-   *
-   * Empty sections are silently skipped.
-   */
-  /**
-   * Build the full system prompt from all sections.
-   *
-   * Subclasses that need to append extra content (e.g. plan progress)
-   * should call this and concatenate, instead of duplicating the assembly.
+   * Build the full system prompt by concatenating all sections in priority
+   * order: core prompt → rules → preferences → memories → skills. Empty
+   * sections are silently skipped. Subclasses append extra content by
+   * calling this and concatenating, rather than duplicating the assembly.
    */
   protected buildSystemPrompt(): string {
     const sections = [
@@ -956,12 +758,7 @@ export abstract class Agent {
     await this.contextManager.checkAndCompress(this.llm);
   }
 
-  /**
-   * Reload preferences from disk if the file was manually edited.
-   * Called once at the start of each run so edits between runs take
-   * effect without restarting the agent process — but they won't
-   * change mid-run behavior.
-   */
+  /** Reload preferences from disk if manually edited between runs. */
   protected reloadPreferencesIfChanged(): boolean {
     if (this.preferenceManager?.reloadIfChanged()) {
       this.rebuildSystemPrompt();
@@ -970,10 +767,7 @@ export abstract class Agent {
     return false;
   }
 
-  /**
-   * Re-scan the skills directory for new SKILL.md files added between runs.
-   * New skills are registered and become available to the LLM immediately.
-   */
+  /** Re-scan skills directory for new SKILL.md files added between runs. */
   protected reloadSkillsFromDirectory(): boolean {
     if (!this.skillsDir) return false;
     const added = this.skillManager.reloadFromDirectory(this.skillsDir);
@@ -984,11 +778,7 @@ export abstract class Agent {
     return false;
   }
 
-  /**
-   * Re-read the MEMORY.md index from disk if it was manually edited
-   * between runs. The index is a lightweight list of memory names +
-   * descriptions — full content is loaded on demand via the recall tool.
-   */
+  /** Re-read MEMORY.md index if manually edited between runs. */
   protected reloadMemoryIfChanged(): boolean {
     if (this.memoryManager.reloadIfChanged()) {
       this.rebuildSystemPrompt();
@@ -999,10 +789,7 @@ export abstract class Agent {
 
   /**
    * Load MCP server config from a JSON file, merge with inline overrides.
-   *
-   * File-based config is the recommended approach for persistent, shareable
-   * MCP configuration. Inline `mcpServers` entries with the same server
-   * name take precedence over file entries.
+   * Inline entries with the same server name take precedence.
    *
    * @param configPath  Path to the JSON config file (optional).
    * @param inline      Inline MCP server configs from AgentConfig (optional).
@@ -1022,11 +809,17 @@ export abstract class Agent {
         const raw = fs.readFileSync(resolved, "utf-8");
         fileConfig = JSON.parse(raw);
         if (typeof fileConfig !== "object" || fileConfig === null) {
-          logger.warn("MCP", `"${resolved}" is not a valid JSON object — ignoring.`);
+          logger.warn(
+            "MCP",
+            `"${resolved}" is not a valid JSON object — ignoring.`,
+          );
           fileConfig = {};
         }
       } catch (err) {
-        logger.warn("MCP", `Failed to load MCP config from "${resolved}": ${err instanceof Error ? err.message : err}`);
+        logger.warn(
+          "MCP",
+          `Failed to load MCP config from "${resolved}": ${err instanceof Error ? err.message : err}`,
+        );
         fileConfig = {};
       }
     }
@@ -1038,10 +831,7 @@ export abstract class Agent {
     return merged;
   }
 
-  /**
-   * Incrementally connect to MCP servers that were added to the config
-   * since the last run. Already-connected servers are left untouched.
-   */
+  /** Connect to MCP servers added since last run. */
   protected async reconnectMCPIfNeeded(): Promise<void> {
     if (!this.mcpClientManager || !this.mcpServerConfigs) return;
 
@@ -1059,7 +849,7 @@ export abstract class Agent {
       this.logger.warn(
         "MCP",
         `${errors.length} new server(s) failed to connect: ` +
-        errors.map((e) => e.serverName).join(", "),
+          errors.map((e) => e.serverName).join(", "),
       );
     }
   }
@@ -1069,10 +859,10 @@ export abstract class Agent {
    * Picks up changes made between conversation turns.
    */
   protected async reloadDynamicResources(): Promise<void> {
-    this.reloadPreferencesIfChanged();  // rebuilds internally if changed
+    this.reloadPreferencesIfChanged(); // rebuilds internally if changed
     const rulesChanged = this.projectRules.reloadIfChanged();
-    this.reloadSkillsFromDirectory();   // rebuilds internally if changed
-    this.reloadMemoryIfChanged();       // rebuilds internally if changed
+    this.reloadSkillsFromDirectory(); // rebuilds internally if changed
+    this.reloadMemoryIfChanged(); // rebuilds internally if changed
 
     if (rulesChanged) {
       this.rebuildSystemPrompt();
@@ -1081,11 +871,7 @@ export abstract class Agent {
     await this.reconnectMCPIfNeeded();
   }
 
-  /**
-   * After a resume, recover results from sub-agents that were cancelled
-   * mid-run. Completed results are injected into context so the LLM can
-   * see them; still-running sub-agents get a notice.
-   */
+  /** After resume, inject orphaned sub-agent results into context. */
   protected recoverOrphanedSubAgentResults(): void {
     if (!this.subAgentManager) return;
 
@@ -1102,18 +888,13 @@ export abstract class Agent {
     if (stillRunning > 0) {
       const msg = Message.user(
         `[System] ${stillRunning} sub-agent(s) from the previous session are still running. ` +
-        `Their results will appear when ready. Do not re-spawn them.`,
+          `Their results will appear when ready. Do not re-spawn them.`,
       );
       this.contextManager.addMessage(msg.toDict());
     }
   }
 
-  /**
-   * Validate that user input won't overwhelm the context window.
-   *
-   * Returns a user-facing error string if the input is too large,
-   * or `null` if it passes the check.
-   */
+  /** Returns an error string if input exceeds 80% of context window, else `null`. */
   protected validateInputSize(input: string): string | null {
     const { maxTokens } = this.contextManager.getState();
     const inputTokens = countTokens(input);
@@ -1134,19 +915,11 @@ export abstract class Agent {
   }
 
   /**
-   * Check whether a tool that requires approval should be executed.
-   *
-   * @returns `true` if approved, `false` if denied (or no callback configured).
-   */
-  /**
    * Check whether a tool requiring human approval should be executed.
    *
-   * Waits for the {@link onToolApproval} callback, but enforces a timeout
-   * so the agent never hangs indefinitely waiting for a human who may be
-   * away. Also respects the agent-wide {@link AbortSignal} so cancelling
-   * the session interrupts any pending approval.
-   *
-   * @returns `true` if approved, `false` if denied / timed out / cancelled.
+   * Waits for the {@link onToolApproval} callback with a timeout; respects
+   * the agent-wide {@link AbortSignal} so cancellation interrupts any
+   * pending approval.
    */
   protected async checkToolApproval(
     toolName: string,
@@ -1202,7 +975,7 @@ export abstract class Agent {
         this.logger.warn(
           "Approval",
           `Timeout (${this.approvalTimeoutMs}ms) waiting for approval of "${toolName}" — ` +
-          `strategy: ${this.approvalTimeoutStrategy}.`,
+            `strategy: ${this.approvalTimeoutStrategy}.`,
         );
         return this.approvalTimeoutStrategy === "allow";
       }
@@ -1226,29 +999,15 @@ export abstract class Agent {
       // Clean up listeners to prevent accumulation on the shared AbortSignal
       // across many tool-approval calls in a single agent run (Node.js warns at >10).
       if (timeoutId !== undefined) clearTimeout(timeoutId);
-      if (onAgentAbort && agentSignal) agentSignal.removeEventListener("abort", onAgentAbort);
+      if (onAgentAbort && agentSignal)
+        agentSignal.removeEventListener("abort", onAgentAbort);
     }
   }
 
   /**
-   * Execute a batch of tool calls from a single LLM response.
-   *
-   * When `enableParallelToolExecution` is true and all tools in the batch are
-   * parallel-safe (`sequential` is not set), tools execute concurrently via
-   * `Promise.allSettled`. Otherwise, they execute one at a time (serial).
-   *
-   * Handles the full lifecycle for each tool call:
-   * 1. Parse JSON arguments (malformed args → error result, no execution)
-   * 2. HITL approval check for tools marked `requireApproval`
-   * 3. Hook notifications (`onToolStart`, `onToolEnd`, `onToolError`)
-   * 4. Execution via `ToolRegistry.execute()`
-   * 5. Context injection (all results added after execution completes)
-   * 6. Post-execution: sub-agent spawn tracking, MCP failure warnings
-   *
-   * @param toolCalls       The tool calls from the LLM response.
-   * @param mcpWarnedServers Set tracking which MCP servers have already
-   *                         been warned about in this batch.
-   * @returns Whether any tool in the batch failed.
+   * Execute a batch of tool calls. Handles JSON parse, HITL approval,
+   * hook notifications, parallel/serial execution, context injection,
+   * and MCP failure warnings.
    */
   protected async executeToolCallsBatch(
     toolCalls: ToolCall[],
@@ -1276,7 +1035,8 @@ export abstract class Agent {
             `Please re-invoke the tool with correctly formatted JSON arguments.`,
           "retryable",
         );
-        for (const h of this.hooks) h.onToolError?.(tc.function.name, result.content, tc.id);
+        for (const h of this.hooks)
+          h.onToolError?.(tc.function.name, result.content, tc.id);
         slots.push({ toolCall: tc, args: {}, result });
         continue;
       }
@@ -1284,9 +1044,14 @@ export abstract class Agent {
       // 1b. JSON Schema validation against the tool's parameter definition
       const tool = this.toolRegistry.getTool(tc.function.name);
       if (tool) {
-        const validationError = validateToolArgs(tc.function.name, tool.parameters, args);
+        const validationError = validateToolArgs(
+          tc.function.name,
+          tool.parameters,
+          args,
+        );
         if (validationError) {
-          for (const h of this.hooks) h.onToolError?.(tc.function.name, validationError.content, tc.id);
+          for (const h of this.hooks)
+            h.onToolError?.(tc.function.name, validationError.content, tc.id);
           slots.push({ toolCall: tc, args, result: validationError });
           continue;
         }
@@ -1311,7 +1076,12 @@ export abstract class Agent {
               `Do NOT retry this tool. Find a different approach.`,
             "fatal",
           );
-          for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+          for (const h of this.hooks)
+            h.onToolError?.(
+              slot.toolCall.function.name,
+              slot.result.content,
+              slot.toolCall.id,
+            );
         }
       }
     }
@@ -1332,7 +1102,12 @@ export abstract class Agent {
       // Log and fire hooks before concurrent execution
       for (const slot of executable) {
         this.logger.info("Action", slot.toolCall.function.name);
-        for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
+        for (const h of this.hooks)
+          h.onToolStart?.(
+            slot.toolCall.function.name,
+            slot.args,
+            slot.toolCall.id,
+          );
       }
 
       // Execute all in parallel.
@@ -1348,9 +1123,19 @@ export abstract class Agent {
           slot.result = result;
 
           if (result.success) {
-            for (const h of this.hooks) h.onToolEnd?.(slot.toolCall.function.name, result.content, slot.toolCall.id);
+            for (const h of this.hooks)
+              h.onToolEnd?.(
+                slot.toolCall.function.name,
+                result.content,
+                slot.toolCall.id,
+              );
           } else {
-            for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, result.content, slot.toolCall.id);
+            for (const h of this.hooks)
+              h.onToolError?.(
+                slot.toolCall.function.name,
+                result.content,
+                slot.toolCall.id,
+              );
           }
         }),
       );
@@ -1358,7 +1143,12 @@ export abstract class Agent {
       // Serial path (legacy behaviour or forced by sequential tools)
       for (const slot of executable) {
         this.logger.info("Action", slot.toolCall.function.name);
-        for (const h of this.hooks) h.onToolStart?.(slot.toolCall.function.name, slot.args, slot.toolCall.id);
+        for (const h of this.hooks)
+          h.onToolStart?.(
+            slot.toolCall.function.name,
+            slot.args,
+            slot.toolCall.id,
+          );
 
         slot.result = await this.toolRegistry.execute(
           slot.toolCall.function.name,
@@ -1366,9 +1156,19 @@ export abstract class Agent {
         );
 
         if (slot.result.success) {
-          for (const h of this.hooks) h.onToolEnd?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+          for (const h of this.hooks)
+            h.onToolEnd?.(
+              slot.toolCall.function.name,
+              slot.result.content,
+              slot.toolCall.id,
+            );
         } else {
-          for (const h of this.hooks) h.onToolError?.(slot.toolCall.function.name, slot.result.content, slot.toolCall.id);
+          for (const h of this.hooks)
+            h.onToolError?.(
+              slot.toolCall.function.name,
+              slot.result.content,
+              slot.toolCall.id,
+            );
         }
       }
     }
@@ -1434,12 +1234,8 @@ export abstract class Agent {
   }
 
   /**
-   * Check whether the token budget allows another LLM call.
-   *
-   * @param estimatedInputTokens  Approximate tokens in the upcoming request
-   *                              (system prompt + context messages).
-   * @returns A user-facing error string if the budget is exhausted,
-   *          or `null` if the call can proceed.
+   * Returns an error string if the token budget is exhausted, else `null`.
+   * Warns at 80% consumption.
    */
   protected checkTokenBudget(estimatedInputTokens: number): string | null {
     if (!this.tokenBudget) return null;
@@ -1457,8 +1253,8 @@ export abstract class Agent {
     if (this.tokenBudget.shouldWarn()) {
       this.logger.warn(
         "TokenBudget",
-        `Warning: ${Math.round(status.totalTokensUsed / status.maxTotalTokens * 100)}% of budget used ` +
-        `(${status.totalTokensUsed.toLocaleString()}/${status.maxTotalTokens.toLocaleString()} tokens).`,
+        `Warning: ${Math.round((status.totalTokensUsed / status.maxTotalTokens) * 100)}% of budget used ` +
+          `(${status.totalTokensUsed.toLocaleString()}/${status.maxTotalTokens.toLocaleString()} tokens).`,
       );
     }
 
@@ -1467,14 +1263,7 @@ export abstract class Agent {
 
   // ─── Cancellation ────────────────────────────────────────────────────
 
-  /**
-   * Cancel the current run.
-   *
-   * Aborts any in-flight LLM request via the AbortController, sets the
-   * cancellation flag, and cancels all running sub-agents. The agent loop
-   * will save a "cancelled" checkpoint and exit at its next iteration.
-   * The session is preserved on disk and can be resumed later.
-   */
+  /** Cancel the current run: abort in-flight requests, cancel sub-agents. */
   cancel(): void {
     // Abort the in-flight LLM request first so the agent doesn't keep
     // waiting for a response that's about to be discarded anyway.
@@ -1492,10 +1281,7 @@ export abstract class Agent {
 
   // ─── Session Persistence ─────────────────────────────────────────────
 
-  /**
-   * Build a base SessionState from the current agent state.
-   * Subclasses override this to include agent-specific state (e.g. plan).
-   */
+  /** Build a base SessionState. Subclasses add agent-specific fields. */
   protected buildBaseSessionState(status: SessionStatus): SessionState {
     return {
       sessionId: this.sessionManager?.getSessionId() ?? "unknown",
@@ -1519,14 +1305,8 @@ export abstract class Agent {
   }
 
   /**
-   * Handle an LLMNetworkError: save an interrupted checkpoint if
-   * checkpointing is enabled, and return a user-facing message with
-   * resume instructions.
-   *
-   * @param err               The network error that occurred.
-   * @param iteration         The current iteration number (for the log).
-   * @param resumeInstruction What the user should type to resume
-   *                          (e.g. "continue with my previous request").
+   * Handle an LLMNetworkError: save checkpoint (if enabled) and return a
+   * user-facing message with resume instructions.
    */
   protected handleNetworkError(
     err: LLMNetworkError,
@@ -1539,10 +1319,7 @@ export abstract class Agent {
 
     const sid = this.sessionManager?.getSessionId() ?? "unknown";
 
-    this.logger.error(
-      "Network Error",
-      `${err.cause}: ${err.message}`,
-    );
+    this.logger.error("Network Error", `${err.cause}: ${err.message}`);
 
     if (this.checkpointingEnabled && this.sessionManager) {
       return (
@@ -1562,18 +1339,15 @@ export abstract class Agent {
   }
 
   /**
-   * Restore agent state from a previously saved session.
-   *
-   * Loads the session file, restores the system prompt and message history
-   * into the context manager.
-   *
-   * @throws if the session is not found or is corrupt.
+   * Restore agent state from a saved session. Validates agent type
+   * compatibility.
+   * @throws if the session is not found, corrupt, or type-mismatch.
    */
   protected loadAndRestoreSession(sessionId: string): SessionState {
     if (!this.sessionManager) {
       throw new Error(
         "Cannot resume: no SessionManager configured. " +
-        "Pass `sessionId` or `sessionDir` to the agent constructor."
+          "Pass `sessionId` or `sessionDir` to the agent constructor.",
       );
     }
 
@@ -1587,7 +1361,7 @@ export abstract class Agent {
     if (state.agentType !== expectedType) {
       throw new Error(
         `Session "${sessionId}" was created by a ${state.agentType} agent, ` +
-        `but this agent is type "${expectedType}". Cannot resume.`
+          `but this agent is type "${expectedType}". Cannot resume.`,
       );
     }
 
@@ -1614,70 +1388,34 @@ export abstract class Agent {
 
   // ─── Conversation Lifecycle ─────────────────────────────────────────
 
-  /**
-   * Clear the current conversation history and reset the context.
-   *
-   * The system prompt (core prompt + preferences + skills) is preserved
-   * so the agent can start a fresh conversation with the same setup.
-   * Use this to begin a new topic without creating a new agent instance.
-   */
+  /** Clear conversation history (preserves system prompt & config). */
   clearConversation(): void {
     this.contextManager.clear();
     this.tokenBudget?.reset();
   }
 
-  /**
-   * Continue the current conversation with a follow-up input.
-   *
-   * Equivalent to `run()` but conveys the semantics of a multi-turn
-   * conversation continuation. Messages from previous calls are preserved
-   * in context, so the LLM sees the full conversation history.
-   *
-   * @param input The follow-up message from the user.
-   * @returns The agent's response.
-   */
+  /** Continue the current conversation with a follow-up input. */
   async chat(input: string): Promise<string> {
     return this.run(input);
   }
 
-  /**
-   * Start a new topic with a fresh conversation.
-   *
-   * Clears the message history (preserving the system prompt and
-   * configuration) and runs the input as the first message of a
-   * new conversation. The token budget is also reset.
-   *
-   * @param input The first message of the new topic.
-   * @returns The agent's response.
-   */
+  /** Start a new topic: clears history, resets budget, runs input. */
   async newTopic(input: string): Promise<string> {
     this.clearConversation();
     return this.run(input);
   }
 
-  /**
-   * The number of messages in the current conversation (excluding the
-   * system message). Use this to check whether there is an active
-   * conversation or to monitor context growth.
-   */
+  /** Number of messages in the current conversation (excludes system message). */
   get conversationLength(): number {
     return this.contextManager.getMessages().length;
   }
 
-  /**
-   * Get the cumulative token consumption and cost for the current session.
-   * Returns null if no `tokenBudgetConfig` was configured.
-   */
+  /** Cumulative token consumption for the current session, or null. */
   getSessionCost() {
     return this.tokenBudget?.getSessionCost() ?? null;
   }
 
-  /**
-   * Reset the agent to its initial state.
-   *
-   * Clears conversation history, session, and all runtime state.
-   * After calling reset(), the agent behaves as if newly constructed.
-   */
+  /** Reset agent to initial state — clears history, session, and runtime state. */
   reset(): void {
     this._abortController?.abort();
     this._cancelled = false;
@@ -1690,10 +1428,7 @@ export abstract class Agent {
     }
   }
 
-  /**
-   * Return the agent type identifier for session metadata.
-   * Subclasses override this ("react" or "plan-solve").
-   */
+  /** Agent type identifier for session metadata ("react" or "plan-solve"). */
   protected getAgentType(): AgentType {
     return "react";
   }
@@ -1701,16 +1436,8 @@ export abstract class Agent {
   // ─── MCP / Async Initialization ─────────────────────────────────────────
 
   /**
-   * Initialize async resources (MCP connections, tool discovery).
-   *
-   * Idempotent — safe to call multiple times; the actual work happens
-   * only on the first invocation. Subclasses SHOULD call `await this.init()`
-   * at the start of `run()`.
-   *
-   * If MCP servers are configured:
-   * 1. Creates an McpClientManager bound to the tool registry.
-   * 2. Connects to each server and registers discovered tools.
-   * 3. Logs warnings for any servers that fail to connect.
+   * Initialize async resources: MCP connections, sub-agent registry, RAG,
+   * and auto-registered tools. Idempotent — safe to call multiple times.
    */
   protected async init(): Promise<void> {
     if (this._mcpInitialized) return;
@@ -1718,14 +1445,18 @@ export abstract class Agent {
 
     // ── Error tracking tool ──────────────────────────────────────────
     if (!this.skipAutoTools) {
-      try { this.toolRegistry.register(createListErrorsTool(this.toolRegistry)); } catch { this.logger.debug("Init", `"list_errors" already registered — keeping existing.`); }
+      this.safeRegister(createListErrorsTool(this.toolRegistry));
     }
 
     // ── MCP connections ──────────────────────────────────────────────
     if (this.mcpServerConfigs && Object.keys(this.mcpServerConfigs).length > 0) {
-      this.mcpClientManager = new McpClientManager(this.toolRegistry, this.logger);
-      const errors = await this.mcpClientManager.connectAll(this.mcpServerConfigs);
-
+      this.mcpClientManager = new McpClientManager(
+        this.toolRegistry,
+        this.logger,
+      );
+      const errors = await this.mcpClientManager.connectAll(
+        this.mcpServerConfigs,
+      );
       if (errors.length > 0) {
         this.logger.warn(
           "MCP",
@@ -1738,15 +1469,22 @@ export abstract class Agent {
     if (!this.disableSubAgents && this.subAgentsDir) {
       this.subAgentManager = new SubAgentManager();
       this.subAgentManager.setLogger(this.logger);
-      this.subAgentManager.bind(this.llm, this.toolRegistry, this.skillManager, this.skillsDir, undefined, undefined, this.subAgentLLM, this.subAgentHooks);
+      this.subAgentManager.bind(
+        this.llm,
+        this.toolRegistry,
+        this.skillManager,
+        this.skillsDir,
+        undefined,
+        undefined,
+        this.subAgentLLM,
+        this.subAgentHooks,
+      );
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 
-      // Register sub-agent tools into the tool registry
-      try { this.toolRegistry.register(createListSubagentsTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"list_subagents" already registered — keeping existing.`); }
-      try { this.toolRegistry.register(createSpawnSubagentTool(this.subAgentManager)); } catch { this.logger.debug("Init", `"spawn_subagent" already registered — keeping existing.`); }
+      this.safeRegister(createListSubagentsTool(this.subAgentManager));
+      this.safeRegister(createSpawnSubagentTool(this.subAgentManager));
 
-      // Sub-agents are now available — rebuild the system prompt so
-      // SUB_AGENT_DELEGATION is included for the first run.
+      // Include SUB_AGENT_DELEGATION in the system prompt for the first run.
       this.rebuildSystemPrompt();
     }
 
@@ -1754,42 +1492,46 @@ export abstract class Agent {
     if (this.ragConfig) {
       this.ragManager = new RAGManager(this.ragConfig, this.logger);
       await this.ragManager.index();
-      try { this.toolRegistry.register(createSearchKnowledgeTool(this.ragManager)); } catch { this.logger.debug("Init", `"search_knowledge" already registered — keeping existing.`); }
-      try { this.toolRegistry.register(createListKnowledgeDocumentsTool(this.ragManager)); } catch { this.logger.debug("Init", `"list_knowledge_documents" already registered — keeping existing.`); }
+      this.safeRegister(createSearchKnowledgeTool(this.ragManager));
+      this.safeRegister(createListKnowledgeDocumentsTool(this.ragManager));
     }
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────
     if (!this.skipAutoTools) {
-      try { this.toolRegistry.register(createSkillTool(this.skillManager, () => this.rebuildSystemPrompt())); } catch { this.logger.debug("Init", `"skill" already registered — keeping existing.`); }
+      this.safeRegister(
+        createSkillTool(this.skillManager, () => this.rebuildSystemPrompt()),
+      );
     }
 
     // ── Precipitate skill tool (LLM-driven skill saving) ──────────────
     if (!this.skipAutoTools && this.skillsDir) {
-      try { this.toolRegistry.register(createPrecipitateSkillTool(this.skillManager, this.skillsDir)); } catch { this.logger.debug("Init", `"precipitate_skill" already registered — keeping existing.`); }
+      this.safeRegister(
+        createPrecipitateSkillTool(this.skillManager, this.skillsDir),
+      );
     }
 
     // ── Remember / Recall tools (long-term memory) ────────────────────
     if (!this.skipAutoTools) {
-      try { this.toolRegistry.register(createRememberTool(this.memoryManager)); } catch { this.logger.debug("Init", `"remember" already registered — keeping existing.`); }
-      try { this.toolRegistry.register(createRecallTool(this.memoryManager)); } catch { this.logger.debug("Init", `"recall" already registered — keeping existing.`); }
+      this.safeRegister(createRememberTool(this.memoryManager));
+      this.safeRegister(createRecallTool(this.memoryManager));
     }
   }
 
-  /**
-   * Gracefully shut down the agent.
-   *
-   * Aborts any in-flight LLM request, cancels running sub-agents, waits
-   * for them to finish, and disconnects all MCP servers. Safe to call
-   * even if init() was never called or nothing was configured.
-   */
+  /** Register a tool, silently keeping the existing one on name collision. */
+  private safeRegister(tool: Tool): void {
+    try {
+      this.toolRegistry.register(tool);
+    } catch {
+      this.logger.debug("Init", `"${tool.name}" already registered — keeping existing.`);
+    }
+  }
+
+  /** Abort in-flight requests, cancel and await sub-agents, disconnect MCP. */
   async shutdown(): Promise<void> {
-    // Abort the in-flight LLM request so the process doesn't hang on an
-    // open HTTP connection that would otherwise outlive this call.
     this._abortController?.abort();
 
-    // Cancel sub-agents first, then await cleanup. Cancel-before-await
-    // ensures sub-agents stuck on LLM calls resolve quickly instead of
-    // waiting for the full timeout / max iteration count.
+    // Cancel-before-await ensures sub-agents stuck on LLM calls
+    // resolve quickly instead of waiting for the full timeout.
     this.subAgentManager?.cancelAll();
     await this.subAgentManager?.awaitAll();
 
@@ -1798,41 +1540,25 @@ export abstract class Agent {
 
   // ─── Sub-Agent ────────────────────────────────────────────────────────
 
-  /**
-   * Check whether sub-agents are available.
-   *
-   * Used by `buildSystemPrompt()` to decide whether to include sub-agent
-   * delegation instructions. Returns true only when a SubAgentManager is
-   * configured AND has at least one registered definition.
-   */
+  /** Whether sub-agents are configured and have registered definitions. */
   protected hasSubAgents(): boolean {
     return this.subAgentManager?.hasDefinitions() === true;
   }
 
   /**
-   * Spawn a sub-agent by definition name.
-   *
-   * The sub-agent runs asynchronously — this method returns immediately.
-   * Call `pollSubAgentResults()` at the start of each iteration to
-   * collect completed results.
-   *
-   * @param name  The registered sub-agent definition name.
-   * @param input The task description for the sub-agent.
-   * @returns The unique run ID.
+   * Spawn a sub-agent by definition name. Runs asynchronously — call
+   * `pollSubAgentResults()` each iteration to collect completed results.
    */
   protected spawnSubAgent(name: string, input: string): string {
     if (!this.subAgentManager) {
-      throw new Error("No SubAgentManager configured. Set `subAgentsDir` in AgentConfig.");
+      throw new Error(
+        "No SubAgentManager configured. Set `subAgentsDir` in AgentConfig.",
+      );
     }
     return this.subAgentManager.spawn(name, input);
   }
 
-  /**
-   * Poll for completed sub-agent results.
-   *
-   * Should be called at the start of each ReAct iteration to inject
-   * sub-agent outputs into the main agent's context.
-   */
+  /** Poll for completed sub-agent results (call at start of each iteration). */
   protected async pollSubAgentResults(): Promise<SubAgentResult[]> {
     if (!this.subAgentManager) return [];
     return this.subAgentManager.pollCompleted();
@@ -1848,28 +1574,9 @@ export abstract class Agent {
   }
 
   /**
-   * Call after a tool returns a result — checks if the result indicates
-   * a tool failure (retryable or fatal) and saves the trace ID so the
-   * next LLM analysis thought can be captured.
-   *
-   * @param toolName The name of the tool that was executed.
-   * @param result   The structured ToolResult returned by ToolRegistry.execute().
-   */
-  /**
-   * Capture the LLM's reasoning as error analysis for any active tool error traces.
-   *
-   * Call this after parsing the LLM's `thought` from each response. If any tools
-   * have an open failure chain (active trace), the thought is recorded as the
-   * LLM's analysis of what went wrong and how to proceed.
-   *
-   * This feeds the error→analysis pipeline:
-   *  1. Tool fails     → recordFailure() creates an active trace
-   *  2. LLM sees error → its next thought IS the analysis
-   *  3. Analysis       → recordAnalysis() attaches the LLM's reasoning to the trace
-   *
-   * For cross-session learning, use ErrorNotebook (错题本) via ReflectionHook.
-   *
-   * @param thought The LLM's reasoning (from parsed.thought).
+   * Capture the LLM's reasoning as error analysis for any active tool error
+   * traces. Feeds the error→analysis pipeline: tool fails → LLM sees error
+   * → its next thought is recorded as root-cause analysis.
    */
   protected captureErrorAnalysis(thought: string): void {
     if (!thought) return;
@@ -1887,7 +1594,8 @@ export abstract class Agent {
    */
   generateErrorReport(): string {
     const tracker = this.errorTracker;
-    if (!tracker) return "# Tool Error Trace Report\n\n*Error tracker not configured.*\n";
+    if (!tracker)
+      return "# Tool Error Trace Report\n\n*Error tracker not configured.*\n";
     return tracker.generateMarkdownReport();
   }
 }

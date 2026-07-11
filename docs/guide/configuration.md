@@ -54,10 +54,14 @@ interface AgentConfig {
   /** 子 Agent 专用 LLM Provider（默认复用 llm） */
   subAgentLLM?: LLMProvider
 
-  /** Skill 沉淀专用 LLM Provider（默认复用 llm） */
-  precipitationLLM?: LLMProvider
+  /** 错题本反思专用 LLM Provider（默认复用 llm） */
+  reflectionLLM?: LLMProvider
 
   /** 记忆提取专用 LLM Provider（默认复用 llm） */
+  memoryReflectorLLM?: LLMProvider
+
+  /** Skill 沉淀专用 LLM Provider（默认复用 llm） */
+  precipitationLLM?: LLMProvider
   memoryReflectorLLM?: LLMProvider
 
   /** 错题本反思模式 (默认: "off") */
@@ -79,12 +83,13 @@ interface AgentConfig {
 
 ### 子系统的 LLM 分配
 
-Memory、Reflection、Precipitation 三个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
+Reflection、Memory、Precipitation 三个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
 
 | 子系统 | 配置方式 | 决策链 |
 | ------ | -------- | ------ |
+| **Reflection** | AgentConfig 中 `reflectionLLM` | 显式 → ModelRouter → llm |
+| **Memory** | AgentConfig 中 `memoryReflectorLLM` | 显式 → ModelRouter → llm |
 | **Precipitation** | AgentConfig 中 `precipitationLLM` | 显式 → ModelRouter → llm |
-| **Memory Reflection** | AgentConfig 中 `memoryReflectorLLM` | 显式 → ModelRouter → llm |
 | **SubAgent** | AgentConfig 中 `subAgentLLM` | 显式 → ModelRouter → llm |
 
 推荐使用 `ModelRouter` 集中管理所有模型路由，详见 [Model Router](/llm/model-router)。

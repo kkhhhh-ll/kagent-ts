@@ -214,6 +214,12 @@ interface AgentConfig {
   precipitationLLM?: LLMProvider
 
   /**
+   * 错题本反思专用 LLM Provider。
+   * 不设置时：如果 llm 是 ModelRouter，则走 forReflection()；否则复用主 llm。
+   */
+  reflectionLLM?: LLMProvider
+
+  /**
    * 记忆提取专用 LLM Provider。
    * 不设置时：如果 llm 是 ModelRouter，则走 forMemory()；否则复用主 llm。
    */

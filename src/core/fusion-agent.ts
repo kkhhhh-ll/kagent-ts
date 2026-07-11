@@ -996,7 +996,7 @@ export class FusionAgent extends Agent {
 
     try {
       const reflector = new RA({
-        llm: this.llm,
+        llm: this.reflectionLLM ?? this.llm,
         notebook,
         maxIterations: this.reflectionMaxIterations,
       });
