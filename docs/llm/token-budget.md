@@ -16,7 +16,7 @@ const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [],
-  tokenBudget: budget,
+  tokenBudgetConfig: budget,
 })
 ```
 
@@ -55,13 +55,13 @@ const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   tools: [],
-  tokenBudget: {
+  tokenBudgetConfig: {
     maxTokens: 50000,
     warningThreshold: 40000,
   },
   hooks: [{
     onLLMEnd: (response) => {
-      const tokens = response.usage?.totalTokens ?? 0
+      const tokens = response.usage?.total_tokens ?? 0
       console.log(`本次消耗: ${tokens} tokens`)
     },
   }],

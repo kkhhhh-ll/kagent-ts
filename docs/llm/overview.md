@@ -33,14 +33,17 @@ createLLMProvider()         # 工厂函数 (自动检测 Provider 类型)
 
 ```ts
 interface LLMProvider {
+  /** 当前使用的模型标识符 */
+  readonly model: string
+
   /** 非流式调用 */
-  chat(messages: MessageData[], options?: LLMOptions): Promise<LLMResponse>
+  chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse>
 
   /** 流式调用 */
-  chatStream(messages: MessageData[], options?: LLMOptions): AsyncIterable<LLMStreamEvent>
+  chatStream(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): AsyncIterable<LLMStreamEvent>
 
   /** 估算 Token 数量 */
-  getTokenCount(messages: MessageData[]): number
+  getTokenCount(text: string, model?: string): number
 }
 ```
 

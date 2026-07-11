@@ -74,7 +74,7 @@ class ToolRegistry {
 实现 `Tool` 接口创建自定义工具：
 
 ```ts
-import type { Tool, ToolResult } from 'kagent-ts'
+import type { Tool } from 'kagent-ts'
 
 const weatherTool: Tool = {
   name: 'get_weather',
@@ -94,10 +94,7 @@ const weatherTool: Tool = {
     const city = args.city as string
     // 实际的 API 调用
     const weather = await fetchWeatherAPI(city)
-    return {
-      success: true,
-      content: `${city}天气: ${weather.temp}°C, ${weather.desc}`,
-    }
+    return `${city}天气: ${weather.temp}°C, ${weather.desc}`
   },
 }
 ```

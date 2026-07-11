@@ -6,80 +6,75 @@
 
 ```ts
 interface AgentConfig {
-  /** 系统提示词 — 定义 Agent 的行为和角色 */
-  systemPrompt: string
+  // ── 核心 ──
+  llm: LLMProvider                                  // LLM Provider 实例（必填）
+  systemPrompt?: string                             // 系统提示词
+  name?: string                                     // Agent 名称
 
-  /** LLM Provider 实例（支持 ModelRouter 自动路由） */
-  llm: LLMProvider
+  // ── 工具 ──
+  tools?: Tool[]                                    // 工具列表
+  toolRetryCount?: number                           // 工具失败重试次数
 
-  /** 工具列表 */
-  tools: Tool[]
+  // ── 上下文 ──
+  contextManager?: ContextManager                   // 上下文管理器实例
 
-  /** 最大迭代次数 */
-  maxIterations?: number          // 默认: ReAct=10, PlanSolve=15, Fusion=15
+  // ── 日志 ──
+  logger?: Logger                                   // 日志实例
 
-  /** 上下文管理配置 */
-  contextConfig?: Partial<ContextConfig>
+  // ── 生命周期钩子 ──
+  hooks?: AgentHooks | AgentHooks[]
 
-  /** 日志实例 */
-  logger?: Logger
+  // ── 人工审批 (HITL) ──
+  onToolApproval?: (toolName: string, args: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>
 
-  /** 生命周期钩子 */
-  hooks?: AgentHooks[]
+  // ── 并行执行 ──
+  enableParallelToolExecution?: boolean             // 启用并行工具调用
 
-  /** 工具审批回调 (HITL) */
-  onToolApproval?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
-
-  /** 是否允许并行工具调用 */
-  allowParallelToolCalls?: boolean
-
-  /** Session ID (用于会话持久化) */
+  // ── Session ID (用于会话持久化) ──
   sessionId?: string
 
-  /** MCP Server 配置文件路径 (推荐) */
+  // ── MCP Server 配置文件路径 (推荐) ──
   mcpConfigPath?: string
 
-  /** MCP Server 内联配置 (会覆盖文件中的同名 server) */
+  // ── MCP Server 内联配置 (会覆盖文件中的同名 server) ──
   mcpServers?: Record<string, McpServerConfig>
 
-  /** RAG 知识检索配置 */
+  // ── RAG 知识检索配置 ──
   rag?: RAGConfig
 
-  /** 子代理定义目录 */
+  // ── 子代理定义目录 ──
   subAgentsDir?: string
 
-  /** 子代理生命周期钩子（支持静态/数组/工厂函数） */
+  // ── 子代理生命周期钩子（支持静态/数组/工厂函数）──
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  /** 子 Agent 专用 LLM Provider（默认复用 llm） */
+  // ── 子 Agent 专用 LLM Provider（默认复用 llm）──
   subAgentLLM?: LLMProvider
 
-  /** 错题本反思专用 LLM Provider（默认复用 llm） */
+  // ── 错题本反思专用 LLM Provider（默认复用 llm）──
   reflectionLLM?: LLMProvider
 
-  /** 记忆提取专用 LLM Provider（默认复用 llm） */
+  // ── 记忆提取专用 LLM Provider（默认复用 llm）──
   memoryReflectorLLM?: LLMProvider
 
-  /** Skill 沉淀专用 LLM Provider（默认复用 llm） */
+  // ── Skill 沉淀专用 LLM Provider（默认复用 llm）──
   precipitationLLM?: LLMProvider
-  memoryReflectorLLM?: LLMProvider
 
-  /** 错题本反思模式 (默认: "off") */
-  reflection?: "off" | "post-hoc"
-
-  /** 记忆提取模式 (默认: "off") */
-  memoryReflection?: "off" | "post-hoc"
-
-  /** Skill 沉淀模式 (默认: "off") */
+  // ── Skill 沉淀模式 (默认: "off") ──
   precipitation?: "off" | "post-hoc"
 
-  /** 记忆存储目录 (默认: ".memory") */
+  // ── 记忆提取模式 (默认: "off") ──
+  memoryReflection?: "off" | "post-hoc"
+
+  // ── 记忆存储目录 (默认: ".memory") ──
   memoryDir?: string
 
-  /** Token 预算配置 */
-  tokenBudget?: TokenBudgetConfig
+  // ── Token 预算配置 ──
+  tokenBudgetConfig?: TokenBudgetConfig
 }
 ```
+
+> **注意**：`maxIterations` 和 `reflection`（错题本反思模式）不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中（如 `ReActAgentConfig`、`PlanSolveAgentConfig` 等）。不同 Agent 类型的默认 `maxIterations` 不同：ReAct=10, PlanSolve=15, Fusion=15。
 
 ### 子系统的 LLM 分配
 
@@ -105,12 +100,17 @@ import { OpenAIProvider } from 'kagent-ts'
 
 const provider = new OpenAIProvider({
   apiKey: 'sk-...',
-  model: 'gpt-4o',           // 默认: gpt-4o
+  model: 'gpt-4o',           // 必填
   baseURL: 'https://api.openai.com/v1',
   timeout: 60000,            // 请求超时 (ms)
-  maxRetries: 3,             // 最大重试次数
   temperature: 0.7,
   maxTokens: 4096,
+  retry: {                   // 重试配置（可选）
+    maxRetries: 3,
+    initialBackoffMs: 1000,
+    maxBackoffMs: 30000,
+    backoffMultiplier: 2,
+  },
 })
 ```
 
@@ -121,11 +121,13 @@ import { AnthropicProvider } from 'kagent-ts'
 
 const provider = new AnthropicProvider({
   apiKey: 'sk-ant-...',
-  model: 'claude-sonnet-4-6', // 默认模型
+  model: 'claude-sonnet-4-6', // 必填
   timeout: 60000,
-  maxRetries: 3,
   cacheSystemPrompt: true,    // 启用 Prompt Caching
   maxTokens: 4096,
+  retry: {                    // 重试配置（可选）
+    maxRetries: 3,
+  },
 })
 ```
 
@@ -145,12 +147,19 @@ const provider = createLLMProvider({
 ## 上下文管理配置
 
 ```ts
-const contextConfig = {
+import { ContextManager } from 'kagent-ts'
+
+const contextManager = new ContextManager({
   maxTokens: 128000,             // 上下文窗口最大 Token 数
   compressionThreshold: 0.8,     // 80% 阈值触发压缩
   keepTurns: 20,                 // 保留最近 N 轮对话
   toolResultMaxAgeMs: 3600000,   // 工具结果最大保留时间 (60分钟)
-}
+})
+
+const agent = new ReActAgent({
+  // ...
+  contextManager: contextManager,
+})
 ```
 
 ## RAG 知识库配置
@@ -173,25 +182,25 @@ const agent = new ReActAgent({
     }),
 
     /** 检索时返回的 top-K 数量（默认: 5） */
-    topK?: number
+    topK: 5,
 
     /** chunk 最大字符数（默认: 1000） */
-    chunkSize?: number
+    chunkSize: 1000,
 
     /** 相邻 chunk 重叠字符数（默认: 200） */
-    chunkOverlap?: number
+    chunkOverlap: 200,
 
     /** 自定义向量存储 — Chroma / Milvus / Pinecone 等（默认: InMemoryVectorStore） */
-    store?: VectorStore
+    store: new ChromaVectorStore({ url: 'http://localhost:8000' }),
 
     /** 启用混合检索 — BM25 + 向量 + RRF 融合（默认: false） */
-    hybridSearch?: boolean
+    hybridSearch: true,
 
     /** 混合检索时每路取 topK × factor 条候选（默认: 3） */
-    hybridRetrievalFactor?: number
+    hybridRetrievalFactor: 3,
 
     /** Re-rank 精排器 — LLM / Cross-Encoder（可选） */
-    reRanker?: ReRanker
+    reRanker: new LLMReRanker({ llm: provider }),
   },
 })
 ```

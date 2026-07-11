@@ -1,7 +1,7 @@
 {
   "name": "kagent-ts",
-  "version": "1.0.2",
-  "description": "A TypeScript agent framework — ReAct / Plan-Solve agent loops, tool management with circuit breaker, session persistence and resume, file-based progressive skills, and user preference injection.",
+  "version": "1.0.4",
+  "description": "A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

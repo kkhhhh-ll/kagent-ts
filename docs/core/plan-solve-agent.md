@@ -152,10 +152,10 @@ Plan-Solve Agent 的 Checkpoint 包含完整的计划状态：
 
 ```ts
 interface PlanSolveSessionState {
-  currentPlan: string[]       // 当前计划步骤列表
-  completedSteps: number[]    // 已完成的步骤索引
-  replanCount: number         // 重新规划次数
-  currentStep: number         // 当前执行步骤
+  currentPlan: string[]
+  hasPlan: boolean
+  completedSteps: number
+  consecutiveFailures: number
 }
 ```
 

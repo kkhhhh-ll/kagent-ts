@@ -41,12 +41,12 @@ for await (const chunk of agent.stream('你好，请帮我分析项目结构。'
 const reply = await agent.chat('你好，你能做什么？')
 ```
 
-### `newTopic(): void`
+### `newTopic(input: string): Promise<string>`
 
-清除当前对话历史，开始新的话题。保留系统提示词和配置。
+开始一个新话题，保留系统提示词和配置。
 
 ```ts
-agent.newTopic()
+await agent.newTopic('帮我重构这个组件')
 ```
 
 ### `cancel(): void`
@@ -143,12 +143,12 @@ const agent = new ReActAgent({
 
 ## 并行工具调用
 
-设置 `allowParallelToolCalls: true` 允许 LLM 在同一轮中并行调用多个独立工具：
+设置 `enableParallelToolExecution: true` 允许 LLM 在同一轮中并行调用多个独立工具：
 
 ```ts
 const agent = new ReActAgent({
   // ...
-  allowParallelToolCalls: true,
+  enableParallelToolExecution: true,
 })
 ```
 

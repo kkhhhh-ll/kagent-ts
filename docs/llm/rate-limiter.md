@@ -19,7 +19,7 @@ const provider = new RateLimitedProvider({
 ## 配置参数
 
 ```ts
-interface RateLimitConfig {
+interface RateLimitedProviderConfig {
   /** 被包装的 Provider */
   provider: LLMProvider
 
@@ -79,8 +79,8 @@ import {
 // 带限流的 Fallback 链
 const provider = new RateLimitedProvider({
   provider: new FallbackProvider({
-    providers: [
-      new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    primary: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    fallbacks: [
       new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
     ],
   }),

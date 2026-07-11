@@ -177,23 +177,62 @@ interface OrchestratorAgentConfig extends AgentConfig {
 
 ## AgentConfig (基类)
 
+所有 Agent 类型共享的基础配置。
+
 ```ts
 interface AgentConfig {
-  systemPrompt?: string
-  llm: LLMProvider
-  tools?: Tool[]
-  contextConfig?: Partial<ContextConfig>
-  logger?: Logger
+  // ── 核心 ──
+  llm: LLMProvider                                  // LLM Provider 实例（必填）
+  systemPrompt?: string                             // 系统提示词
+  name?: string                                     // Agent 名称
+
+  // ── 工具 ──
+  tools?: Tool[]                                    // 工具列表
+  toolRegistry?: ToolRegistry                       // 自定义 ToolRegistry 实例
+  toolOutputMaxBytes?: number                       // 工具输出截断阈值
+  toolRetryCount?: number                           // 工具失败重试次数
+  toolErrorTracker?: ToolErrorTracker               // 自定义错误追踪器
+
+  // ── 上下文 ──
+  contextManager?: ContextManager                   // 上下文管理器实例
+
+  // ── 日志 ──
+  logger?: Logger                                   // 日志实例（默认: ConsoleLogger）
+
+  // ── 生命周期钩子 ──
   hooks?: AgentHooks | AgentHooks[]
-  onToolApproval?: ApprovalCallback
-  allowParallelToolCalls?: boolean
-  preferencesPath?: string           // 偏好文件路径 (默认: ".kagent/preferences.md")
-  rulesPath?: string                 // 规则文件/目录路径 (默认: ".kagent/rules/")
-  memoryDir?: string                 // 记忆存储目录 (默认: ".memory")
-  sessionId?: string
-  mcpConfigPath?: string
-  mcpServers?: Record<string, McpServerConfig>
-  subAgents?: SubAgentDefinition[]
+
+  // ── 人工审批 (HITL) ──
+  onToolApproval?: ApprovalCallback                 // 工具审批回调
+  approvalTimeoutMs?: number                        // 审批超时 (ms)
+  approvalTimeoutStrategy?: "deny" | "allow"       // 超时策略 (默认: "deny")
+
+  // ── 并行执行 ──
+  enableParallelToolExecution?: boolean             // 启用并行工具调用
+
+  // ── 用户配置 ──
+  preferencesPath?: string                          // 偏好文件路径 (默认: ".kagent/preferences.md")
+  rulesPath?: string                                // 规则文件/目录路径 (默认: ".kagent/rules/")
+
+  // ── 记忆 ──
+  memoryDir?: string                                // 记忆存储目录 (默认: ".memory")
+
+  // ── 会话 ──
+  sessionId?: string                                // 会话 ID
+  sessionDir?: string                               // 会话存储目录
+  enableCheckpointing?: boolean                     // 启用会话持久化
+
+  // ── MCP ──
+  mcpConfigPath?: string                            // mcp.json 文件路径
+  mcpServers?: Record<string, McpServerConfig>      // MCP Server 内联配置
+
+  // ── RAG ──
+  rag?: RAGConfig                                   // RAG 知识检索配置
+
+  // ── 子 Agent ──
+  subAgentsDir?: string                             // 子 Agent 定义目录
+  disableSubAgents?: boolean                        // 禁用子 Agent
+  skipAutoTools?: boolean                           // 跳过子 Agent 工具自动注册
 
   /**
    * 子 Agent 的生命周期钩子。
@@ -207,38 +246,43 @@ interface AgentConfig {
    */
   subAgentLLM?: LLMProvider
 
-  /**
-   * Skill 沉淀专用 LLM Provider。
-   * 不设置时：如果 llm 是 ModelRouter，则走 forPrecipitation()；否则复用主 llm。
-   */
+  // ── 技能 ──
+  skillManager?: SkillManager                       // SkillManager 实例
+  skillsDir?: string                                // 技能文件目录
+
+  // ── 后处理 ──
+  /** 技能沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+  /** 沉淀子 Agent 最大迭代次数 */
+  precipitationMaxIterations?: number
+  /** 技能沉淀专用 LLM Provider（不设置时自动走 ModelRouter.forPrecipitation() 或复用 llm） */
   precipitationLLM?: LLMProvider
-
-  /**
-   * 错题本反思专用 LLM Provider。
-   * 不设置时：如果 llm 是 ModelRouter，则走 forReflection()；否则复用主 llm。
-   */
-  reflectionLLM?: LLMProvider
-
-  /**
-   * 记忆提取专用 LLM Provider。
-   * 不设置时：如果 llm 是 ModelRouter，则走 forMemory()；否则复用主 llm。
-   */
-  memoryReflectorLLM?: LLMProvider
-
-  /** 错题本反思模式 (默认: "off") */
-  reflection?: "off" | "post-hoc"
 
   /** 记忆提取模式 (默认: "off") */
   memoryReflection?: "off" | "post-hoc"
+  /** 记忆提取子 Agent 最大迭代次数 */
+  memoryReflectionMaxIterations?: number
+  /** 记忆提取专用 LLM Provider（不设置时自动走 ModelRouter.forMemory() 或复用 llm） */
+  memoryReflectorLLM?: LLMProvider
 
-  tokenBudget?: TokenBudgetConfig
+  /** 错题本反思专用 LLM Provider（不设置时自动走 ModelRouter.forReflection() 或复用 llm） */
+  reflectionLLM?: LLMProvider
+
+  // ── Token 预算 ──
+  tokenBudgetConfig?: TokenBudgetConfig             // Token 消耗限制
+
+  // ── 工作目录 ──
+  workdir?: string                                  // Agent 工作目录
 }
 
 type ApprovalCallback = (
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  signal: AbortSignal,
 ) => Promise<boolean>
 ```
+
+> **注意**：`maxIterations`、`reflection`、`reflectionMaxIterations`、`notebook` 等字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中（如 `ReActAgentConfig`、`PlanSolveAgentConfig` 等）。
 
 ---
 

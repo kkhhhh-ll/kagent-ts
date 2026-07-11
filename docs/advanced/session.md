@@ -62,23 +62,15 @@ interface SessionState {
   status: SessionStatus
   systemPrompt: string
   messages: MessageData[]
-  agentState: PlanSolveSessionState | FusionSessionState | OrchestratorSessionState
-  metadata: {
-    createdAt: string
-    updatedAt: string
-    iterations: number
-    toolCalls: number
-    tokenUsage: number
-    input: string
-  }
+  planState?: PlanSolveSessionState
+  fusionState?: FusionSessionState
+  orchestratorState?: OrchestratorSessionState
+  createdAt: string
+  updatedAt: string
+  metadata?: Record<string, unknown>
 }
 
-enum SessionStatus {
-  ACTIVE = 'active',
-  INTERRUPTED = 'interrupted',
-  COMPLETED = 'completed',
-  CANCELLED = 'cancelled',
-}
+type SessionStatus = "active" | "interrupted" | "completed" | "cancelled"
 ```
 
 ## SessionManager API
@@ -88,25 +80,25 @@ enum SessionStatus {
 ```ts
 import { SessionManager } from 'kagent-ts'
 
-const manager = new SessionManager('./.kagent-sessions')
+const manager = new SessionManager({ sessionDir: './.kagent-sessions' })
 
 // 列出所有会话
-const sessions = await manager.listSessions()
+const sessions = manager.listSessions()
 for (const s of sessions) {
-  console.log(`${s.sessionId}: ${s.status} (${s.metadata.iterations} 轮)`)
+  console.log(`${s.sessionId}: ${s.status}`)
 }
 
 // 加载会话
-const state = await manager.loadSession('my-task-001')
+const state = manager.loadSession('my-task-001')
 
 // 保存 Checkpoint
-await manager.saveCheckpoint(state)
+manager.saveCheckpoint(state)
 
 // 标记会话状态
-await manager.markStatus('my-task-001', 'completed')
+manager.markStatus('completed')
 
 // 删除会话
-await manager.deleteSession('my-task-001')
+manager.deleteSession('my-task-001')
 ```
 
 ## 不同 Agent 的会话状态
@@ -116,9 +108,9 @@ await manager.deleteSession('my-task-001')
 ```ts
 interface PlanSolveSessionState {
   currentPlan: string[]
-  completedSteps: number[]
-  replanCount: number
-  currentStep: number
+  hasPlan: boolean
+  completedSteps: number
+  consecutiveFailures: number
 }
 ```
 
@@ -126,11 +118,13 @@ interface PlanSolveSessionState {
 
 ```ts
 interface FusionSessionState {
-  routingResult: { complexity: string; reason: string }
+  complexity: "simple" | "complex"
+  routed: boolean
   currentPlan: string[]
-  completedSteps: number[]
-  reflectionHistory: ReflectionResult[]
-  phase: 'routing' | 'planning' | 'executing' | 'reflecting'
+  hasPlan: boolean
+  completedSteps: number
+  consecutiveFailures: number
+  reflectionEnabled: boolean
 }
 ```
 
@@ -139,9 +133,8 @@ interface FusionSessionState {
 ```ts
 interface OrchestratorSessionState {
   taskGraph: TaskGraph
-  completedNodes: Map<string, string>
-  currentRound: number
-  synthesisResult?: string
+  completedRounds: number
+  worktreeState?: WorktreeSessionState
 }
 ```
 

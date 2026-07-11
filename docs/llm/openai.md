@@ -20,8 +20,8 @@ interface OpenAIConfig {
   /** OpenAI API Key (必填) */
   apiKey: string
 
-  /** 模型名称 (默认: gpt-4o) */
-  model?: string
+  /** 模型名称 (必填) */
+  model: string
 
   /** API Base URL (默认: https://api.openai.com/v1) */
   baseURL?: string
@@ -29,17 +29,14 @@ interface OpenAIConfig {
   /** 请求超时时间 ms (默认: 60000) */
   timeout?: number
 
-  /** 最大重试次数 (默认: 3) */
-  maxRetries?: number
-
   /** 生成温度 (0-2) */
   temperature?: number
 
   /** 最大输出 Token 数 */
   maxTokens?: number
 
-  /** Top-p 采样 */
-  topP?: number
+  /** 重试配置 */
+  retry?: RetryConfig
 }
 ```
 
@@ -92,7 +89,7 @@ for await (const event of stream) {
 ## 重试配置
 
 ```ts
-interface OpenAIRetryConfig {
+interface RetryConfig {
   /** 最大重试次数 (默认: 3) */
   maxRetries?: number
 
@@ -108,7 +105,8 @@ interface OpenAIRetryConfig {
 
 const provider = new OpenAIProvider({
   apiKey: '...',
-  retryConfig: {
+  model: 'gpt-4o',
+  retry: {
     maxRetries: 5,
     initialBackoffMs: 500,
     maxBackoffMs: 15000,

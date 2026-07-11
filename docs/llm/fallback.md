@@ -8,18 +8,17 @@
 import { FallbackProvider, OpenAIProvider, AnthropicProvider } from 'kagent-ts'
 
 const provider = new FallbackProvider({
-  providers: [
-    // 主 Provider
-    new AnthropicProvider({
-      apiKey: process.env.ANTHROPIC_API_KEY!,
-      model: 'claude-sonnet-4-6',
-    }),
-    // Fallback #1
+  // 主 Provider（最先尝试）
+  primary: new AnthropicProvider({
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    model: 'claude-sonnet-4-6',
+  }),
+  // 降级 Provider 列表（按顺序尝试）
+  fallbacks: [
     new OpenAIProvider({
       apiKey: process.env.OPENAI_API_KEY!,
       model: 'gpt-4o',
     }),
-    // Fallback #2
     new OpenAIProvider({
       apiKey: process.env.OPENAI_API_KEY!,
       model: 'gpt-4o-mini',
@@ -40,12 +39,15 @@ const provider = new FallbackProvider({
 ## 配置参数
 
 ```ts
-interface FallbackConfig {
-  /** Provider 列表 (按优先级从高到低排序) */
-  providers: LLMProvider[]
+interface FallbackProviderConfig {
+  /** 主 Provider（最先尝试） */
+  primary: LLMProvider
 
-  /** 每个 Provider 的最大重试次数 (默认: 2) */
-  maxRetriesPerProvider?: number
+  /** 降级 Provider 列表（按优先级从高到低排序） */
+  fallbacks: LLMProvider[]
+
+  /** 日志实例（默认: ConsoleLogger） */
+  logger?: Logger
 }
 ```
 
@@ -55,17 +57,16 @@ interface FallbackConfig {
 import { ReActAgent, FallbackProvider, AnthropicProvider, OpenAIProvider } from 'kagent-ts'
 
 const provider = new FallbackProvider({
-  providers: [
-    new AnthropicProvider({
-      apiKey: process.env.ANTHROPIC_API_KEY!,
-      model: 'claude-sonnet-4-6',
-    }),
+  primary: new AnthropicProvider({
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    model: 'claude-sonnet-4-6',
+  }),
+  fallbacks: [
     new OpenAIProvider({
       apiKey: process.env.OPENAI_API_KEY!,
       model: 'gpt-4o',
     }),
   ],
-  maxRetriesPerProvider: 2,
 })
 
 const agent = new ReActAgent({
@@ -83,15 +84,13 @@ const agent = new ReActAgent({
 import { ModelRouter, FallbackProvider, AnthropicProvider, OpenAIProvider } from 'kagent-ts'
 
 const router = new ModelRouter({
-  routes: {
-    main: new FallbackProvider({
-      providers: [
-        new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
-        new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-      ],
-    }),
-    subAgent: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
-  },
+  main: new FallbackProvider({
+    primary: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    fallbacks: [
+      new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+    ],
+  }),
+  subAgent: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
 })
 ```
 

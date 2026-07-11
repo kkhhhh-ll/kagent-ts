@@ -8,12 +8,12 @@ import { Message } from 'kagent-ts'
 // 工厂方法
 Message.user(content: string): Message
 Message.system(content: string): Message
-Message.assistant(content: string, toolCalls?: ToolCall[]): Message
-Message.tool(toolCallId: string, name: string, content: string): Message
+Message.assistant(content: string, tool_calls?: ToolCall[]): Message
+Message.tool(content: string, tool_call_id: string, name?: string): Message
 
 // 转换
 message.toDict(): MessageData
-Message.fromDict(data: MessageData): Message
+Message.fromData(data: MessageData): Message
 ```
 
 ---
@@ -39,8 +39,8 @@ enum Role {
 interface MessageData {
   role: Role
   content: string
-  toolCallId?: string
-  toolCalls?: ToolCall[]
+  tool_call_id?: string
+  tool_calls?: ToolCall[]
   name?: string
 }
 ```
@@ -73,7 +73,7 @@ const userMsg = Message.user('请帮我分析代码。')
 const assistantMsg = Message.assistant('我来帮你分析代码。', [
   { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"src/index.ts"}' } },
 ])
-const toolMsg = Message.tool('call_1', 'read_file', '文件内容...')
+const toolMsg = Message.tool('文件内容...', 'call_1', 'read_file')
 
 // 转换为 API 格式
 const messages = [systemMsg, userMsg, assistantMsg, toolMsg]

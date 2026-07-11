@@ -168,8 +168,8 @@ const router = new ModelRouter({
 ```ts
 const router = new ModelRouter({
   main: new FallbackProvider({
-    providers: [
-      new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    primary: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    fallbacks: [
       new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
     ],
   }),

@@ -58,14 +58,13 @@ const loggingHook: AgentHooks = {
     console.log(`[LLM] 发送 ${messages.length} 条消息`)
   },
   onLLMEnd: (response) => {
-    console.log(`[LLM] 响应 ${response.usage?.totalTokens} tokens`)
+    console.log(`[LLM] 响应 ${response.usage?.total_tokens} tokens`)
   },
   onToolStart: (name, args) => {
     console.log(`[Tool] 调用 ${name}(${JSON.stringify(args)})`)
   },
   onToolEnd: (name, result) => {
-    const status = result.success ? '✅' : '❌'
-    console.log(`[Tool] ${status} ${name}`)
+    console.log(`[Tool] ✅ ${name} (${result.length} 字符)`)
   },
   onFinish: (answer) => {
     console.log(`[Agent] 完成，答案长度: ${answer.length} 字符`)
@@ -84,16 +83,20 @@ const agent = new ReActAgent({
 const metricsHook: AgentHooks = {
   onLLMEnd: (response) => {
     metricsCollector.recordLLMCall({
-      model: response.model,
-      tokens: response.usage?.totalTokens ?? 0,
-      latency: response.latencyMs ?? 0,
+      model: response.providerMeta?.model,
+      tokens: response.usage?.total_tokens ?? 0,
+    })
+  },
+  onToolStart: (name, args) => {
+    metricsCollector.recordToolCallStart({
+      tool: name,
+      args,
     })
   },
   onToolEnd: (name, result) => {
-    metricsCollector.recordToolCall({
+    metricsCollector.recordToolCallEnd({
       tool: name,
-      success: result.success,
-      errorCode: result.errorCode,
+      resultLength: result.length,
     })
   },
 }

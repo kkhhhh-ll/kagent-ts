@@ -79,7 +79,7 @@ import { ReActAgent, OpenAIProvider, TraceLogger, BUILTIN_TOOLS } from 'kagent-t
 
 const traceLogger = new TraceLogger({
   outputDir: './traces',
-  prefix: 'my-agent',
+  sessionId: 'my-agent',
 })
 
 const agent = new ReActAgent({

@@ -11,6 +11,7 @@ temp/
 .kagent-traces/
 .vscode/
 .memory/
+.error-notebook/
 resume-agent-harness.md
 skills/
 subagents/

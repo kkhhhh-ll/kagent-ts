@@ -77,16 +77,18 @@ WriteFileTool 结果  → 保留 (副作用不可逆)
 ## 在 Agent 中使用
 
 ```ts
+const contextManager = new ContextManager({
+  maxTokens: 100000,
+  compressionThreshold: 0.75,
+  keepTurns: 15,
+  toolResultMaxAgeMs: 180000,  // 3 分钟
+})
+
 const agent = new ReActAgent({
   systemPrompt: '...',
   llm: provider,
   tools: BUILTIN_TOOLS,
-  contextConfig: {
-    maxTokens: 100000,
-    compressionThreshold: 0.75,
-    keepTurns: 15,
-    toolResultMaxAgeMs: 180000,  // 3 分钟
-  },
+  contextManager,
 })
 ```
 

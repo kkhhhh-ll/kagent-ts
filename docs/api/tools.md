@@ -7,11 +7,13 @@ interface Tool {
   name: string
   description: string
   parameters: Record<string, unknown>  // JSON Schema
-  execute(args: Record<string, unknown>): Promise<ToolResult>
+  execute(args: Record<string, unknown>): Promise<string>
   requireApproval?: boolean
   sequential?: boolean
 }
 ```
+
+> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串）。`ToolRegistry.execute()` 会将其包装为 `ToolResult` 对象，并附加熔断保护和错误追踪。
 
 ---
 
@@ -21,20 +23,20 @@ interface Tool {
 interface ToolResult {
   success: boolean
   content: string
-  severity?: "info" | "warning" | "error" | "critical"
-  errorCode?: ToolErrorCode
+  severity: "success" | "retryable" | "fatal"
+  errorCode: ToolErrorCode
 }
 
 enum ToolErrorCode {
-  SUCCESS = "SUCCESS"
-  UNKNOWN_TOOL = "UNKNOWN_TOOL"
-  CIRCUIT_OPEN = "CIRCUIT_OPEN"
-  EXECUTION_FAILURE = "EXECUTION_FAILURE"
-  ARGUMENTS_PARSE_ERROR = "ARGUMENTS_PARSE_ERROR"
-  TRUNCATED_OUTPUT = "TRUNCATED_OUTPUT"
-  INTERNAL_ERROR = "INTERNAL_ERROR"
-  APPROVAL_DENIED = "APPROVAL_DENIED"
-  VALIDATION_ERROR = "VALIDATION_ERROR"
+  SUCCESS = "success"
+  UNKNOWN_TOOL = "unknown_tool"
+  CIRCUIT_OPEN = "circuit_open"
+  EXECUTION_FAILURE = "execution_failure"
+  ARGUMENTS_PARSE_ERROR = "arguments_parse_error"
+  TRUNCATED_OUTPUT = "truncated_output"
+  INTERNAL_ERROR = "internal_error"
+  APPROVAL_DENIED = "approval_denied"
+  VALIDATION_ERROR = "validation_error"
 }
 ```
 
@@ -46,8 +48,12 @@ import { toolSuccess, toolError } from 'kagent-ts'
 // 创建成功结果
 toolSuccess(content: string): ToolResult
 
-// 创建错误结果
-toolError(code: ToolErrorCode, content: string): ToolResult
+// 创建错误结果（severity 默认为 "retryable"）
+toolError(
+  errorCode: ToolErrorCode,
+  content: string,
+  severity?: "retryable" | "fatal"
+): ToolResult
 ```
 
 ---
@@ -71,8 +77,15 @@ class ToolRegistry {
   remove(name: string): boolean
   removeMany(names: string[]): void
   has(name: string): boolean
+  get count(): number
+  get toolNames(): string[]
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
   filter(filter: ToolFilter): ToolRegistry
+  getErrorTracker(): ToolErrorTracker | undefined
+  getBreakerStatus(name: string): BreakerStatus | undefined
+  getAllBreakerStatuses(): BreakerStatus[]
+  resetBreaker(name: string): void
+  resetAllBreakers(): void
 }
 ```
 
@@ -177,6 +190,45 @@ class ToolErrorTracker {
   getAllSummaries(): ErrorTraceSummary[]
   generateMarkdownReport(): string
   clear(): void
+}
+```
+
+---
+
+## Error Trace 类型
+
+```ts
+interface TraceEvent {
+  type: "failure" | "retry" | "recovery" | "circuit_half_open" | "circuit_open" | "retries_exhausted" | "analysis"
+  timestamp: string
+  error?: string
+  attemptNumber?: number
+  retriesRemaining?: number
+  analysis?: string
+  resolution?: string
+  arguments?: Record<string, unknown>
+}
+
+interface ToolErrorTrace {
+  traceId: string
+  toolName: string
+  sessionId?: string
+  createdAt: string
+  updatedAt: string
+  resolved: boolean
+  originalArguments: Record<string, unknown>
+  events: TraceEvent[]
+  resolution?: string
+}
+
+interface ErrorTraceSummary {
+  traceId: string
+  toolName: string
+  createdAt: string
+  resolved: boolean
+  errorCount: number
+  firstError: string
+  resolution?: string
 }
 ```
 

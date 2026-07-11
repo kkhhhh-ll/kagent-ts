@@ -32,8 +32,8 @@ interface Tool {
   /** 参数 JSON Schema */
   parameters: Record<string, unknown>
 
-  /** 执行函数 */
-  execute(args: Record<string, unknown>): Promise<ToolResult>
+  /** 执行函数 — 返回纯文本字符串。ToolRegistry 会将其包装为 ToolResult */
+  execute(args: Record<string, unknown>): Promise<string>
 
   /** 是否需要人工审批 (默认: false) */
   requireApproval?: boolean
@@ -42,6 +42,8 @@ interface Tool {
   sequential?: boolean
 }
 ```
+
+> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串），不是 `ToolResult`。`ToolRegistry.execute()` 会在执行前后添加熔断保护、参数验证和错误追踪，并将结果包装为 `ToolResult`。
 
 ## ToolResult
 
@@ -54,29 +56,29 @@ interface ToolResult {
   content: string
 
   /** 错误严重程度 */
-  severity?: 'info' | 'warning' | 'error' | 'critical'
+  severity: "success" | "retryable" | "fatal"
 
   /** 错误码 */
-  errorCode?: ToolErrorCode
+  errorCode: ToolErrorCode
 }
 
 enum ToolErrorCode {
-  SUCCESS = 'SUCCESS',
-  UNKNOWN_TOOL = 'UNKNOWN_TOOL',
-  CIRCUIT_OPEN = 'CIRCUIT_OPEN',
-  EXECUTION_FAILURE = 'EXECUTION_FAILURE',
-  ARGUMENTS_PARSE_ERROR = 'ARGUMENTS_PARSE_ERROR',
-  TRUNCATED_OUTPUT = 'TRUNCATED_OUTPUT',
-  INTERNAL_ERROR = 'INTERNAL_ERROR',
-  APPROVAL_DENIED = 'APPROVAL_DENIED',
-  VALIDATION_ERROR = 'VALIDATION_ERROR',
+  SUCCESS = "success"
+  UNKNOWN_TOOL = "unknown_tool"
+  CIRCUIT_OPEN = "circuit_open"
+  EXECUTION_FAILURE = "execution_failure"
+  ARGUMENTS_PARSE_ERROR = "arguments_parse_error"
+  TRUNCATED_OUTPUT = "truncated_output"
+  INTERNAL_ERROR = "internal_error"
+  APPROVAL_DENIED = "approval_denied"
+  VALIDATION_ERROR = "validation_error"
 }
 ```
 
 ## 快速开始
 
 ```ts
-import { ReActAgent, OpenAIProvider, ToolRegistry, BUILTIN_TOOLS } from 'kagent-ts'
+import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。',

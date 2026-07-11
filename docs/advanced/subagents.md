@@ -111,7 +111,7 @@ const agent = new OrchestratorAgent({
   systemPrompt: '你是一个高级任务编排器。',
   llm: mainProvider,
   tools: BUILTIN_TOOLS,
-  subAgents: definitions,
+  subAgentsDir: './subagents',
 })
 ```
 
@@ -243,32 +243,11 @@ import {
 const agent = new OrchestratorAgent({
   systemPrompt: '你是一个项目管理专家，可以分解并委派任务给专业的子代理。',
   llm: new ModelRouter({
-    routes: {
-      main: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
-      subAgent: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
-    },
+    main: new AnthropicProvider({ apiKey: '...', model: 'claude-sonnet-4-6' }),
+    subAgent: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
   }),
   tools: BUILTIN_TOOLS,
-  subAgents: [
-    {
-      name: 'code-reviewer',
-      description: '审查代码质量，发现潜在问题',
-      systemPrompt: '你是 TypeScript 代码审查专家...',
-      tools: ['read_file', 'grep_search', 'glob_search'],
-    },
-    {
-      name: 'test-writer',
-      description: '编写单元测试',
-      systemPrompt: '你是测试开发专家，擅长编写高质量测试...',
-      tools: ['read_file', 'grep_search', 'write_file'],
-    },
-    {
-      name: 'doc-writer',
-      description: '生成 API 文档',
-      systemPrompt: '你是技术文档写作专家...',
-      tools: ['read_file', 'write_file'],
-    },
-  ],
+  subAgentsDir: './subagents',
   maxRounds: 3,
   maxParallelNodes: 3,
 })

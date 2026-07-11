@@ -10,8 +10,8 @@ new SessionManager(config?: SessionManagerConfig)
 
 ```ts
 interface SessionManagerConfig {
-  sessionsDir?: string          // 默认: ".kagent-sessions"
-  autoSaveIntervalMs?: number   // 默认: 0 (每次迭代后保存)
+  sessionId?: string            // 会话 ID
+  sessionDir?: string           // 会话存储目录
 }
 ```
 
@@ -19,13 +19,18 @@ interface SessionManagerConfig {
 
 ```ts
 class SessionManager {
-  saveCheckpoint(state: SessionState): Promise<void>
-  loadSession(sessionId: string): Promise<SessionState | null>
-  listSessions(): Promise<SessionInfo[]>
-  deleteSession(sessionId: string): Promise<void>
-  markStatus(sessionId: string, status: SessionStatus): Promise<void>
+  getSessionId(): string
+  getSessionDir(): string
+  setSessionId(id: string): void
+  saveCheckpoint(state: SessionState): void
+  loadSession(sessionId: string): SessionState | null
+  listSessions(): SessionState[]
+  deleteSession(sessionId: string): void
+  markStatus(status: SessionStatus): void
 }
 ```
+
+> **注意**：所有方法均为同步方法（非 Promise）。会话数据以 JSON 文件形式存储在 `sessionDir` 目录下。
 
 ---
 
@@ -35,30 +40,20 @@ class SessionManager {
 interface SessionState {
   sessionId: string
   agentType: AgentType
-  status: SessionStatus
   systemPrompt: string
   messages: MessageData[]
-  agentState?: PlanSolveSessionState | FusionSessionState | OrchestratorSessionState
-  metadata: SessionMetadata
+  planState?: PlanSolveSessionState
+  fusionState?: FusionSessionState
+  orchestratorState?: OrchestratorSessionState
+  createdAt: string
+  updatedAt: string
+  status: SessionStatus
+  metadata?: Record<string, unknown>
 }
 
 type AgentType = "react" | "plan-solve" | "fusion" | "orchestrator"
 
-enum SessionStatus {
-  ACTIVE = "active",
-  INTERRUPTED = "interrupted",
-  COMPLETED = "completed",
-  CANCELLED = "cancelled",
-}
-
-interface SessionMetadata {
-  createdAt: string
-  updatedAt: string
-  iterations: number
-  toolCalls: number
-  tokenUsage: number
-  input: string
-}
+type SessionStatus = "active" | "interrupted" | "completed" | "cancelled"
 ```
 
 ---
@@ -70,9 +65,9 @@ interface SessionMetadata {
 ```ts
 interface PlanSolveSessionState {
   currentPlan: string[]
-  completedSteps: number[]
-  replanCount: number
-  currentStep: number
+  hasPlan: boolean
+  completedSteps: number
+  consecutiveFailures: number
 }
 ```
 
@@ -80,11 +75,13 @@ interface PlanSolveSessionState {
 
 ```ts
 interface FusionSessionState {
-  routingResult: { complexity: string; reason: string }
+  complexity: "simple" | "complex"
+  routed: boolean
   currentPlan: string[]
-  completedSteps: number[]
-  reflectionHistory: ReflectionResult[]
-  phase: "routing" | "planning" | "executing" | "reflecting"
+  hasPlan: boolean
+  completedSteps: number
+  consecutiveFailures: number
+  reflectionEnabled: boolean
 }
 ```
 
@@ -93,10 +90,20 @@ interface FusionSessionState {
 ```ts
 interface OrchestratorSessionState {
   taskGraph: TaskGraph
-  completedNodes: Record<string, string>
-  currentRound: number
-  synthesisResult?: string
+  completedRounds: number
+  worktreeState?: WorktreeSessionState
 }
+```
+
+---
+
+## 会话恢复
+
+Agent 的 `resume()` 方法可用于从断点恢复：
+
+```ts
+// 网络中断后恢复会话
+const answer = await agent.resume('my-task-001', '继续之前的任务')
 ```
 
 ## 下一步

@@ -20,8 +20,8 @@ interface AnthropicConfig {
   /** Anthropic API Key (必填) */
   apiKey: string
 
-  /** 模型名称 (默认: claude-sonnet-4-6) */
-  model?: string
+  /** 模型名称 (e.g. "claude-sonnet-4-6", "claude-opus-4-8") */
+  model: string
 
   /** API Base URL */
   baseURL?: string
@@ -29,8 +29,8 @@ interface AnthropicConfig {
   /** 请求超时时间 ms (默认: 60000) */
   timeout?: number
 
-  /** 最大重试次数 (默认: 3) */
-  maxRetries?: number
+  /** 重试配置 (默认: maxRetries=3, baseDelayMs=1000, maxDelayMs=30000) */
+  retry?: RetryConfig
 
   /** 最大输出 Token 数 */
   maxTokens?: number

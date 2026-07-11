@@ -63,9 +63,10 @@ onToolApproval() 被调用
 ## 审批回调
 
 ```ts
-type ToolApprovalCallback = (
+type ApprovalCallback = (
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  signal: AbortSignal,
 ) => Promise<boolean>
 ```
 
