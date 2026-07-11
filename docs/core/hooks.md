@@ -182,8 +182,6 @@ best-effort，失败不影响主流程。
 
 详见 [Reflection 反思](/advanced/reflection) 和 [Memory 记忆](/advanced/memory)。
 
-详见 [Reflection 反思](/advanced/reflection)。
-
 ### ToolCallEvaluator
 
 `ToolCallEvaluator` 用于收集工具调用指标：

@@ -22,7 +22,7 @@ fireOnFinish(answer)
   └── reflection (如果开启) → ReflectionAgent Fork (fire-and-forget)
         ├── 审查完整对话历史
         ├── 用 read_file / grep_search 验证发现
-        ├── 评分 (0-100) + 分类问题 (7 个维度)
+        ├── 分类问题 (7 个维度)
         └── 持久化 → ErrorNotebook (.error-notebook/)
 ```
 

@@ -49,7 +49,6 @@ export interface ReflectionFinding {
  */
 interface ReflectionResponse {
   analysis: string;
-  score: number;
   findings: ReflectionFinding[];
 }
 
@@ -70,7 +69,6 @@ Analyze the session across these dimensions:
 In your final answer, output a JSON object with this structure:
 {
   "analysis": "overall assessment (2-4 sentences)",
-  "score": 85,
   "findings": [
     {
       "category": "reasoning_error | tool_misuse | missed_optimization | incomplete_answer | hallucination | context_mismanagement | other",
@@ -83,9 +81,8 @@ In your final answer, output a JSON object with this structure:
 }
 
 Rules:
-- Score 0-100 where 100 = flawless execution.
 - Only include findings for actual issues — do NOT fabricate problems.
-- If the session was perfect, return an empty findings array and score 100.
+- If the session was perfect, return an empty findings array.
 - Group related findings; don't duplicate.
 - Be specific: cite exact tool names, file paths, reasoning steps where applicable.
 - Use your tools to verify findings against the actual codebase before reporting them.

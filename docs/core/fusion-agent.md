@@ -23,7 +23,6 @@ Final Answer（答案已返回给用户）
   ↓ (后台 fire-and-forget，不阻塞)
 [REFLECT] (可选，post-hoc):
   ├── ReflectionAgent 反思整个会话
-  ├── 评分 (0-100)
   └── 记录到 ErrorNotebook
   ↓
 [MEMORY] (可选，post-hoc):
@@ -130,7 +129,7 @@ reflection: 'post-hoc'  // 开启
 ```
 
 执行完成后，Fork 一个 `ReflectionAgent` 对整个会话进行反思：
-- 评分 0-100
+
 - 分类问题: `reasoning_error`, `tool_misuse`, `missed_optimization`, `incomplete_answer`, `hallucination`, `context_mismanagement`
 - 记录到 ErrorNotebook 供后续学习
 
