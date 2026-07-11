@@ -1,6 +1,6 @@
 # kagent-ts
 
-A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, skill precipitation, and prompt-injection defense.
+A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.
 
 [![npm version](https://img.shields.io/npm/v/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
@@ -23,8 +23,8 @@ A production-grade TypeScript agent framework with multi-paradigm agent loops, m
 │  │  │          │  │              │  │          │  │                  │  │ │
 │  │  │ Think→   │  │ Plan→        │  │ Route→   │  │ Decompose→       │  │ │
 │  │  │ Act→     │  │ Resolve→     │  │ Plan/    │  │ Dispatch→        │  │ │
-│  │  │ Observe  │  │ Revise       │  │ Execute→ │  │ Synthesize→      │  │ │
-│  │  │          │  │              │  │ Reflect  │  │ Adapt            │  │ │
+│  │  │ Observe  │  │ Revise       │  │ Execute  │  │ Synthesize→      │  │ │
+│  │  │          │  │              │  │          │  │ Adapt            │  │ │
 │  │  └────┬─────┘  └──────┬───────┘  └────┬─────┘  └────────┬─────────┘  │ │
 │  │       └────────────────┴──────────────┴──────────────────┘            │ │
 │  │                          │                                            │ │
@@ -127,9 +127,8 @@ flowchart TD
     GAPS -->|"no"| FORCE["Force Synthesize\nBest-effort answer"]
 
     FORCE --> FINAL
-    FINAL --> REFLECT["Post-hoc Reflection\nReflectionAgent +\nErrorNotebook"]
-    REFLECT --> PRECIPITATE["Skill Precipitation\nExtract reusable\nSKILL.md patterns"]
-    PRECIPITATE --> OUT["Final Answer\nto User"]
+    FINAL --> REFLECT["Post-hoc\nReflection + Memory\n+ Precipitation"]
+    REFLECT --> OUT["Final Answer\nto User"]
 
     style D fill:#4a90d9,color:#fff
     style DISPATCH fill:#d97706,color:#fff
@@ -157,7 +156,7 @@ flowchart LR
     REACT --> REFLECT
     EXEC --> REFLECT
 
-    REFLECT["4. Reflect\noff | inline |\npost-hoc | both"] --> ANSWER["Final Answer"]
+    REFLECT["4. Post-hoc\nReflection +\nMemory +\nPrecipitation"] --> ANSWER["Final Answer"]
 ```
 
 ---
@@ -221,7 +220,7 @@ flowchart LR
 |-------|---------|----------|
 | **ReActAgent** | Think → Act → Observe | Interactive Q&A, tool-augmented tasks |
 | **PlanSolveAgent** | Plan → Resolve → Revise | Multi-step structured tasks |
-| **FusionAgent** | Route → Plan/Execute → Reflect | Adaptive: auto-selects the right strategy |
+| **FusionAgent** | Route → Plan/Execute → (post-hoc) | Adaptive: auto-selects the right strategy |
 | **OrchestratorAgent** | Decompose → Dispatch → Synthesize → Adapt | Complex multi-agent workflows with DAG |
 
 ### 🔧 Tool Governance
@@ -275,9 +274,11 @@ flowchart LR
 
 ### 🧠 Long-Term Memory
 
+- **Auto-extraction** — `MemoryReflector` forks a sub-agent post-execution to extract rules, project facts, and user preferences
 - **MEMORY.md index** — Lightweight pointer file; full facts stored as individual markdown files
-- **Remember / Recall tools** — LLM can persist and retrieve facts across sessions
+- **Remember / Recall tools** — LLM can manually persist and retrieve facts across sessions
 - **Auto-reload** — Index re-read between runs to pick up external edits
+- **Enable via** — `memoryReflection: "post-hoc"` in AgentConfig
 
 ### 🔒 Security
 
@@ -298,7 +299,8 @@ flowchart LR
 
 - **Lifecycle hooks** — `onLLMStart/End`, `onToolStart/End/Error`, `onThought`, `onPlanCreated/Revised`, `onFinish`, `onChunk`
 - **TraceLogger** — Session execution traces with parent-child sub-agent tracking
-- **ReflectionAgent** — Post-hoc session review across 5 dimensions (reasoning, tool use, efficiency, completeness, context)
+- **Post-hoc reflection** — Built-in error analysis (`reflection: "post-hoc"`), memory extraction, and skill precipitation after each session
+- **ReflectionAgent** — Post-hoc session review across 6 dimensions (reasoning, tool misuse, optimization, completeness, hallucination, context)
 - **ErrorNotebook (错题本)** — Persistent error knowledge base; past findings injected into future system prompts
 - **Eval framework** — Tool call metrics (accuracy, latency, retry rate) + end-to-end regression benchmarks
 
@@ -385,16 +387,14 @@ const answer = await orchestrator.run(
 ### Fusion Agent (Adaptive)
 
 ```typescript
-import { FusionAgent, OpenAIProvider, ErrorNotebook } from "kagent-ts";
-
-const notebook = new ErrorNotebook({ storageDir: ".error-notebook" });
+import { FusionAgent, OpenAIProvider } from "kagent-ts";
 
 const agent = new FusionAgent({
   llm: new OpenAIProvider({ model: "gpt-4o" }),
-  routing: "auto",            // LLM judges task complexity
-  planConfirmation: "auto",   // confirm only for risky operations
-  reflection: "both",         // inline + post-hoc
-  notebook,
+  routing: "auto",                // LLM judges task complexity
+  planConfirmation: "auto",       // confirm only for risky operations
+  reflection: "post-hoc",         // post-hoc error analysis
+  memoryReflection: "post-hoc",   // post-hoc memory extraction
 });
 
 const answer = await agent.run("Refactor the user service to use the repository pattern.");
@@ -539,7 +539,7 @@ src/
 ├── mcp/               # Model Context Protocol client
 ├── memory/            # Long-term memory (MEMORY.md + file store)
 ├── security/          # Prompt injection defense
-├── reflection/        # ReflectionAgent + ErrorNotebook (错题本)
+├── reflection/        # ReflectionAgent + MemoryReflector + ErrorNotebook
 ├── precipitation/     # Post-execution skill extraction
 ├── git/               # Git worktree manager for sub-agent isolation
 ├── eval/              # Tool call evaluation + regression benchmarks
