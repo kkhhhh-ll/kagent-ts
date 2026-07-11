@@ -88,7 +88,8 @@ export class MemoryManager {
   constructor(storageDir?: string) {
     this.storageDir = path.resolve(storageDir ?? ".memory");
     this.indexFile = path.join(this.storageDir, "MEMORY.md");
-    this.ensureDir();
+    // Lazy init: don't create .memory/ until something is actually written.
+    // loadIndex() is safe — it returns [] when the dir doesn't exist.
     this.loadIndex();
   }
 
@@ -102,6 +103,7 @@ export class MemoryManager {
    * are silently removed to make room.
    */
   add(memory: Memory): void {
+    this.ensureDir();
     // Write individual file
     const filePath = this.memoryPath(memory.name);
     const fileContent = this.formatFile(memory);
@@ -151,6 +153,7 @@ export class MemoryManager {
     const memory = this.loadFile(name);
     if (!memory) return false;
 
+    this.ensureDir();
     memory.lastRecalledAt = new Date().toISOString();
     const filePath = this.memoryPath(name);
     const fileContent = this.formatFile(memory);
@@ -339,6 +342,7 @@ export class MemoryManager {
   // ─── Index Persistence ──────────────────────────────────────────────────
 
   private persistIndex(): void {
+    this.ensureDir();
     const lines: string[] = [];
     for (const e of this.index) {
       const line = `- [${e.name}](${e.name}.md) — ${e.description}`;

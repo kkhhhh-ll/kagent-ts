@@ -43,7 +43,6 @@ import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
-import { z } from "zod/v4";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -94,7 +93,7 @@ export interface AgentConfig {
    * in context and the full output is saved to disk for on-demand reading.
    *
    * Omit or set to `undefined` to disable truncation. Must be a positive
-   * integer when set (validated at runtime via Zod).
+   * integer when set (validated at runtime).
    *
    * Only used when `toolRegistry` is NOT provided (the framework creates
    * its own registry).
@@ -306,33 +305,22 @@ export interface AgentConfig {
 }
 
 /**
- * Zod schema for validating {@link AgentConfig} at runtime.
+ * Default values for optional {@link AgentConfig} fields.
  *
- * Catches invalid values (negative numbers, wrong types) at the boundary
- * so internal code can trust the data without defensive checks.
+ * Applied at the top of the constructor so the rest of the body can access
+ * every field without non-null assertions. Kept outside the constructor so
+ * default values are visible in one place and easy to audit.
  */
-const AgentConfigSchema = z.object({
-  // ── Numbers ──────────────────────────────────────────────────────────
-  toolOutputMaxBytes: z.number().int().positive().optional(),
-  approvalTimeoutMs: z.number().int().positive().default(120_000),
-  toolRetryCount: z.number().int().nonnegative().optional(),
-  precipitationMaxIterations: z.number().int().positive().optional(),
-  memoryReflectionMaxIterations: z.number().int().positive().optional(),
-
-  // ── Strings ──────────────────────────────────────────────────────────
-  name: z.string().default("main"),
-  approvalTimeoutStrategy: z.enum(["deny", "allow"]).default("deny"),
-  subAgentsDir: z.string().default("./subagents/"),
-
-  // ── Booleans ─────────────────────────────────────────────────────────
-  enableParallelToolExecution: z.boolean().default(true),
-  disableSubAgents: z.boolean().default(false),
-  skipAutoTools: z.boolean().default(false),
-  enableCheckpointing: z.boolean().default(false),
-
-  // ── Arrays ───────────────────────────────────────────────────────────
-  tools: z.array(z.unknown()).nonempty().optional(),
-}).loose();
+const AGENT_CONFIG_DEFAULTS = {
+  name: "main",
+  approvalTimeoutMs: 120_000,
+  approvalTimeoutStrategy: "deny" as "deny" | "allow",
+  enableParallelToolExecution: true,
+  disableSubAgents: false,
+  skipAutoTools: false,
+  enableCheckpointing: false,
+  subAgentsDir: "./subagents/",
+} as const;
 
 /**
  * Abstract base Agent class.
@@ -462,16 +450,21 @@ export abstract class Agent {
   protected workdir?: string;
 
   constructor(config: AgentConfig) {
-    // Validate & apply defaults at the boundary — internal code trusts this.
-    const cfg = AgentConfigSchema.parse(config) as unknown as AgentConfig;
+    // ── Validate required fields ──────────────────────────────────────────
+    if (!config.llm) {
+      throw new Error("AgentConfig: llm is required");
+    }
+
+    // ── Apply defaults (user values take precedence) ──────────────────────
+    const cfg = { ...AGENT_CONFIG_DEFAULTS, ...config };
     this._cancelled = false;
     this.llm = cfg.llm;
-    this.agentName = cfg.name!;
+    this.agentName = cfg.name;
     this.logger = cfg.logger ?? new ConsoleLogger();
     this.onToolApproval = cfg.onToolApproval;
-    this.approvalTimeoutMs = cfg.approvalTimeoutMs!;
-    this.approvalTimeoutStrategy = cfg.approvalTimeoutStrategy!;
-    this.enableParallelToolExecution = cfg.enableParallelToolExecution!;
+    this.approvalTimeoutMs = cfg.approvalTimeoutMs;
+    this.approvalTimeoutStrategy = cfg.approvalTimeoutStrategy;
+    this.enableParallelToolExecution = cfg.enableParallelToolExecution;
     this.contextManager =
       cfg.contextManager ?? new ContextManager(undefined, this.logger);
 
@@ -523,10 +516,10 @@ export abstract class Agent {
         sessionDir: cfg.sessionDir,
       });
     }
-    this.checkpointingEnabled = cfg.enableCheckpointing!;
-    this.subAgentsDir = cfg.subAgentsDir!;
-    this.disableSubAgents = cfg.disableSubAgents!;
-    this.skipAutoTools = cfg.skipAutoTools!;
+    this.checkpointingEnabled = cfg.enableCheckpointing;
+    this.subAgentsDir = cfg.subAgentsDir;
+    this.disableSubAgents = cfg.disableSubAgents;
+    this.skipAutoTools = cfg.skipAutoTools;
 
     // Auto-load mcp.json from project root; skip for sub-agents
     // (they inherit MCP tools from the parent's ToolRegistry).
