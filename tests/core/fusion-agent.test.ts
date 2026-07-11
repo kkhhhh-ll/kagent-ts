@@ -499,82 +499,6 @@ describe("FusionAgent", () => {
       expect((agent as any).consecutiveFailures).toBe(0); // Reset after replan
     });
 
-    it("injects inline reflection prompt at configured interval", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(echoTool);
-
-      // Inline reflection triggers after tool-call iterations at the
-      // configured interval. We use 3 iterations with tool calls so
-      // iteration index 2 (third iteration) hits interval=3.
-      const llm = mockSequenceLLM([
-        // Route
-        [routeJSON("complex", "needs reflection")],
-        // Plan
-        [planJSON(["Step 1", "Step 2", "Step 3", "Step 4"])],
-        // Iteration 0: tool call
-        [
-          JSON.stringify({ thought: "Executing step 1.", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "a"}' },
-            },
-          ],
-        ],
-        // Iteration 1: tool call
-        [
-          JSON.stringify({ thought: "Executing step 2.", currentStep: 2 }),
-          [
-            {
-              id: "call_2",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "b"}' },
-            },
-          ],
-        ],
-        // Iteration 2: tool call — (iteration+1) % 3 === 0 triggers reflection
-        [
-          JSON.stringify({ thought: "Executing step 3.", currentStep: 3 }),
-          [
-            {
-              id: "call_3",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "c"}' },
-            },
-          ],
-        ],
-        // Final answer
-        [answerJSON("Completed with inline reflection checks.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "inline",
-        reflectionInterval: 3,
-        maxIterations: 10,
-      });
-
-      const addMessageSpy = vi.spyOn(
-        (agent as any).contextManager,
-        "addMessage",
-      );
-
-      await agent.run("task with inline reflection");
-
-      // The INLINE_REFLECTION_PROMPT should have been injected during
-      // the third tool-call iteration
-      const reflectionCalls = addMessageSpy.mock.calls.filter(
-        (call: any[]) =>
-          typeof call[0]?.content === "string" &&
-          call[0].content.includes("Internal Reflection"),
-      );
-      expect(reflectionCalls.length).toBeGreaterThanOrEqual(1);
-    });
-  });
 
   // ══════════════════════════════════════════════════════════════════════
   // Reflection
@@ -659,30 +583,25 @@ describe("FusionAgent", () => {
       expect(result).toContain("Direct answer.");
     });
 
-    it("post-hoc: throws if notebook is missing", () => {
-      expect(() => {
-        new FusionAgent({
-          llm: mockAnswerLLM("test"),
-          toolRegistry: new ToolRegistry(),
-          logger: new SilentLogger(),
-          reflection: "post-hoc",
-          // no notebook
-          maxIterations: 5,
-        });
-      }).toThrow(/notebook/);
-    });
+    it("post-hoc: auto-creates notebook when not provided", async () => {
+      const llm = mockSequenceLLM([
+        [routeJSON("simple", "auto-create notebook")],
+        [answerJSON("Done.")],
+      ]);
 
-    it("both: requires notebook", () => {
-      expect(() => {
-        new FusionAgent({
-          llm: mockAnswerLLM("test"),
-          toolRegistry: new ToolRegistry(),
-          logger: new SilentLogger(),
-          reflection: "both",
-          // no notebook
-          maxIterations: 5,
-        });
-      }).toThrow(/notebook/);
+      const agent = new FusionAgent({
+        llm,
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        routing: "auto",
+        reflection: "post-hoc",
+        // no notebook — should auto-create
+        maxIterations: 5,
+      });
+
+      // Should not throw — notebook is auto-created
+      const result = await agent.run("test auto-create notebook");
+      expect(result).toBe("Done.");
     });
   });
 
@@ -1037,135 +956,6 @@ describe("FusionAgent", () => {
   // Inline reflection on first failure
   // ══════════════════════════════════════════════════════════════════════
 
-  describe("inline reflection on tool failure", () => {
-    it("triggers inline reflection on first tool failure when mode is inline", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(failTool);
-
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "may fail")],
-        [planJSON(["Step 1: try something risky"])],
-        // Tool call that will fail
-        [
-          JSON.stringify({ thought: "Let me try.", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "fail", arguments: "{}" },
-            },
-          ],
-        ],
-        // After reflection prompt is injected (not a separate LLM call),
-        // the next iteration continues with the reflection prompt as context
-        [revisedPlanJSON(["Step 1: use safer approach"])],
-        [answerJSON("Recovered after reflection.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "inline",
-        reflectionInterval: 5, // high interval so only first-failure triggers
-        maxIterations: 10,
-      });
-
-      const result = await agent.run("risky task");
-      expect(result).toContain("Recovered after reflection.");
-      // Verify inline reflection was triggered by the failure
-      expect((agent as any).inlineReflectionsDone).toBeGreaterThanOrEqual(1);
-    });
-
-    it("does NOT trigger inline reflection when mode is off even on failure", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(failTool);
-
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "tool will fail but no reflection")],
-        [planJSON(["Step 1: try failing tool"])],
-        [
-          JSON.stringify({ thought: "Trying...", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "fail", arguments: "{}" },
-            },
-          ],
-        ],
-        [revisedPlanJSON(["Step 1: recover without reflection"])],
-        [answerJSON("Done without reflection.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "off",
-        maxIterations: 10,
-      });
-
-      await agent.run("failing task");
-      expect((agent as any).inlineReflectionsDone).toBe(0);
-    });
-
-    it("only triggers first-failure reflection once per run", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(failTool);
-
-      // Two separate failures — reflection should only trigger on the first
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "multiple failures")],
-        [planJSON(["Step 1: fail", "Step 2: fail again"])],
-        // First failure — triggers reflection
-        [
-          JSON.stringify({ thought: "First attempt.", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "fail", arguments: "{}" },
-            },
-          ],
-        ],
-        // Second failure — inlineReflectionsDone is now 1, so first-failure
-        // guard (`=== 0`) prevents a second trigger
-        [
-          JSON.stringify({ thought: "Second attempt.", currentStep: 2 }),
-          [
-            {
-              id: "call_2",
-              type: "function" as const,
-              function: { name: "fail", arguments: "{}" },
-            },
-          ],
-        ],
-        [answerJSON("Survived multiple failures.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "inline",
-        reflectionInterval: 100, // interval-based won't fire
-        maxIterations: 10,
-      });
-
-      await agent.run("multi-fail task");
-      // Only one inline reflection (the first-failure one), not two
-      expect((agent as any).inlineReflectionsDone).toBe(1);
-    });
-  });
-
-  // ══════════════════════════════════════════════════════════════════════
-  // Post-hoc reflection — deep coverage
-  // ══════════════════════════════════════════════════════════════════════
-
   describe("post-hoc reflection deep", () => {
     let notebookDir: string;
 
@@ -1281,91 +1071,6 @@ describe("FusionAgent", () => {
       expect(result).toContain("Answer before reflection crash.");
     });
 
-    it("performs inline AND post-hoc reflection in 'both' mode", async () => {
-      const notebook = new ErrorNotebook({ storageDir: notebookDir });
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(echoTool);
-
-      let callCount = 0;
-      const llm: LLMProvider = {
-        model: "mock",
-        chat: async () => {
-          callCount++;
-          if (callCount === 1) {
-            // Route
-            return { content: routeJSON("complex", "needs full reflection") };
-          }
-          if (callCount === 2) {
-            // Plan
-            return { content: planJSON(["Step 1: echo"]) };
-          }
-          if (callCount === 3) {
-            // Execute: tool call
-            return {
-              content: JSON.stringify({ thought: "Echoing.", currentStep: 1 }),
-              tool_calls: [
-                {
-                  id: "call_1",
-                  type: "function" as const,
-                  function: { name: "echo", arguments: '{"message": "both test"}' },
-                },
-              ],
-            };
-          }
-          if (callCount === 4) {
-            // Final answer
-            return { content: answerJSON("Both mode complete.") };
-          }
-          // callCount >= 5: post-hoc reflection calls (fork ReActAgent)
-          return {
-            content: JSON.stringify({
-              thought: "Analysis done.",
-              answer: JSON.stringify({
-                analysis: "Both-mode reflection analysis.",
-                score: 90,
-                findings: [
-                  {
-                    category: "other",
-                    description: "Minor formatting issue in output.",
-                    cause: "LLM didn't apply markdown formatting.",
-                    suggestion: "Add formatting instructions to the system prompt.",
-                  },
-                ],
-                improvements: ["Use consistent formatting."],
-              }),
-            }),
-          };
-        },
-        chatStream: async function* () { yield { type: "done" as const }; },
-        getTokenCount: () => 10,
-      };
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "both",
-        reflectionInterval: 1, // inline triggers on every tool-call iteration
-        notebook,
-        maxIterations: 10,
-      });
-
-      const result = await agent.run("full reflection test");
-      expect(result).toContain("Both mode complete.");
-
-      // Inline reflection was triggered
-      expect((agent as any).inlineReflectionsDone).toBeGreaterThanOrEqual(1);
-
-      // Wait for background post-hoc reflection to complete (now fire-and-forget)
-      await new Promise((r) => setTimeout(r, 50));
-
-      // Post-hoc reflection wrote to the notebook
-      const entries = notebook.getAll();
-      expect(entries.length).toBe(1);
-      expect(entries[0].category).toBe("other");
-    });
-
     it("passes the correct sessionId to the ReflectionAgent", async () => {
       const notebook = new ErrorNotebook({ storageDir: notebookDir });
       const sessionDir = tempDir();
@@ -1419,164 +1124,6 @@ describe("FusionAgent", () => {
     });
   });
 
-  // ══════════════════════════════════════════════════════════════════════
-  // Inline reflection — content verification
-  // ══════════════════════════════════════════════════════════════════════
-
-  describe("inline reflection content", () => {
-    it("injects the full INLINE_REFLECTION_PROMPT into context", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(echoTool);
-
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "check prompt content")],
-        [planJSON(["Step 1: echo something"])],
-        // reflectionInterval: 1 triggers inline reflection at every
-        // tool-call iteration (iteration 0: (0+1)%1===0 ✓)
-        [
-          JSON.stringify({ thought: "Calling echo.", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "prompt check"}' },
-            },
-          ],
-        ],
-        [answerJSON("Prompt check complete.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "inline",
-        reflectionInterval: 1,
-        maxIterations: 10,
-      });
-
-      const addMessageSpy = vi.spyOn(
-        (agent as any).contextManager,
-        "addMessage",
-      );
-
-      await agent.run("check inline prompt");
-
-      const reflectionCalls = addMessageSpy.mock.calls.filter(
-        (call: any[]) =>
-          typeof call[0]?.content === "string" &&
-          call[0].content.includes("Internal Reflection"),
-      );
-      expect(reflectionCalls.length).toBeGreaterThanOrEqual(1);
-
-      const promptContent: string = (reflectionCalls[0][0] as { content: string }).content;
-      expect(promptContent).toContain("Pause and evaluate your progress");
-      expect(promptContent).toContain("on_track");
-      expect(promptContent).toContain("should_replan");
-      expect(promptContent).toContain("next_action");
-    });
-
-    it("inline reflection counter increments correctly across multiple triggers", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(echoTool);
-
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "multi-reflection")],
-        [planJSON(["Step 1", "Step 2", "Step 3"])],
-        // Iteration 0: tool call → inline triggers (interval=1)
-        [
-          JSON.stringify({ thought: "Step 1", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "a"}' },
-            },
-          ],
-        ],
-        // Iteration 1: tool call → inline triggers again
-        [
-          JSON.stringify({ thought: "Step 2", currentStep: 2 }),
-          [
-            {
-              id: "call_2",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "b"}' },
-            },
-          ],
-        ],
-        // Iteration 2: tool call → inline triggers again
-        [
-          JSON.stringify({ thought: "Step 3", currentStep: 3 }),
-          [
-            {
-              id: "call_3",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "c"}' },
-            },
-          ],
-        ],
-        [answerJSON("Three reflections done.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "inline",
-        reflectionInterval: 1,
-        maxIterations: 10,
-      });
-
-      await agent.run("count reflections");
-      // 3 tool-call iterations × interval=1 → 3 inline reflections
-      expect((agent as any).inlineReflectionsDone).toBe(3);
-    });
-
-    it("does not inject reflection prompt when mode is off", async () => {
-      const toolRegistry = new ToolRegistry();
-      toolRegistry.register(echoTool);
-
-      const llm = mockSequenceLLM([
-        [routeJSON("complex", "no reflection")],
-        [planJSON(["Step 1: echo"])],
-        [
-          JSON.stringify({ thought: "Echoing.", currentStep: 1 }),
-          [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "echo", arguments: '{"message": "no refl"}' },
-            },
-          ],
-        ],
-        [answerJSON("No reflection done.")],
-      ]);
-
-      const agent = new FusionAgent({
-        llm,
-        toolRegistry,
-        logger: new SilentLogger(),
-        routing: "auto",
-        reflection: "off",
-        maxIterations: 10,
-      });
-
-      const addMessageSpy = vi.spyOn(
-        (agent as any).contextManager,
-        "addMessage",
-      );
-
-      await agent.run("no reflection please");
-
-      const reflectionCalls = addMessageSpy.mock.calls.filter(
-        (call: any[]) =>
-          typeof call[0]?.content === "string" &&
-          call[0].content.includes("Internal Reflection"),
-      );
-      expect(reflectionCalls.length).toBe(0);
-    });
   });
 });
+

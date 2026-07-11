@@ -29,7 +29,8 @@ import {
   // Memory
   MemoryManager,
   // Reflection
-  ReflectionAgent, ErrorNotebook, createReflectionHook,
+  ReflectionAgent, ErrorNotebook,
+  MemoryReflector,
   // Security
   wrapUntrusted, detectInjectionSignatures, buildInjectionWarning,
   // Eval

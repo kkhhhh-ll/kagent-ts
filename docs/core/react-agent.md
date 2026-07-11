@@ -73,6 +73,18 @@ interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
 
+  /** 错题本反思模式 (默认: "off") */
+  reflection?: "off" | "post-hoc"
+
+  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  reflectionMaxIterations?: number
+
+  /** 记忆提取模式 (默认: "off") */
+  memoryReflection?: "off" | "post-hoc"
+
+  /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
+  memoryReflectionMaxIterations?: number
+
   /** 技能沉淀模式 (默认: "off") */
   precipitation?: "off" | "post-hoc"
 

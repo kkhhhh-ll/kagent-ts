@@ -16,4 +16,3 @@ export type {
   MemoryReflectionInput,
   ExtractedMemory,
 } from "./memory-reflector";
-export { createReflectionHook } from "./reflection-hook";

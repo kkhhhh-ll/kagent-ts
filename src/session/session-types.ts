@@ -38,7 +38,6 @@ export interface FusionSessionState {
   completedSteps: number;
   consecutiveFailures: number;
   reflectionEnabled: boolean;
-  inlineReflectionsDone: number;
 }
 
 /**

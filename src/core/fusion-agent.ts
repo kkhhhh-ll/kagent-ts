@@ -4,7 +4,6 @@ import { Role } from "../messages/types";
 import {
   FUSION_ROUTE_INSTRUCTIONS,
   FUSION_EXECUTION_INSTRUCTIONS,
-  INLINE_REFLECTION_PROMPT,
   parseFusionRouteResponse,
   parseFusionResponse,
 } from "./response-schema";
@@ -17,7 +16,6 @@ import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
-import { ReflectionAgent } from "../reflection/reflection-agent";
 import { ErrorNotebook } from "../reflection/error-notebook";
 
 // ─── System Prompt ────────────────────────────────────────────────────────
@@ -93,28 +91,23 @@ export interface FusionAgentConfig extends AgentConfig {
   // ── Reflection ──────────────────────────────────────────────────────
 
   /**
-   * Reflection mode:
+   * Error reflection mode:
    * - "off":       No reflection.
-   * - "post-hoc":  After execution, run ReflectionAgent to review the session.
-   * - "inline":    Within the loop, pause every N steps to self-check.
-   * - "both":      Inline + post-hoc.
+   * - "post-hoc":  After execution, fork a ReflectionAgent to review
+   *                the session and persist findings to the ErrorNotebook.
    *
    * Default: "off".
    */
-  reflection?: "off" | "post-hoc" | "inline" | "both";
-
-  /**
-   * How often (in iterations) to trigger inline reflection.
-   * Also triggers on first tool failure in a run.
-   * Default: 3.
-   */
-  reflectionInterval?: number;
+  reflection?: "off" | "post-hoc";
 
   /**
    * ErrorNotebook instance for persisting reflection findings.
-   * Required when reflection is "post-hoc" or "both".
+   * Auto-created with defaults when `reflection` is "post-hoc" and not provided.
    */
   notebook?: ErrorNotebook;
+
+  /** Max iterations for the reflection sub-agent. Default: 4. */
+  reflectionMaxIterations?: number;
 
   // ── Loop control ────────────────────────────────────────────────────
 
@@ -137,6 +130,14 @@ export interface FusionAgentConfig extends AgentConfig {
 
   /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
+
+  // ── Memory Reflection ───────────────────────────────────────────────
+
+  /** Memory reflection mode. Default: "off". */
+  memoryReflection?: "off" | "post-hoc";
+
+  /** Max iterations for the memory reflection sub-agent. Default: 5. */
+  memoryReflectionMaxIterations?: number;
 }
 
 // ─── FusionAgent ──────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ export interface FusionAgentConfig extends AgentConfig {
  *                 ↓
  *               [3. ReAct Execute Loop]  With plan tracking
  *   ↓
- * [4. Reflect]  off | post-hoc | inline | both
+ * [4. Reflect]  off | post-hoc
  *   ↓
  * Final Answer
  * ```
@@ -176,13 +177,15 @@ export class FusionAgent extends Agent {
   private planConfirmation: "auto" | "always" | "never";
   private onPlanConfirm?: PlanConfirmCallback;
   private maxPlanSteps: number;
-  private reflectionMode: "off" | "post-hoc" | "inline" | "both";
-  private reflectionInterval: number;
+  private reflectionMode: "off" | "post-hoc";
+  private reflectionMaxIterations: number;
   private notebook?: ErrorNotebook;
   private maxIterations: number;
   private replanThreshold: number;
   private precipitationMode: "off" | "post-hoc";
   private precipitationMaxIterations: number;
+  private memoryReflectionMode: "off" | "post-hoc";
+  private memoryReflectionMaxIterations: number;
 
   // ── Runtime state ───────────────────────────────────────────────────
 
@@ -198,8 +201,6 @@ export class FusionAgent extends Agent {
   private completedSteps = 0;
   /** Consecutive tool failures (resets on success). */
   private consecutiveFailures = 0;
-  /** How many inline reflections have been done in this run. */
-  private inlineReflectionsDone = 0;
   /** Internal flag: when true, run() skips state reset (used by resume()). */
   private _skipStateReset = false;
 
@@ -218,22 +219,14 @@ export class FusionAgent extends Agent {
     this.onPlanConfirm = config.onPlanConfirm;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.reflectionMode = config.reflection ?? "off";
-    this.reflectionInterval = config.reflectionInterval ?? 3;
+    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 4;
     this.notebook = config.notebook;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
     this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
-
-    // Validate: notebook required for post-hoc/both modes
-    if (
-      (this.reflectionMode === "post-hoc" || this.reflectionMode === "both") &&
-      !this.notebook
-    ) {
-      throw new Error(
-        "FusionAgent: 'notebook' (ErrorNotebook) is required when reflection is 'post-hoc' or 'both'.",
-      );
-    }
+    this.memoryReflectionMode = config.memoryReflection ?? "off";
+    this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
 
     this.rebuildSystemPrompt();
   }
@@ -274,7 +267,6 @@ export class FusionAgent extends Agent {
       this.hasPlan = false;
       this.completedSteps = 0;
       this.consecutiveFailures = 0;
-      this.inlineReflectionsDone = 0;
     }
 
     // Save initial checkpoint
@@ -350,6 +342,21 @@ export class FusionAgent extends Agent {
         await this.runPrecipitation(input, answer);
       } catch (err: unknown) {
         this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // ── Phase 6: Memory Reflection ────────────────────────────────────
+    const shouldReflectMemory =
+      this.memoryReflectionMode === "post-hoc" ||
+      (this.memoryReflectionMode !== "off" &&
+        this.consecutiveFailures >= FAILURE_THRESHOLD) ||
+      (this.memoryReflectionMode !== "off" &&
+        /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
+    if (shouldReflectMemory) {
+      try {
+        await this.runMemoryReflection(input, answer);
+      } catch (err: unknown) {
+        this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -794,14 +801,6 @@ export class FusionAgent extends Agent {
                 : ""),
           );
 
-          // Inline reflection on first failure if enabled
-          if (
-            (this.reflectionMode === "inline" ||
-              this.reflectionMode === "both") &&
-            this.inlineReflectionsDone === 0
-          ) {
-            await this.reflectInline(iteration);
-          }
         } else {
           this.consecutiveFailures = 0;
 
@@ -829,15 +828,6 @@ export class FusionAgent extends Agent {
         // Save checkpoint
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("active");
-        }
-
-        // Inline reflection at regular intervals
-        if (
-          (this.reflectionMode === "inline" ||
-            this.reflectionMode === "both") &&
-          (iteration + 1) % this.reflectionInterval === 0
-        ) {
-          await this.reflectInline(iteration);
         }
 
         continue;
@@ -982,59 +972,33 @@ export class FusionAgent extends Agent {
     answer: string,
   ): Promise<void> {
     if (this.reflectionMode === "off") return;
-
-    // ── Post-hoc reflection ──────────────────────────────────────────
-    if (
-      this.reflectionMode === "post-hoc" ||
-      this.reflectionMode === "both"
-    ) {
+    if (this.reflectionMode === "post-hoc") {
       await this.reflectPostHoc(input, answer);
     }
-
-    // Inline reflection is done during the loop — nothing extra here
   }
 
   /**
-   * Inline reflection: pause execution and ask the LLM to self-check
-   * its progress. Results are logged and injected into context.
-   */
-  private async reflectInline(iteration: number): Promise<void> {
-    this.inlineReflectionsDone++;
-    this.logger.info(
-      "Reflection",
-      `Inline reflection #${this.inlineReflectionsDone} at iteration ${iteration + 1}`,
-    );
-
-    const reflectionMsg = Message.user(INLINE_REFLECTION_PROMPT);
-    this.contextManager.addMessage(reflectionMsg.toDict());
-
-    // Do NOT call the LLM here — the reflection prompt is injected as a
-    // user message and will be processed in the next iteration of the
-    // main loop. This keeps the reflection lightweight and naturally
-    // integrated into the flow.
-
-    // Save checkpoint after inline reflection
-    if (this.checkpointingEnabled) {
-      this.saveCheckpoint("active");
-    }
-  }
-
-  /**
-   * Post-hoc reflection: after execution completes, run the
-   * ReflectionAgent to review the full session.
+   * Post-hoc reflection: after execution completes, fork a
+   * ReflectionAgent to review the full session and persist
+   * findings to the ErrorNotebook.
    */
   private async reflectPostHoc(
     input: string,
     answer: string,
   ): Promise<void> {
-    if (!this.notebook) return;
+    const { ReflectionAgent: RA } = await import("../reflection/reflection-agent.js");
+    const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
+
+    // Auto-create notebook if not provided
+    const notebook = this.notebook ?? new NB();
 
     this.logger.info("Reflection", "Starting post-hoc reflection...");
 
     try {
-      const reflector = new ReflectionAgent({
+      const reflector = new RA({
         llm: this.llm,
-        notebook: this.notebook,
+        notebook,
+        maxIterations: this.reflectionMaxIterations,
       });
 
       const contextMessages = this.contextManager.getContextMessages();
@@ -1106,6 +1070,51 @@ export class FusionAgent extends Agent {
     // Rebuild system prompt so new skills show up immediately
     if (this.skillManager.getAll().length > 0) {
       this.rebuildSystemPrompt();
+    }
+  }
+
+  // ─── Memory Reflection ──────────────────────────────────────────────
+
+  /**
+   * Run post-hoc memory extraction after a successful completion.
+   * Best-effort — failures are logged but never affect the answer.
+   *
+   * Unlike precipitation, no guard for `skillsDir` is needed here:
+   * MemoryManager is always created by the base Agent constructor.
+   */
+  private async runMemoryReflection(
+    input: string,
+    answer: string,
+  ): Promise<void> {
+    const { MemoryReflector } = await import("../reflection/memory-reflector.js");
+
+    try {
+      const reflector = new MemoryReflector({
+        llm: this.memoryReflectorLLM ?? this.llm,
+        memoryManager: this.memoryManager,
+        maxIterations: this.memoryReflectionMaxIterations,
+        logger: this.logger,
+        hooks: this.hooks,
+      });
+
+      const memories = await reflector.reflect({
+        userQuery: input,
+        finalAnswer: answer,
+        conversation: this.contextManager.getContextMessages(),
+        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+      });
+
+      if (memories.length > 0) {
+        this.logger.info(
+          "MemoryReflection",
+          `Extracted ${memories.length} new memor${memories.length === 1 ? "y" : "ies"}.`,
+        );
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        "MemoryReflection",
+        `Memory reflection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -1189,7 +1198,6 @@ export class FusionAgent extends Agent {
         completedSteps: this.completedSteps,
         consecutiveFailures: this.consecutiveFailures,
         reflectionEnabled: this.reflectionMode !== "off",
-        inlineReflectionsDone: this.inlineReflectionsDone,
       },
     };
   }
@@ -1208,7 +1216,6 @@ export class FusionAgent extends Agent {
       this.hasPlan = fs.hasPlan;
       this.completedSteps = fs.completedSteps;
       this.consecutiveFailures = fs.consecutiveFailures;
-      this.inlineReflectionsDone = fs.inlineReflectionsDone;
     }
 
     return state;
@@ -1238,7 +1245,6 @@ export class FusionAgent extends Agent {
     this.hasPlan = false;
     this.consecutiveFailures = 0;
     this.completedSteps = 0;
-    this.inlineReflectionsDone = 0;
 
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());
@@ -1281,6 +1287,13 @@ export class FusionAgent extends Agent {
     if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
       shouldPrecipitate = true;
       this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
+    }
+
+    // Determine if memory reflection should run (mode + signals)
+    let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
+    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+      shouldReflectMemory = true;
+      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
     }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -1414,11 +1427,9 @@ export class FusionAgent extends Agent {
               && this.precipitationMode !== "off") {
             shouldPrecipitate = true;
           }
-          if (
-            (this.reflectionMode === "inline" || this.reflectionMode === "both") &&
-            this.inlineReflectionsDone === 0
-          ) {
-            await this.reflectInline(iteration);
+          if (this.consecutiveFailures >= FAILURE_THRESHOLD
+              && this.memoryReflectionMode !== "off") {
+            shouldReflectMemory = true;
           }
         } else {
           this.consecutiveFailures = 0;
@@ -1427,13 +1438,6 @@ export class FusionAgent extends Agent {
           } else if (this.hasPlan) {
             this.completedSteps = Math.min(this.completedSteps + 1, this.currentPlan.length);
           }
-        }
-
-        if (
-          (this.reflectionMode === "inline" || this.reflectionMode === "both") &&
-          (iteration + 1) % this.reflectionInterval === 0
-        ) {
-          await this.reflectInline(iteration);
         }
 
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
@@ -1465,6 +1469,15 @@ export class FusionAgent extends Agent {
             await this.runPrecipitation(input, parsed.answer);
           } catch (err: unknown) {
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        // ── Memory reflection (best-effort, post-hoc) ──────────────────
+        if (shouldReflectMemory) {
+          try {
+            await this.runMemoryReflection(input, parsed.answer);
+          } catch (err: unknown) {
+            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
 

@@ -9,6 +9,7 @@ import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
+import type { ErrorNotebook } from "../reflection/error-notebook";
 
 /**
  * Default system prompt for ReAct-style reasoning.
@@ -41,6 +42,24 @@ export interface ReActAgentConfig extends AgentConfig {
 
   /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
+
+  /** Memory reflection mode. Default: "off". */
+  memoryReflection?: "off" | "post-hoc";
+
+  /** Max iterations for the memory reflection sub-agent. Default: 5. */
+  memoryReflectionMaxIterations?: number;
+
+  /** Error reflection mode. Default: "off". */
+  reflection?: "off" | "post-hoc";
+
+  /** Max iterations for the reflection sub-agent. Default: 4. */
+  reflectionMaxIterations?: number;
+
+  /**
+   * ErrorNotebook for persisting error reflection findings.
+   * Auto-created with defaults when `reflection` is "post-hoc" and not provided.
+   */
+  notebook?: ErrorNotebook;
 }
 
 /**
@@ -62,6 +81,11 @@ export class ReActAgent extends Agent {
   private maxIterations: number;
   private precipitationMode: "off" | "post-hoc";
   private precipitationMaxIterations: number;
+  private memoryReflectionMode: "off" | "post-hoc";
+  private memoryReflectionMaxIterations: number;
+  private reflectionMode: "off" | "post-hoc";
+  private reflectionMaxIterations: number;
+  private notebook?: ErrorNotebook;
 
   constructor(config: ReActAgentConfig) {
     const mergedConfig: ReActAgentConfig = {
@@ -73,6 +97,11 @@ export class ReActAgent extends Agent {
     this.maxIterations = config.maxIterations ?? 10;
     this.precipitationMode = config.precipitation ?? "off";
     this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
+    this.memoryReflectionMode = config.memoryReflection ?? "off";
+    this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
+    this.reflectionMode = config.reflection ?? "off";
+    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 4;
+    this.notebook = config.notebook;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -119,6 +148,16 @@ export class ReActAgent extends Agent {
       shouldPrecipitate = true;
       this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
     }
+
+    // Determine if memory reflection should run (mode + signals)
+    let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
+    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+      shouldReflectMemory = true;
+      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
+    }
+
+    // Determine if error reflection should run
+    const shouldReflect = this.reflectionMode === "post-hoc";
 
     // ── ReAct loop ────────────────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -337,6 +376,22 @@ export class ReActAgent extends Agent {
         }
       }
 
+      // ── Memory reflection (best-effort, post-hoc) ──────────────────
+      if (shouldReflectMemory) {
+        try {
+          await this.runMemoryReflection(input, answer);
+        } catch (err: unknown) {
+          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // ── Error reflection (fire-and-forget, post-hoc) ───────────────
+      if (shouldReflect) {
+        this.runReflection(input, answer).catch((err: unknown) =>
+          this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
+
       return answer;
     }
 
@@ -383,6 +438,16 @@ export class ReActAgent extends Agent {
       shouldPrecipitate = true;
       this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
     }
+
+    // Determine if memory reflection should run (mode + signals)
+    let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
+    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+      shouldReflectMemory = true;
+      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
+    }
+
+    // Determine if error reflection should run
+    const shouldReflect = this.reflectionMode === "post-hoc";
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this.logger.info(this.agentName === "main" ? "ReAct" : `ReAct:${this.agentName}`, `Iteration ${iteration + 1}/${this.maxIterations}`);
@@ -588,6 +653,22 @@ export class ReActAgent extends Agent {
         }
       }
 
+      // ── Memory reflection (best-effort, post-hoc) ──────────────────
+      if (shouldReflectMemory) {
+        try {
+          await this.runMemoryReflection(input, answer);
+        } catch (err: unknown) {
+          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // ── Error reflection (fire-and-forget, post-hoc) ───────────────
+      if (shouldReflect) {
+        this.runReflection(input, answer).catch((err: unknown) =>
+          this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
+
       return;
     }
 
@@ -645,6 +726,103 @@ export class ReActAgent extends Agent {
       this.logger.error(
         "Precipitation",
         `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // ─── Memory Reflection ──────────────────────────────────────────────
+
+  /**
+   * Run post-hoc memory extraction after a successful completion.
+   * Best-effort — failures are logged but never affect the answer.
+   *
+   * Unlike precipitation, no guard for `skillsDir` is needed here:
+   * MemoryManager is always created by the base Agent constructor.
+   */
+  private async runMemoryReflection(
+    input: string,
+    answer: string,
+  ): Promise<void> {
+    const { MemoryReflector } = await import("../reflection/memory-reflector.js");
+
+    try {
+      const reflector = new MemoryReflector({
+        llm: this.memoryReflectorLLM ?? this.llm,
+        memoryManager: this.memoryManager,
+        maxIterations: this.memoryReflectionMaxIterations,
+        logger: this.logger,
+        hooks: this.hooks,
+      });
+
+      const memories = await reflector.reflect({
+        userQuery: input,
+        finalAnswer: answer,
+        conversation: this.contextManager.getContextMessages(),
+        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+      });
+
+      if (memories.length > 0) {
+        this.logger.info(
+          "MemoryReflection",
+          `Extracted ${memories.length} new memor${memories.length === 1 ? "y" : "ies"}.`,
+        );
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        "MemoryReflection",
+        `Memory reflection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // ─── Error Reflection ──────────────────────────────────────────────
+
+  /**
+   * Dispatch error reflection based on mode.
+   * Fire-and-forget — failures are logged but never affect the answer.
+   */
+  private async runReflection(input: string, answer: string): Promise<void> {
+    if (this.reflectionMode === "off") return;
+    if (this.reflectionMode === "post-hoc") {
+      await this.reflectPostHoc(input, answer);
+    }
+  }
+
+  /**
+   * Fork a ReflectionAgent to review the session for errors and
+   * persist findings to the ErrorNotebook.
+   */
+  private async reflectPostHoc(input: string, answer: string): Promise<void> {
+    const { ReflectionAgent } = await import("../reflection/reflection-agent.js");
+    const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
+
+    // Auto-create notebook if not provided
+    const notebook = this.notebook ?? new NB();
+
+    try {
+      const reflector = new ReflectionAgent({
+        llm: this.llm,
+        notebook,
+        maxIterations: this.reflectionMaxIterations,
+      });
+
+      const entries = await reflector.reflect({
+        userQuery: input,
+        finalAnswer: answer,
+        conversation: this.contextManager.getContextMessages(),
+        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+      });
+
+      if (entries.length > 0) {
+        this.logger.info(
+          "Reflection",
+          `Recorded ${entries.length} finding(s) to the error notebook.`,
+        );
+      }
+    } catch (err: unknown) {
+      this.logger.warn(
+        "Reflection",
+        `Post-hoc reflection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

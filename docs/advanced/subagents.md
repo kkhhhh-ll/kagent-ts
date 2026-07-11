@@ -326,7 +326,7 @@ const unsafeHook = {
 }
 ```
 
-这是为了防止无限递归——例如 `ReflectionHook`（`createReflectionHook()`）在 `onFinish` 中会 spawn 子 Agent 进行反思，如果将它传入子 Agent，会导致：子 Agent 完成 → spawn 反思 Agent → 反思 Agent 完成 → spawn 更多 Agent → ……
+这是为了防止无限递归——例如反思/记忆提取的 Fork 子 Agent 在完成后如果再次触发反思，会导致无限递归。
 
 ## Sub-Agent vs Fork
 

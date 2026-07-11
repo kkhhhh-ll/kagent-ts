@@ -122,7 +122,7 @@ const agent = new OrchestratorAgent({
 - **数组**：`subAgentHooks: [traceLogger, metricsHook]`
 - **工厂函数**：`subAgentHooks: (name, runId) => mainTrace.createChildTrace(name, runId)`
 
-> ⚠️ **安全防护**：标记了 `safeForSubAgent: false` 的 hook（如 `ReflectionHook`——它在 `onFinish` 中又会 spawn 子 Agent）会被 `SubAgentManager` 自动过滤，并打印警告日志。这样可以防止无限递归。
+> ⚠️ **安全防护**：标记了 `safeForSubAgent: false` 的 hook（会在 `onFinish` 中 spawn 子 Agent）会被 `SubAgentManager` 自动过滤，并打印警告日志。这样可以防止无限递归。
 
 ## 内置 Hook 实现
 
@@ -161,37 +161,23 @@ const agent = new ReActAgent({
 
 详见 [Trace 追踪](/advanced/trace)。
 
-### Reflection Hook
+### 错题本反思 & 记忆提取
 
-`createReflectionHook()` 创建钩子，在 Agent 完成时自动并行运行两个子 Agent：
-
-- **错题本 Fork**：分析执行错误 → 写入 ErrorNotebook
-- **记忆提取 Fork**：提取长期记忆 → 写入 MemoryManager（可选）
+错题本反思（Reflection）和记忆提取（Memory Reflection）已内建到 Agent 中，通过
+AgentConfig 直接开启，无需额外的 Hook：
 
 ```ts
-import { createReflectionHook, ErrorNotebook, MemoryManager } from 'kagent-ts'
-
-const notebook = new ErrorNotebook({ storageDir: '.error-notebook' })
-const memory = new MemoryManager('.memory')
-
-const hook = createReflectionHook({
-  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-  notebook,
-  memoryManager: memory,         // 可选，不传则只做错题本反思
-  maxErrorIterations: 4,         // 可选
-  maxMemoryIterations: 5,        // 可选
-  logger: new ConsoleLogger(),   // 可选
-  hooks: [traceLogger],          // 可选，透传到 fork 子 Agent
-  onReflectionComplete: (entryCount, memoryCount) => {
-    console.log(`反思完成: ${entryCount} 条发现, ${memoryCount} 条新记忆`)
-  },
-})
-
 const agent = new ReActAgent({
-  // ...
-  hooks: [hook],
+  llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  reflection: "post-hoc",         // 会话结束后 fork 子 Agent 分析错误
+  memoryReflection: "post-hoc",   // 会话结束后 fork 子 Agent 提取长期记忆
 })
 ```
+
+两个子系统都是 post-hoc（执行后）模式，在 Agent 返回 answer 之前自动触发，
+best-effort，失败不影响主流程。
+
+详见 [Reflection 反思](/advanced/reflection) 和 [Memory 记忆](/advanced/memory)。
 
 详见 [Reflection 反思](/advanced/reflection)。
 

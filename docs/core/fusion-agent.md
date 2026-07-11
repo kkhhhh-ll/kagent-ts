@@ -17,7 +17,6 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   └── 用户确认 (如需要)
   ↓
 [EXECUTE] 执行计划步骤 (ReAct 或 Plan-Solve)
-  ├── [Inline Reflection] 每 N 步内省一次
   └── 继续直到完成
   ↓
 Final Answer（答案已返回给用户）
@@ -26,6 +25,10 @@ Final Answer（答案已返回给用户）
   ├── ReflectionAgent 反思整个会话
   ├── 评分 (0-100)
   └── 记录到 ErrorNotebook
+  ↓
+[MEMORY] (可选，post-hoc):
+  ├── MemoryReflector 提取长期记忆
+  └── 写入 MemoryManager (.memory/)
   ↓
 [PRECIPITATE] (可选，post-hoc):
   ├── PrecipitateAgent 提取可复用技能
@@ -55,10 +58,10 @@ const agent = new FusionAgent({
   planConfirmation: 'auto',   // "never" | "always" | "auto"
   // onPlanConfirm: async (plan, reason) => { return true },
 
-  // ── 反思配置 ──
-  reflection: 'both',          // "off" | "post-hoc" | "inline" | "both"
-  reflectionInterval: 3,       // 每 N 次迭代触发内省反思 (默认: 3)
-  // notebook: new ErrorNotebook(),  // post-hoc / both 模式必填
+  // ── Post-hoc 子系统 ──
+  reflection: 'post-hoc',          // "off" | "post-hoc" — 错题本反思
+  memoryReflection: 'post-hoc',    // "off" | "post-hoc" — 记忆提取
+  // notebook: new ErrorNotebook(), // 可选，不传自动创建
 
   // ── 沉淀配置 ──
   skillsDir: './skills',               // 技能存储目录
@@ -84,19 +87,23 @@ interface FusionAgentConfig extends AgentConfig {
   // "always": 始终先让用户确认计划
   // "auto":   仅当检测到高风险工具时请求确认
 
-  // ── 反思配置 ──
-  reflection?: 'off' | 'post-hoc' | 'inline' | 'both'
-  reflectionInterval?: number         // (默认: 3)
-  notebook?: ErrorNotebook            // post-hoc / both 模式必填
+  // ── Post-hoc 反思 ──
+  reflection?: 'off' | 'post-hoc'       // 错题本反思 (默认: "off")
+  reflectionMaxIterations?: number      // (默认: 4)
+  notebook?: ErrorNotebook              // 可选，不传自动创建
+
+  // ── 记忆提取 ──
+  memoryReflection?: 'off' | 'post-hoc' // (默认: "off")
+  memoryReflectionMaxIterations?: number// (默认: 5)
 
   // ── 循环控制 ──
-  maxIterations?: number              // (默认: 15)
-  maxPlanSteps?: number               // (默认: 12)
-  replanThreshold?: number            // (默认: 2，设为 0 禁用)
+  maxIterations?: number                // (默认: 15)
+  maxPlanSteps?: number                 // (默认: 12)
+  replanThreshold?: number              // (默认: 2，设为 0 禁用)
 
   // ── 沉淀配置 ──
-  precipitation?: 'off' | 'post-hoc'  // (默认: "off")
-  precipitationMaxIterations?: number // (默认: 5)
+  precipitation?: 'off' | 'post-hoc'    // (默认: "off")
+  precipitationMaxIterations?: number   // (默认: 15)
 }
 ```
 
@@ -112,51 +119,41 @@ LLM: {"complexity": "complex", "reason": "涉及多文件修改和架构决策"}
 LLM: {"complexity": "simple", "reason": "单步工具调用即可完成"}
 ```
 
-## 反思模式
+## Post-hoc 子系统
 
-### Off (`"off"`)
+Fusion Agent 内置三个 post-hoc（执行后）子系统，在 answer 返回给用户后自动触发，全部 best-effort，失败不影响主流程。
 
-不进行任何反思，与普通 ReAct/Plan-Solve 相同。
+### 错题本反思
 
-### Post-hoc (`"post-hoc"`)
+```ts
+reflection: 'post-hoc'  // 开启
+```
 
-执行完成后，使用 `ReflectionAgent` 对整个会话进行反思：
+执行完成后，Fork 一个 `ReflectionAgent` 对整个会话进行反思：
 - 评分 0-100
 - 分类问题: `reasoning_error`, `tool_misuse`, `missed_optimization`, `incomplete_answer`, `hallucination`, `context_mismanagement`
 - 记录到 ErrorNotebook 供后续学习
 
-### Inline (`"inline"`)
-
-每 N 次迭代注入一次内省提示，让 LLM 自我检查执行进度：
-
-```
-🤔 INLINE REFLECTION:
-请回顾之前的步骤：
-- 当前进度是否符合预期？
-- 是否有偏离目标的迹象？
-- 是否需要调整策略？
-```
-
-### Both (`"both"`)
-
-同时启用 Inline 和 Post-hoc 反思。
-
-## 技能沉淀
-
-Fusion Agent 还支持 Phase 4（Reflection）和 Phase 5（Skill Precipitation），两者在答案返回给用户后**在后台并行运行**，不阻塞主流程。详见 [Precipitation 沉淀](/advanced/precipitation) 和 [Reflection 反思](/advanced/reflection)。
+### 记忆提取
 
 ```ts
-const agent = new FusionAgent({
-  // ...
-  skillsDir: './skills',
-  precipitation: 'post-hoc',  // 开启技能沉淀
-})
+memoryReflection: 'post-hoc'  // 开启
 ```
 
-沉淀触发条件：
+Fork 一个 `MemoryReflector` 从会话中提取长期记忆（规则、项目事实、用户偏好），写入 `.memory/` 目录。
+
+### 技能沉淀
+
+```ts
+precipitation: 'post-hoc'  // 开启
+```
+
+触发条件：
 - `"post-hoc"` 模式：每次成功完成都触发
 - 踩坑后成功（`consecutiveFailures >= 2`）：框架自动检测
 - 用户说"记住"：输入关键词匹配
+
+详见 [Precipitation 沉淀](/advanced/precipitation)、[Reflection 反思](/advanced/reflection) 和 [Memory 记忆](/advanced/memory)。
 
 ## 计划确认
 
@@ -194,8 +191,8 @@ const agent = new FusionAgent({
 
   routing: 'auto',
   planConfirmation: 'auto',
-  reflection: 'both',
-  reflectionInterval: 3,
+  reflection: 'post-hoc',
+  memoryReflection: 'post-hoc',
   maxIterations: 20,
 })
 
@@ -236,4 +233,5 @@ for await (const chunk of agent.stream('请分析项目代码质量')) {
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理并行编排
 - [Reflection 反思](/advanced/reflection) — 深入了解反思机制
+- [Memory 记忆](/advanced/memory) — 长期记忆系统
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量

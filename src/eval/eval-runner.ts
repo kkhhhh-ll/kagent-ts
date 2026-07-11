@@ -97,10 +97,7 @@ export class EvalRunner {
    * @param cases   The test cases to run.
    * @returns One EvalResult per case.
    */
-  async run(
-    factory: AgentFactory,
-    cases: EvalCase[],
-  ): Promise<EvalResult[]> {
+  async run(factory: AgentFactory, cases: EvalCase[]): Promise<EvalResult[]> {
     const results: EvalResult[] = [];
 
     for (const c of cases) {
@@ -128,9 +125,7 @@ export class EvalRunner {
         if (c.expectedTools && c.expectedTools.length > 0) {
           for (const expected of c.expectedTools) {
             if (!toolCalls.includes(expected)) {
-              failures.push(
-                `Expected tool "${expected}" was not called.`,
-              );
+              failures.push(`Expected tool "${expected}" was not called.`);
             }
           }
         }
@@ -138,9 +133,7 @@ export class EvalRunner {
         if (c.forbiddenTools && c.forbiddenTools.length > 0) {
           for (const forbidden of c.forbiddenTools) {
             if (toolCalls.includes(forbidden)) {
-              failures.push(
-                `Forbidden tool "${forbidden}" was called.`,
-              );
+              failures.push(`Forbidden tool "${forbidden}" was called.`);
             }
           }
         }
@@ -204,10 +197,7 @@ export class EvalRunner {
   /**
    * Run a single case and return the result (convenience method).
    */
-  async runCase(
-    factory: AgentFactory,
-    c: EvalCase,
-  ): Promise<EvalResult> {
+  async runCase(factory: AgentFactory, c: EvalCase): Promise<EvalResult> {
     const results = await this.run(factory, [c]);
     return results[0];
   }
@@ -221,9 +211,7 @@ export class EvalRunner {
     const passRate = total > 0 ? ((passed / total) * 100).toFixed(1) : "0.0";
     const avgLatency =
       total > 0
-        ? Math.round(
-            results.reduce((s, r) => s + r.durationMs, 0) / total,
-          )
+        ? Math.round(results.reduce((s, r) => s + r.durationMs, 0) / total)
         : 0;
 
     let report = `# Evaluation Report\n\n`;
@@ -309,9 +297,7 @@ export class EvalRunner {
         passed: Boolean(parsed.passed),
         score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
         reasoning: String(parsed.reasoning ?? ""),
-        issues: Array.isArray(parsed.issues)
-          ? parsed.issues.map(String)
-          : [],
+        issues: Array.isArray(parsed.issues) ? parsed.issues.map(String) : [],
       };
     } catch {
       return {

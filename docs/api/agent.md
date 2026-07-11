@@ -15,6 +15,18 @@ interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
 
+  /** 错题本反思模式 (默认: "off") */
+  reflection?: "off" | "post-hoc"
+
+  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  reflectionMaxIterations?: number
+
+  /** 记忆提取模式 (默认: "off") */
+  memoryReflection?: "off" | "post-hoc"
+
+  /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
+  memoryReflectionMaxIterations?: number
+
   /** Skill 沉淀模式 (默认: "off") */
   precipitation?: "off" | "post-hoc"
 
@@ -49,6 +61,24 @@ interface PlanSolveAgentConfig extends AgentConfig {
 
   /** 连续失败 N 次后触发自动 replan (默认: 2, 设为 0 禁用) */
   replanThreshold?: number
+
+  /** 错题本反思模式 (默认: "off") */
+  reflection?: "off" | "post-hoc"
+
+  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  reflectionMaxIterations?: number
+
+  /** 记忆提取模式 (默认: "off") */
+  memoryReflection?: "off" | "post-hoc"
+
+  /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
+  memoryReflectionMaxIterations?: number
+
+  /** Skill 沉淀模式 (默认: "off") */
+  precipitation?: "off" | "post-hoc"
+
+  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
+  precipitationMaxIterations?: number
 }
 ```
 
@@ -75,13 +105,19 @@ interface FusionAgentConfig extends AgentConfig {
   /** 计划确认回调 */
   onPlanConfirm?: PlanConfirmCallback
 
-  /** 反思模式 (默认: "off") */
-  reflection?: "off" | "post-hoc" | "inline" | "both"
+  /** 错题本反思模式 (默认: "off") */
+  reflection?: "off" | "post-hoc"
 
-  /** 内省反思间隔（迭代次数，默认: 3；首次工具失败也会触发） */
-  reflectionInterval?: number
+  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  reflectionMaxIterations?: number
 
-  /** ErrorNotebook 实例，用于持久化反思结果（post-hoc / both 模式必填） */
+  /** 记忆提取模式 (默认: "off") */
+  memoryReflection?: "off" | "post-hoc"
+
+  /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
+  memoryReflectionMaxIterations?: number
+
+  /** ErrorNotebook 实例，用于持久化反思结果（可选，不传自动创建） */
   notebook?: ErrorNotebook
 
   /** 最大迭代次数 (默认: 15) */
@@ -176,6 +212,18 @@ interface AgentConfig {
    * 不设置时：如果 llm 是 ModelRouter，则走 forPrecipitation()；否则复用主 llm。
    */
   precipitationLLM?: LLMProvider
+
+  /**
+   * 记忆提取专用 LLM Provider。
+   * 不设置时：如果 llm 是 ModelRouter，则走 forMemory()；否则复用主 llm。
+   */
+  memoryReflectorLLM?: LLMProvider
+
+  /** 错题本反思模式 (默认: "off") */
+  reflection?: "off" | "post-hoc"
+
+  /** 记忆提取模式 (默认: "off") */
+  memoryReflection?: "off" | "post-hoc"
 
   tokenBudget?: TokenBudgetConfig
 }

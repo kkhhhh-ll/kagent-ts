@@ -10,7 +10,13 @@ import { Logger, ConsoleLogger } from "../logging/logger";
  * Each category maps to a model provider. When a category has no explicit
  * provider configured, it falls back to `main`.
  */
-export type ModelRoute = "main" | "subAgent" | "reflection" | "lightweight" | "precipitation" | "memory";
+export type ModelRoute =
+  | "main"
+  | "subAgent"
+  | "reflection"
+  | "lightweight"
+  | "precipitation"
+  | "memory";
 
 /**
  * Configuration for the ModelRouter.
@@ -93,11 +99,6 @@ export interface ModelRouterConfig {
  * const agent = new ReActAgent({ llm: router, subAgentsDir: "./subagents" });
  * // Main loop uses gpt-4o; sub-agents use gpt-4o-mini.
  *
- * // For reflection hook:
- * const hook = createReflectionHook({
- *   llm: router.forReflection(),
- *   notebook: errorNotebook,
- * });
  * ```
  */
 export class ModelRouter implements LLMProvider {
@@ -119,7 +120,11 @@ export class ModelRouter implements LLMProvider {
     return this.config.main.model;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
+  async chat(
+    messages: MessageData[],
+    tools?: Tool[],
+    signal?: AbortSignal,
+  ): Promise<LLMResponse> {
     return this.route("main").chat(messages, tools, signal);
   }
 
@@ -268,7 +273,7 @@ export class ModelRouter implements LLMProvider {
             logger.warn(
               "ModelRouter",
               `Route "${route}": "${chain[i].model}" failed — ${err.message}. ` +
-              (i < chain.length - 1 ? "Trying next..." : "Exhausted."),
+                (i < chain.length - 1 ? "Trying next..." : "Exhausted."),
             );
           }
         }

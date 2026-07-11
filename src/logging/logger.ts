@@ -53,8 +53,9 @@ const CONTROL_RE = /[\x00-\x1F\x7F]/g;
 
 /** Replace control characters with their `\xNN` escape so they can't forge log lines. */
 function sanitize(s: string): string {
-  return s.replace(CONTROL_RE, (ch) =>
-    `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  return s.replace(
+    CONTROL_RE,
+    (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
 }
 
@@ -204,7 +205,9 @@ export class ConsoleLogger implements Logger {
    * Merge child bindings with per-call context. Per-call keys win.
    * Always returns a fresh object to avoid leaking references.
    */
-  private _merge(context?: Record<string, unknown>): Record<string, unknown> | undefined {
+  private _merge(
+    context?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
     if (Object.keys(this.bindings).length === 0) {
       return context ? { ...context } : undefined;
     }
@@ -222,10 +225,26 @@ export class ConsoleLogger implements Logger {
  * suppress all framework output.
  */
 export class SilentLogger implements Logger {
-  debug(_tag: string, _message: string, _context?: Record<string, unknown>): void {}
-  info(_tag: string, _message: string, _context?: Record<string, unknown>): void {}
-  warn(_tag: string, _message: string, _context?: Record<string, unknown>): void {}
-  error(_tag: string, _message: string, _context?: Record<string, unknown>): void {}
+  debug(
+    _tag: string,
+    _message: string,
+    _context?: Record<string, unknown>,
+  ): void {}
+  info(
+    _tag: string,
+    _message: string,
+    _context?: Record<string, unknown>,
+  ): void {}
+  warn(
+    _tag: string,
+    _message: string,
+    _context?: Record<string, unknown>,
+  ): void {}
+  error(
+    _tag: string,
+    _message: string,
+    _context?: Record<string, unknown>,
+  ): void {}
 
   /** Returns `this` — all instances are equivalent no-ops. */
   child(_bindings: Record<string, unknown>): Logger {

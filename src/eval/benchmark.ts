@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { EvalRunner, AgentFactory } from "./eval-runner";
 import type { EvalCase, EvalResult } from "./eval-runner";
-import type { BenchmarkResult, BenchmarkSummary, Regression, Improvement } from "./types";
+import type { BenchmarkResult, BenchmarkSummary } from "./types";
 
 /**
  * Configuration for a benchmark run.
@@ -247,8 +247,7 @@ export class Benchmark {
 
     // ── Latency regression ────────────────────────────────────────────
     if (
-      summary.avgLatencyMs >
-        bl.avgLatencyMs * LATENCY_REGRESSION_FACTOR &&
+      summary.avgLatencyMs > bl.avgLatencyMs * LATENCY_REGRESSION_FACTOR &&
       summary.avgLatencyMs - bl.avgLatencyMs > LATENCY_MIN_ABSOLUTE_INCREASE_MS
     ) {
       summary.regressions.push({
@@ -263,9 +262,7 @@ export class Benchmark {
     }
 
     // ── Per-case comparison ───────────────────────────────────────────
-    const baselineCases = new Map(
-      baseline.cases.map((c) => [c.caseName, c]),
-    );
+    const baselineCases = new Map(baseline.cases.map((c) => [c.caseName, c]));
 
     for (const current of currentResults) {
       const prev = baselineCases.get(current.caseName);
@@ -333,11 +330,7 @@ export class Benchmark {
       const filename = `${safeName}_${timestamp}.json`;
       const filePath = path.join(this.outputDir, filename);
 
-      fs.writeFileSync(
-        filePath,
-        JSON.stringify(result, null, 2),
-        "utf-8",
-      );
+      fs.writeFileSync(filePath, JSON.stringify(result, null, 2), "utf-8");
     } catch {
       // Best-effort persistence — never throw from persist
     }

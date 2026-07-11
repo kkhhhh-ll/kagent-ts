@@ -264,9 +264,6 @@ export type {
   MemoryReflectionInput,
   ExtractedMemory,
 } from "./reflection/memory-reflector";
-export { createReflectionHook } from "./reflection/reflection-hook";
-export type { ReflectionHookConfig } from "./reflection/reflection-hook";
-
 // Precipitation — post-execution skill extraction
 export { PrecipitateAgent } from "./precipitation/precipitate-agent";
 export type {

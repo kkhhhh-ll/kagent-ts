@@ -4,11 +4,7 @@ import type { LLMNetworkError } from "../llm/errors";
 import type { MessageData } from "../messages/types";
 import type { Tool } from "../tools/types";
 import { ToolErrorCode } from "../tools/types";
-import type {
-  ToolCallRecord,
-  ToolCallStats,
-  ToolCallScorecard,
-} from "./types";
+import type { ToolCallRecord, ToolCallStats, ToolCallScorecard } from "./types";
 
 /**
  * ToolCallEvaluator — collects per-tool-call metrics via AgentHooks.
@@ -33,15 +29,18 @@ export class ToolCallEvaluator implements AgentHooks {
 
   // ─── AgentHooks Implementation ─────────────────────────────────────────
 
-  onLLMStart?:
-    | ((messages: MessageData[], tools: Tool[]) => void)
-    | undefined = undefined;
+  onLLMStart?: ((messages: MessageData[], tools: Tool[]) => void) | undefined =
+    undefined;
 
   onLLMEnd?: ((response: LLMResponse) => void) | undefined = undefined;
 
   onLLMError?: ((error: LLMNetworkError) => void) | undefined = undefined;
 
-  onToolStart(toolName: string, args: Record<string, unknown>, toolCallId?: string): void {
+  onToolStart(
+    toolName: string,
+    args: Record<string, unknown>,
+    toolCallId?: string,
+  ): void {
     const attempt = this.attemptCounters.get(toolName) ?? 0;
 
     this.records.push({
@@ -62,8 +61,7 @@ export class ToolCallEvaluator implements AgentHooks {
 
     record.endTime = new Date().toISOString();
     record.latencyMs =
-      new Date(record.endTime).getTime() -
-      new Date(record.startTime).getTime();
+      new Date(record.endTime).getTime() - new Date(record.startTime).getTime();
     record.success = true;
     record.errorCode = ToolErrorCode.SUCCESS;
     record.resultLength = result.length;
@@ -78,8 +76,7 @@ export class ToolCallEvaluator implements AgentHooks {
 
     record.endTime = new Date().toISOString();
     record.latencyMs =
-      new Date(record.endTime).getTime() -
-      new Date(record.startTime).getTime();
+      new Date(record.endTime).getTime() - new Date(record.startTime).getTime();
     record.success = false;
     record.error = error;
     record.attemptNumber = attempt;
@@ -122,7 +119,9 @@ export class ToolCallEvaluator implements AgentHooks {
     const allLatencies = allStats.flatMap((t) => t.latencySamples);
     const avgLatencyMs =
       allLatencies.length > 0
-        ? Math.round(allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length)
+        ? Math.round(
+            allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length,
+          )
         : 0;
 
     const circuitBreakerTrips = allStats.reduce(
@@ -219,7 +218,10 @@ export class ToolCallEvaluator implements AgentHooks {
     // multiple times within one LLM response batch.
     if (toolCallId) {
       for (let i = this.records.length - 1; i >= 0; i--) {
-        if (this.records[i].toolCallId === toolCallId && !this.records[i].endTime) {
+        if (
+          this.records[i].toolCallId === toolCallId &&
+          !this.records[i].endTime
+        ) {
           return this.records[i];
         }
       }
@@ -289,7 +291,9 @@ export class ToolCallEvaluator implements AgentHooks {
           completed.length > 0 ? successes.length / completed.length : 1,
         avgLatencyMs:
           latencies.length > 0
-            ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+            ? Math.round(
+                latencies.reduce((a, b) => a + b, 0) / latencies.length,
+              )
             : 0,
         p50LatencyMs: percentile(latencies, 50),
         p99LatencyMs: percentile(latencies, 99),
@@ -297,8 +301,7 @@ export class ToolCallEvaluator implements AgentHooks {
           successes.length > 0
             ? failures.length / successes.length
             : failures.length,
-        circuitBreakerTrips:
-          this.circuitBreakerTripCounts.get(toolName) ?? 0,
+        circuitBreakerTrips: this.circuitBreakerTripCounts.get(toolName) ?? 0,
         errorDistribution: errorDist,
         latencySamples: latencies,
       });

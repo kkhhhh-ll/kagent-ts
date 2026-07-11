@@ -470,6 +470,45 @@ export interface AgentConfig {
    * Default: 15.
    */
   precipitationMaxIterations?: number;
+
+  // ─── Memory Reflection ──────────────────────────────────────────────
+
+  /**
+   * Memory reflection mode.
+   *
+   * After the agent completes a task, a sub-agent analyzes the session to
+   * extract lasting memories: user rules, project decisions, and preferences.
+   * These are persisted to {@link memoryDir} (default `.memory/`) and become
+   * available as context in future sessions.
+   *
+   * - "off":       No memory reflection (default).
+   * - "post-hoc":  After execution, fork a MemoryReflector to extract memories.
+   *
+   * Does NOT require any additional setup — MemoryManager is always created
+   * by the base Agent constructor.
+   *
+   * Default: "off".
+   */
+  memoryReflection?: "off" | "post-hoc";
+
+  /**
+   * Maximum iterations for the memory reflection sub-agent's ReAct loop.
+   * Default: 5.
+   */
+  memoryReflectionMaxIterations?: number;
+
+  /**
+   * LLM provider for post-hoc memory extraction.
+   *
+   * When set, this provider is used for the memory reflection sub-agent.
+   * When not set, the resolution order is:
+   * 1. `ModelRouter.forMemory()` if the main `llm` is a ModelRouter
+   * 2. Otherwise falls back to the main `llm`
+   *
+   * Use a cheaper/faster model here — memory extraction is a background
+   * task that shouldn't compete with the main conversation.
+   */
+  memoryReflectorLLM?: LLMProvider;
 }
 
 /**
@@ -581,6 +620,9 @@ export abstract class Agent {
   /** LLM provider for skill precipitation (defaults to main llm if not set). */
   protected precipitationLLM?: LLMProvider;
 
+  /** LLM provider for memory reflection (defaults to main llm if not set). */
+  protected memoryReflectorLLM?: LLMProvider;
+
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
@@ -687,6 +729,16 @@ export abstract class Agent {
       this.precipitationLLM = config.precipitationLLM;
     } else if (config.llm instanceof ModelRouter) {
       this.precipitationLLM = config.llm.forPrecipitation();
+    }
+
+    // Resolve memory reflector LLM:
+    // 1. Explicit `memoryReflectorLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forMemory()
+    // 3. Fallback → memory reflection shares the main `llm`
+    if (config.memoryReflectorLLM) {
+      this.memoryReflectorLLM = config.memoryReflectorLLM;
+    } else if (config.llm instanceof ModelRouter) {
+      this.memoryReflectorLLM = config.llm.forMemory();
     }
 
     // Token budget — session-level cost control

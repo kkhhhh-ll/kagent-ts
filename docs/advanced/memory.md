@@ -169,19 +169,13 @@ const newMemories = await reflector.reflect({
 })
 // 新记忆已自动写入 MemoryManager
 
-// 或者通过 createReflectionHook 自动集成，记忆和错题本各自独立配置 LLM
-import { createReflectionHook, ErrorNotebook } from 'kagent-ts'
-
-const hook = createReflectionHook({
-  llm: mainProvider,                    // fallback
-  memoryLLM: new OpenAIProvider({       // 记忆提取专用（可选，默认复用 llm）
+// 或者通过 AgentConfig 直接开启，内存提取在会话结束后自动运行
+const agent = new ReActAgent({
+  llm: mainProvider,
+  memoryReflection: "post-hoc",          // 开启自动记忆提取
+  memoryReflectorLLM: new OpenAIProvider({ // 记忆提取专用 LLM（可选）
     apiKey: '...', model: 'gpt-4o-mini',
   }),
-  reflectionLLM: new OpenAIProvider({   // 错题本专用（可选）
-    apiKey: '...', model: 'gpt-4o',
-  }),
-  notebook: new ErrorNotebook(),
-  memoryManager: memory,
 })
 ```
 
@@ -234,4 +228,4 @@ type: rule
 
 - [Reflection 反思](/advanced/reflection) — 自动记忆提取和错题本机制
 - [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
-- [Hook 钩子系统](/core/hooks) — 通过 `ReflectionHook` 在 Agent 执行后自动触发记忆提取
+- [AgentConfig](/guide/configuration) — 通过 `memoryReflection: "post-hoc"` 在 Agent 执行后自动触发记忆提取

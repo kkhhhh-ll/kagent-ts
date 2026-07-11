@@ -126,32 +126,27 @@ const agent = new ReActAgent({
 })
 ```
 
-## 与 Reflection Hook 集成
+## 与 Reflection / Memory 集成
 
-Reflection 和 Memory 的 LLM 通过 `createReflectionHook` 独立配置：
+Reflection（错题本）和 Memory（记忆提取）通过 AgentConfig 直接配置，
+无需额外的 Hook：
 
 ```ts
-import { createReflectionHook, ErrorNotebook, MemoryManager } from 'kagent-ts'
-
 const router = new ModelRouter({
   main: new OpenAIProvider({ model: 'gpt-4o' }),
   reflection: new AnthropicProvider({ model: 'claude-haiku-4-5-20251001' }),
   memory: new OpenAIProvider({ model: 'gpt-4o-mini' }),
 })
 
-const hook = createReflectionHook({
-  llm: router.forReflection(),        // fallback（不改时用这个）
-  reflectionLLM: router.forReflection(),  // 错题本专用
-  memoryLLM: router.forMemory(),          // 记忆提取专用
-  notebook: new ErrorNotebook(),
-  memoryManager: new MemoryManager(),
-})
-
 const agent = new ReActAgent({
   llm: router,
-  hooks: [hook],
+  reflection: "post-hoc",                // 错题本反思
+  memoryReflection: "post-hoc",          // 记忆提取
+  memoryReflectorLLM: router.forMemory(), // 记忆提取专用 LLM
 })
 ```
+
+Memory 提取可通过 `memoryReflectorLLM` 指定独立模型；错题本反思直接使用主 LLM。
 
 ## 结合 Fallback
 
