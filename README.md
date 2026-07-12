@@ -46,9 +46,9 @@ npm install kagent-ts
 import { FusionAgent, OpenAIProvider, AnthropicProvider, ModelRouter } from "kagent-ts";
 
 const router = new ModelRouter({
-  main: new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY }),
-  verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
-  memory: new OpenAIProvider({ model: "gpt-4o-mini" }),
+  main:         new OpenAIProvider({ model: "gpt-4o",                       apiKey: process.env.OPENAI_API_KEY! }),
+  verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001", apiKey: process.env.ANTHROPIC_API_KEY! }),
+  memory:       new OpenAIProvider({ model: "gpt-4o-mini",                  apiKey: process.env.OPENAI_API_KEY! }),
 });
 
 const agent = new FusionAgent({
@@ -73,6 +73,7 @@ const answer = await agent.run("重构 user service，改用 repository 模式�
 
 ```ts
 import { ToolRegistry, toolSuccess } from "kagent-ts";
+import * as fs from "node:fs/promises";
 
 const registry = new ToolRegistry(/* retryCount */ 2);
 
@@ -85,7 +86,10 @@ registry.register({
     required: ["filePath"],
   },
   requireApproval: false,   // true → HITL 审批
-  execute: async (args) => toolSuccess(await fs.readFile(args.filePath, "utf-8")),
+  execute: async (args: Record<string, unknown>) => {
+    const content = await fs.readFile(String(args.filePath), "utf-8");
+    return toolSuccess(content);
+  },
 });
 ```
 
@@ -125,8 +129,10 @@ precipitated: true
 ## 会话持久化
 
 ```ts
+import { ReActAgent, OpenAIProvider } from "kagent-ts";
+
 const agent = new ReActAgent({
-  llm: provider,
+  llm: new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
   sessionId: "my-session",
   enableCheckpointing: true,   // 每个 LLM+tools 周期后自动保存
 });
