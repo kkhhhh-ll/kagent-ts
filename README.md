@@ -1,6 +1,6 @@
 # kagent-ts
 
-A production-grade TypeScript agent framework with multi-paradigm agent loops, adaptive routing, answer verification, tool governance with circuit breaker, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.
+生产级 TypeScript Agent 框架，支持多范式执行引擎、意图识别、答案验证、工具治理、会话持久化、渐进式技能与自我进化。
 
 [![npm version](https://img.shields.io/npm/v/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
@@ -8,582 +8,168 @@ A production-grade TypeScript agent framework with multi-paradigm agent loops, a
 
 ---
 
-## Architecture
+## 核心特性
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              kagent-ts                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                         Agent Paradigms                                │ │
-│  │  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────────┐  │ │
-│  │  │ ReAct    │  │ PlanSolve    │  │ Fusion   │  │ Orchestrator     │  │ │
-│  │  │ Agent    │  │ Agent        │  │ Agent    │  │ Agent            │  │ │
-│  │  │          │  │              │  │          │  │                  │  │ │
-│  │  │ Think→   │  │ Plan→        │  │ Route→   │  │ Decompose→       │  │ │
-│  │  │ Act→     │  │ Resolve→     │  │ Plan/    │  │ Dispatch→        │  │ │
-│  │  │ Observe  │  │ Revise       │  │ Execute  │  │ Synthesize→      │  │ │
-│  │  │          │  │              │  │          │  │ Adapt            │  │ │
-│  │  └────┬─────┘  └──────┬───────┘  └────┬─────┘  └────────┬─────────┘  │ │
-│  │       └────────────────┴──────────────┴──────────────────┘            │ │
-│  │                          │                                            │ │
-│  │                    ┌─────┴─────┐                                      │ │
-│  │                    │   Agent   │  ← Abstract base: LLM, tools,        │ │
-│  │                    │  (base)   │    context, hooks, sessions          │ │
-│  │                    └─────┬─────┘                                      │ │
-│  └──────────────────────────┼────────────────────────────────────────────┘ │
-│                             │                                               │
-│  ┌──────────────────────────┼────────────────────────────────────────────┐ │
-│  │                    Infrastructure                                     │ │
-│  │  ┌──────────┐ ┌─────────┐ ┌───────────┐ ┌──────────┐ ┌────────────┐ │ │
-│  │  │ LLM      │ │ Tool    │ │ Session   │ │ Context  │ │ Sub-Agent  │ │ │
-│  │  │ Adapter  │ │ System  │ │ Manager   │ │ Manager  │ │ Manager    │ │ │
-│  │  │          │ │         │ │           │ │          │ │            │ │ │
-│  │  │ OpenAI   │ │ Registry│ │ Checkpoint│ │ Token    │ │ Spawn/Poll │ │ │
-│  │  │ Anthropic│ │ Circuit │ │ Resume    │ │ Budget   │ │ Cancel     │ │ │
-│  │  │ Fallback │ │ Breaker │ │           │ │ Compress │ │            │ │ │
-│  │  │ Router   │ │ Validate│ │           │ │          │ │            │ │ │
-│  │  └──────────┘ └─────────┘ └───────────┘ └──────────┘ └────────────┘ │ │
-│  └──────────────────────────────────────────────────────────────────────┘ │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐ │
-│  │                      Extension Points                                 │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │ │
-│  │  │ MCP      │ │ RAG      │ │ Skills   │ │ Memory   │ │ Verify   │ │ Security   │ │ │
-│  │  │ Protocol │ │ Hybrid   │ │ Prog.    │ │ Long/    │ │ Answer   │ │ Prompt     │ │ │
-│  │  │ Dynamic  │ │ Search   │ │ Disc.    │ │ Short    │ │ Quality  │ │ Injection  │ │ │
-│  │  │ Tools    │ │ +Rerank  │ │ +Precip. │ │ Term     │ │ Check    │ │ Defense    │ │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────────┘ │ │
-│  └──────────────────────────────────────────────────────────────────────┘ │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| 模块 | 能力 |
+|------|------|
+| **多范式引擎** | ReAct（Think→Act→Observe）、PlanSolve（Plan→Resolve→Revise）、Fusion（Route→Plan/Execute→Verify）、Orchestrator（Decompose→Dispatch→Synthesize） |
+| **意图识别** | 零 LLM 开销的信号检测（`记住`/`deploy` 等）+ Skill 关键词自动匹配激活，统一数据源 |
+| **答案验证** | 返回前 Fork 独立 Agent 审查正确性与完整性，不通过则自动修正 |
+| **工具治理** | 熔断器三态转换 + JSON Schema 字段级校验 + 大输出截断 + HITL 按工具粒度审批 |
+| **LLM 抽象** | OpenAI / Anthropic 统一接口 + 模型路由（main/subAgent/reflection/verification/memory/precipitation）+ 自动降级 + Token 预算 |
+| **上下文管理** | 渐进 4 步压缩（截断→裁剪→清除→摘要），每步后检测 Token 达标即停 |
+| **会话持久化** | 每种 Agent 类型保存完整运行时状态，断点续跑 + AbortController 安全取消 |
+| **渐进式技能** | SKILL.md 文件定义，关键词自动激活，Precipitation 自动沉淀含关键词的技能 |
+| **长期记忆** | Markdown 文件替代向量库，`[[wiki-link]]` 互联，LLM 自主管理 |
+| **反思系统** | 错题本（ErrorNotebook）跨 Session 注入 + 记忆提取 + 技能沉淀，全部 fire-and-forget |
+| **安全防护** | 边界标记分离 Data/Instruction + 注入签名扫描 + System Prompt 指令优先 |
+| **可观测性** | Hook 系统零侵入全链路追踪，自动传导嵌套 Agent；Eval + Benchmark 量化评估 |
+| **SubAgent** | AGENT.md 零代码注册，三级权限过滤，结果作为用户消息注入主 Agent |
+| **Git Worktree** | 文件系统级沙箱，默认丢弃不留痕，零外部依赖 |
+| **MCP / RAG** | MCP 协议动态工具发现 + 混合检索（向量+BM25+RRF）+ LLM 重排序 |
 
 ---
 
-## Agent Execution Flow
-
-### ReAct Loop
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as ReActAgent
-    participant L as LLM
-    participant T as Tool
-    participant H as Hooks
-
-    U->>A: run("What files are in src/?")
-    A->>A: init() — MCP, sub-agents, RAG
-    A->>A: reload preferences, skills, rules
-
-    loop ReAct (max N iterations)
-        A->>A: poll sub-agent results
-        A->>A: check & compress context
-        A->>L: chat(messages, tools)
-        H-->>A: onLLMStart / onLLMEnd
-
-        alt has tool_calls
-            L-->>A: {thought, tool_calls}
-            H-->>A: onThought
-            par parallel-safe tools
-                A->>T: execute(tool_1)
-                A->>T: execute(tool_2)
-            end
-            T-->>A: result → inject into context
-            H-->>A: onToolStart / onToolEnd
-            A->>A: save checkpoint
-        else no tool_calls
-            L-->>A: {answer}
-            A->>A: save checkpoint (completed)
-            A->>H: onFinish(answer)
-            A-->>U: final answer
-        end
-    end
-```
-
-### Orchestrator Workflow
-
-```mermaid
-flowchart TD
-    U["User Request"] --> D["1. Decompose\nLLM analyzes request\ninto a DAG"]
-
-    D --> DAG["TaskGraph DAG\nA: researcher\nB: writer (depends on A)\nC: reviewer (depends on B)"]
-
-    DAG --> DISPATCH["2. Dispatch\nTopological wave-front\nReady nodes run in parallel"]
-
-    DISPATCH --> POLL["Poll until all\nnodes complete"]
-
-    POLL --> RETRY{"Failures?"}
-    RETRY -->|"retries remain"| RETRY_ACTION["Retry subtree\nor retry all\nor continue"]
-    RETRY_ACTION --> DISPATCH
-    RETRY -->|"no / exhausted"| SYNTH["3. Synthesize\nLLM reviews all results\nisComplete?"]
-
-    SYNTH -->|"complete"| FINAL["4. Final Answer"]
-    SYNTH -->|"incomplete"| GAPS{"Gaps found?"}
-    GAPS -->|"yes"| ADAPT["5. Adapt\nLLM generates new\nnodes for remaining gaps"]
-    ADAPT --> DISPATCH
-    GAPS -->|"no"| FORCE["Force Synthesize\nBest-effort answer"]
-
-    FORCE --> FINAL
-    FINAL --> VERIFY["Verify\nFork agent checks\nanswer quality"]
-    VERIFY --> REFLECT["Post-hoc\nReflection + Memory\n+ Precipitation\n(fire-and-forget)"]
-    REFLECT --> OUT["Final Answer\nto User"]
-
-    style D fill:#4a90d9,color:#fff
-    style DISPATCH fill:#d97706,color:#fff
-    style SYNTH fill:#059669,color:#fff
-    style ADAPT fill:#7c3aed,color:#fff
-    style FINAL fill:#dc2626,color:#fff
-```
-
-### FusionAgent Decision Flow
-
-```mermaid
-flowchart LR
-    U["User Input"] --> ROUTE{"1. Route\nLLM judges\ntask complexity"}
-
-    ROUTE -->|"simple"| REACT["3. ReAct Execute\nDirect tool-using\nloop"]
-    ROUTE -->|"complex"| PLAN["2. Plan\nLLM generates\nstep-by-step plan"]
-
-    PLAN --> CONFIRM{"Confirm\nplan?"}
-    CONFIRM -->|"risky tools"| ASK["Ask user\napproval"]
-    CONFIRM -->|"approved\nor never"| EXEC["3. ReAct Execute\nwith plan tracking\nplus replan support"]
-
-    ASK -->|"approved"| EXEC
-    ASK -->|"rejected"| RETURN["Return plan\nas answer"]
-
-    REACT --> VERIFY
-    EXEC --> VERIFY
-
-    VERIFY["4. Verify\nFork agent checks\nanswer quality"] --> REFLECT
-    REFLECT["5. Post-hoc\nReflection + Memory\n+ Precipitation\n(fire-and-forget)"] --> ANSWER["Final Answer"]
-```
-
----
-
-## Sub-Agent Worktree Isolation
-
-```mermaid
-flowchart TD
-    O["OrchestratorAgent\nassigns task node"] --> NODE["TaskNode\ncode-reviewer:\nreview auth module"]
-
-    NODE --> WT_CREATE["git worktree add\n.kagent-worktrees/\n  node_1/"]
-
-    WT_CREATE --> WT["Isolated worktree\nbranch: kagent/node_1\n(changes scoped here)"]
-
-    WT --> SA["ReActAgent spawns\nworkdir = worktree path"]
-
-    SA --> TOOLS["Tools execute\nread_file, edit, bash\n(all scoped to worktree)"]
-
-    TOOLS --> RESULT["Result produced\ntext output\nplus file changes"]
-
-    RESULT --> CHOICE{"autoMerge\nWorktrees?"}
-    CHOICE -->|"true"| MERGE["git merge back to main\ndelete branch\nclean up worktree"]
-    CHOICE -->|"false (default)"| DISCARD["force delete worktree\ndiscard all file changes\nbranch deleted"]
-
-    RESULT --> CTX["Text output injected\ninto orchestrator context"]
-    CTX --> SYNTH["Orchestrator synthesizer\nevaluates result quality"]
-
-    style WT fill:#059669,color:#fff
-    style DISCARD fill:#dc2626,color:#fff
-    style MERGE fill:#d97706,color:#fff
-```
-
----
-
-## Tool Execution & Circuit Breaker
-
-```mermaid
-flowchart LR
-    CLOSED["CLOSED (normal)\n────────────\nfailures: 0\navailable: yes"] -->|"1st failure"| HALF_OPEN
-
-    HALF_OPEN["HALF_OPEN (degraded)\n────────────\nfailures: 1 to retryCount\navailable: yes\nLLM sees [RETRYABLE:...]"] -->|"success\n(reset)"| CLOSED
-
-    HALF_OPEN -->|"retry failure\n(still have retries)"| HALF_OPEN
-
-    HALF_OPEN -->|"retries exhausted\n(failures > retryCount)"| OPEN
-
-    OPEN["OPEN (blocked)\n────────────\nfailures: retryCount + 1\navailable: NO\nLLM sees [FATAL:CIRCUIT_OPEN]\nmust try different approach"]
-
-    style CLOSED fill:#059669,color:#fff
-    style HALF_OPEN fill:#d97706,color:#fff
-    style OPEN fill:#dc2626,color:#fff
-```
-
----
-
-## Key Features
-
-### 🧠 Multi-Paradigm Agent Engine
-
-| Agent | Pattern | Best For |
-|-------|---------|----------|
-| **ReActAgent** | Think → Act → Observe | Interactive Q&A, tool-augmented tasks |
-| **PlanSolveAgent** | Plan → Resolve → Revise | Multi-step structured tasks |
-| **FusionAgent** | Route → Plan/Execute → Verify → (post-hoc) | Adaptive: auto-selects strategy + quality gate |
-| **OrchestratorAgent** | Decompose → Dispatch → Synthesize → Adapt | Complex multi-agent workflows with DAG |
-
-### 🔧 Tool Governance
-
-- **Circuit Breaker** — 3-state (CLOSED → HALF_OPEN → OPEN) failure tracking per tool. Machine-readable error codes (`[RETRYABLE:…]` / `[FATAL:…]`) guide LLM recovery
-- **JSON Schema validation** — Arguments validated via Ajv before execution; malformed calls return errors without executing
-- **Parallel execution** — Independent tool calls within a single LLM response run concurrently via `Promise.allSettled`
-- **Sequential mode** — Tools can opt into `sequential: true` for ordering guarantees
-- **Output truncation** — Large tool outputs automatically truncated (2KB in-context, full content saved to disk)
-- **HITL approval** — Tools marked `requireApproval: true` invoke a user callback with timeout and cancellation support
-- **Declarative tool filters** — `allowlist` / `denylist` / `pattern` combinators restrict sub-agent tool access
-
-### 🎯 LLM Abstraction
-
-- **Provider-agnostic interface** — OpenAI + Anthropic via unified `LLMProvider`
-- **Fallback chain** — Primary → fallback model on failure; orchestrator tracks degradation events
-- **Model router** — Route by task: main / subAgent / reflection / verification / memory / precipitation / lightweight
-- **Rate limiter** — Token budget with session-level cost control and 80%-usage warnings
-- **Streaming** — `chatStream()` with `AsyncIterable<LLMStreamEvent>`, accumulating tool call deltas by index
-
-### 📦 Session Persistence
-
-- **Automatic checkpoints** — State saved after each LLM+tools cycle when `enableCheckpointing: true`
-- **Network resilience** — `LLMNetworkError` triggers an `"interrupted"` checkpoint; resume with `agent.resume(sessionId, input)`
-- **Full state recovery** — Messages, system prompt, plan progress, orchestrator DAG, and worktree state all persisted
-- **Orphaned sub-agent recovery** — Results from sub-agents canceled mid-session are recovered on resume
-
-### 📐 Context Management
-
-- **Progressive 4-step compression**: tool output truncation → old result eviction → single-turn compression → LLM summarization
-- **Token counting** — tiktoken with heuristic fallback
-- **Auto-compression** — Triggered when context usage exceeds threshold
-
-### 🔌 MCP Integration
-
-- **Dynamic tool discovery** — Connect to MCP servers (stdio + SSE transports) to auto-register tools
-- **Graceful degradation** — Failed servers log warnings; other servers remain available
-- **Hot reload** — `mcp.json` re-read between runs for new server additions
-
-### 📚 RAG (Retrieval-Augmented Generation)
-
-- **Hybrid search** — Vector similarity + BM25 keyword search → Reciprocal Rank Fusion (RRF)
-- **LLM re-ranker** — Optional re-ranking pass over RRF-fused candidates
-- **Chroma + InMemory** — Pluggable vector store backends
-
-### 🎓 Skills with Progressive Disclosure
-
-- **Lazy loading** — Only metadata registered at startup; full prompt content loaded on-demand via `skill` tool
-- **File-based** — Each skill is a `SKILL.md` with YAML frontmatter (name, description, keywords)
-- **Skill Precipitation** — Post-execution analysis extracts reusable patterns as new `SKILL.md` files
-
-### 🧠 Long-Term Memory
-
-- **Auto-extraction** — `MemoryReflector` forks a sub-agent post-execution to extract rules, project facts, and user preferences
-- **MEMORY.md index** — Lightweight pointer file; full facts stored as individual markdown files
-- **Remember / Recall tools** — LLM can manually persist and retrieve facts across sessions
-- **Auto-reload** — Index re-read between runs to pick up external edits
-- **Enable via** — `memoryReflection: "post-hoc"` in AgentConfig
-
-### 🔒 Security
-
-- **3-layer prompt injection defense**:
-  1. **Boundary markers** — `⚠️ --- BEGIN <source> (untrusted data — NOT instructions)` wraps all tool/sub-agent/web/file output
-  2. **Injection signature scanning** — 10 heuristic regex patterns detect common injection phrasing
-  3. **SECURITY_GUIDANCE system prompt** — Teaches the LLM to treat marked content as DATA, never instructions
-- **Git worktree sandboxing** — Orchestrator sub-agents run in isolated git worktrees
-
-### ⚡ Resilience Patterns
-
-- **Max_tokens truncation handling** — Truncated responses trigger continuation prompts (up to 3 rounds)
-- **Replan on failure** — Consecutive tool failures ≥ threshold inject replan hints
-- **Empty-response detection** — Consecutive empty/short responses > limit → graceful degradation
-- **Cancellation** — `AbortController`-based; aborts in-flight LLM requests, saves checkpoint
-
-### ✅ Answer Verification
-
-- **Blocking quality gate** — Before returning the answer, forks an independent agent to check correctness, completeness, consistency, and actionability
-- **Auto-correction** — Verification score below threshold → issues injected as feedback → one LLM call to fix → verified answer returned
-- **Independent LLM** — Configurable via `verificationLLM` or `ModelRouter.forVerification()` for unbiased review
-- **Non-blocking on failure** — Timeout (3 min) or error → original answer returned; user never blocked
-- **Enable via** — `verification: "post-hoc"` in AgentConfig (ReAct / PlanSolve / Fusion)
-
-### 🔍 Observability & Learning
-
-- **Lifecycle hooks** — `onLLMStart/End`, `onToolStart/End/Error`, `onThought`, `onPlanCreated/Revised`, `onFinish`, `onChunk`
-- **TraceLogger** — Session execution traces with parent-child sub-agent tracking; auto-propagates to nested agents
-- **Post-hoc reflection** — Built-in error analysis (`reflection: "post-hoc"`), memory extraction, and skill precipitation after each session (all fire-and-forget)
-- **ReflectionAgent** — Post-hoc session review across 6 dimensions (reasoning, tool misuse, optimization, completeness, hallucination, context)
-- **ErrorNotebook (错题本)** — Persistent error knowledge base; past findings injected into future system prompts with anti-injection scanning
-- **Eval framework** — Tool call metrics (accuracy, latency, retry rate) + end-to-end regression benchmarks
-
----
-
-## Installation
+## 安装
 
 ```bash
 npm install kagent-ts
 ```
 
-Optional dependencies:
-
-```bash
-npm install chromadb    # For Chroma vector store (RAG)
-npm install tiktoken    # For accurate token counting
-```
-
-Requirements: **Node.js ≥ 18**
+需要 Node.js ≥ 18。可选依赖：`chromadb`（向量存储）、`tiktoken`（精确 Token 计数）。
 
 ---
 
-## Quick Start
+## 快速开始
 
-### ReAct Agent (Simple)
+```ts
+import { FusionAgent, OpenAIProvider, AnthropicProvider, ModelRouter } from "kagent-ts";
 
-```typescript
-import { ReActAgent, OpenAIProvider } from "kagent-ts";
-
-const agent = new ReActAgent({
-  llm: new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY }),
-  maxIterations: 10,
+const router = new ModelRouter({
+  main: new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY }),
+  verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
+  memory: new OpenAIProvider({ model: "gpt-4o-mini" }),
 });
-
-const answer = await agent.run("What is the capital of France?");
-console.log(answer);
-
-// Streaming
-for await (const chunk of agent.stream("Explain quantum computing in 3 bullet points.")) {
-  process.stdout.write(chunk);
-}
-```
-
-### PlanSolve Agent (Structured Tasks)
-
-```typescript
-import { PlanSolveAgent, OpenAIProvider } from "kagent-ts";
-
-const agent = new PlanSolveAgent({
-  llm: new OpenAIProvider({ model: "gpt-4o" }),
-  maxIterations: 15,
-  maxPlanSteps: 10,
-  replanThreshold: 2,  // suggest replan after 2 consecutive failures
-});
-
-const answer = await agent.run(
-  "Analyze the performance of the authentication module and suggest optimizations."
-);
-```
-
-### Orchestrator (Multi-Agent with DAG)
-
-```typescript
-import { OrchestratorAgent, OpenAIProvider } from "kagent-ts";
-
-const orchestrator = new OrchestratorAgent({
-  llm: new OpenAIProvider({ model: "gpt-4o" }),
-  subAgentLLM: new OpenAIProvider({ model: "gpt-4o-mini" }), // cheaper for sub-agents
-  subAgentsDir: "./subagents",
-  maxRounds: 3,
-  maxParallelNodes: 3,
-  failureStrategy: "retry-subtree",
-  // Git worktree isolation (optional)
-  enableWorktrees: true,
-  worktreeRepoPath: process.cwd(),
-  autoMergeWorktrees: false,  // default: discard changes
-});
-
-const answer = await orchestrator.run(
-  "Build a REST API endpoint for user registration with validation and tests."
-);
-```
-
-### Fusion Agent (Adaptive)
-
-```typescript
-import { FusionAgent, OpenAIProvider } from "kagent-ts";
 
 const agent = new FusionAgent({
-  llm: new OpenAIProvider({ model: "gpt-4o" }),
-  routing: "auto",                // LLM judges task complexity
-  planConfirmation: "auto",       // confirm only for risky operations
-  verification: "post-hoc",       // blocking: verify answer quality before returning
-  verificationThreshold: 75,      // minimum score to pass (default: 70)
-  reflection: "post-hoc",         // fire-and-forget: error analysis
-  memoryReflection: "post-hoc",   // fire-and-forget: memory extraction
+  llm: router,
+  routing: "auto",                // LLM 自动判断任务复杂度
+  planConfirmation: "auto",       // 检测到危险操作时请求审批
+  verification: "post-hoc",       // 答案验证（阻塞式，不通过自动修正）
+  reflection: "post-hoc",         // 错题本反思（fire-and-forget）
+  memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
+  skillsDir: "./skills",          // Skill 目录，自动扫描
+  precipitation: "post-hoc",      // 技能自动沉淀
 });
 
-const answer = await agent.run("Refactor the user service to use the repository pattern.");
+const answer = await agent.run("重构 user service，改用 repository 模式。");
 ```
+
+核心能力一行配置全开：自适应路由 + 答案验证 + 反思 + 记忆 + 技能沉淀。用户说"记住"时无视 mode 配置强制执行。
 
 ---
 
-## Configuration Highlights
+## 工具系统
 
-### Tool System with Circuit Breaker
-
-```typescript
+```ts
 import { ToolRegistry, toolSuccess } from "kagent-ts";
 
 const registry = new ToolRegistry(/* retryCount */ 2);
 
 registry.register({
   name: "read_file",
-  description: "Read a file from disk",
+  description: "读取文件内容",
   parameters: {
     type: "object",
-    properties: {
-      filePath: { type: "string", description: "Absolute path to the file" },
-    },
+    properties: { filePath: { type: "string" } },
     required: ["filePath"],
   },
-  requireApproval: false,       // set true for HITL approval
-  sequential: false,            // set true to force serial execution
-  execute: async (args) => {
-    const content = await fs.readFile(args.filePath, "utf-8");
-    return toolSuccess(content);
-  },
+  requireApproval: false,   // true → HITL 审批
+  execute: async (args) => toolSuccess(await fs.readFile(args.filePath, "utf-8")),
 });
 ```
 
-### Session Persistence & Resume
+- **熔断器**：CLOSED → HALF_OPEN → OPEN，错误码 `[RETRYABLE:…]`/`[FATAL:…]` 直接告知 LLM 恢复策略
+- **参数校验**：Ajv + Zod 双重 Schema 校验，返回字段级错误
+- **大输出截断**：超阈值自动截断，完整版落盘按需读取
+- **HITL**：`requireApproval: true` 时暂停 Agent 循环，Deny 后 LLM 看到 `APPROVAL_DENIED` 自动换方案
 
-```typescript
-const agent = new ReActAgent({
-  llm: provider,
-  sessionId: "my-session",
-  enableCheckpointing: true,   // auto-save after each LLM+tools cycle
-});
+---
 
-// Network failure → checkpoint auto-saved as "interrupted"
-// Restore network → resume:
-const answer = await agent.resume("my-session", "continue with my previous request");
-```
-
-### MCP Server Configuration
-
-```json
-// mcp.json (auto-loaded from project root)
-{
-  "filesystem": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
-  },
-  "weather": {
-    "url": "http://localhost:3001/sse"
-  }
-}
-```
-
-### Skill Creation
+## Skill 渐进式技能
 
 ```markdown
 <!-- skills/code-reviewer/SKILL.md -->
 ---
 name: code-reviewer
-description: Review code for bugs, style issues, and security vulnerabilities
-keywords: [review, audit, code, security]
+description: 审查代码质量并生成改进建议
+keywords: ["review", "code", "quality", "security"]
 ---
 
-## Instructions
-
-You are a thorough code reviewer. For each review:
-
-1. Check for correctness bugs (null safety, error handling, edge cases)
-2. Check for style and readability
-3. Check for security vulnerabilities (injection, auth, data exposure)
-4. Summarize findings with severity levels (critical / warning / info)
+你是一个代码审查专家。审查维度：类型安全、错误处理、性能、可读性。
 ```
 
-### Lifecycle Hooks
+用户说"review this code" → 关键词 `review` 命中 → Skill 在 LLM 调用前自动激活注入 System Prompt，零额外开销。
 
-```typescript
-import { TraceLogger } from "kagent-ts";
+沉淀的 Skill 自动包含关键词：
 
-const trace = new TraceLogger({ sessionId: "debug-session" });
+```markdown
+---
+name: deploy-nextjs-to-vercel
+description: 将 Next.js 应用部署到 Vercel
+keywords: ["deploy","vercel","nextjs","production"]
+precipitated: true
+---
+```
 
+## 会话持久化
+
+```ts
 const agent = new ReActAgent({
   llm: provider,
-  hooks: trace,  // trace automatically derives subAgentHooks for children
+  sessionId: "my-session",
+  enableCheckpointing: true,   // 每个 LLM+tools 周期后自动保存
 });
 
-// Hooks interface:
-// onLLMStart(messages, tools) / onLLMEnd(response) / onLLMError(error)
-// onToolStart(name, args, callId) / onToolEnd(name, result, callId) / onToolError(name, error, callId)
-// onThought(thought) / onChunk(text)
-// onPlanCreated(steps) / onPlanRevised(steps)
-// onFinish(answer)
+// 网络中断 → 自动保存 "interrupted" 检查点 → 恢复网络后续跑
+const answer = await agent.resume("my-session", "继续之前的任务");
 ```
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```text
 src/
-├── core/              # Agent base class + 4 agent paradigms
-│   ├── agent.ts           # Abstract Agent (LLM, tools, context, hooks, sessions)
-│   ├── react-agent.ts     # ReActAgent (Think → Act → Observe)
-│   ├── plan-solve-agent.ts # PlanSolveAgent (Plan → Resolve → Revise)
-│   ├── fusion-agent.ts    # FusionAgent (Route → Plan/Execute → Reflect)
-│   ├── response-schema.ts # Structured output parsing
-│   └── system-prompts.ts  # SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY, etc.
-├── orchestrator/      # Multi-agent DAG orchestration
-│   ├── orchestrator-agent.ts   # Decompose → Dispatch → Synthesize → Adapt
-│   ├── orchestrator-types.ts   # TaskGraph, TaskNode, SynthesisResult
-│   └── orchestrator-response.ts # Structured prompt/response parsing
-├── llm/               # LLM provider abstraction
-│   ├── interface.ts        # LLMProvider, LLMStreamEvent, LLMResponse
-│   ├── openai-provider.ts  # OpenAI implementation
-│   ├── anthropic-provider.ts # Anthropic implementation
-│   ├── fallback-provider.ts # Primary → fallback chain
-│   ├── model-router.ts     # Route by task complexity
-│   └── token-budget.ts     # Session-level cost control
-├── tools/             # Tool registry, circuit breaker, built-in tools
-│   ├── tool-registry.ts    # Tool registration + execution
-│   ├── circuit-breaker.ts  # 3-state failure tracking
-│   ├── tool-validator.ts   # JSON Schema validation (Ajv)
-│   ├── tool-output-truncator.ts # Large output → disk
-│   ├── tool-filter.ts      # allowlist/denylist/pattern
-│   └── builtin/            # read_file, write_file, edit, grep, glob, bash, etc.
-├── subagent/          # Async multi-agent lifecycle
-├── skills/            # Progressive disclosure skill system
-├── session/           # Checkpoint persistence & resume
-├── context/           # Context window management
-├── compression/       # Progressive 4-step context compression
-├── rag/               # Hybrid vector + keyword search + LLM rerank
-├── mcp/               # Model Context Protocol client
-├── memory/            # Long-term memory (MEMORY.md + file store)
-├── security/          # Prompt injection defense
-├── reflection/        # ReflectionAgent + MemoryReflector + ErrorNotebook
-├── verification/      # VerifyAgent — answer correctness & completeness check
-├── precipitation/     # Post-execution skill extraction
-├── git/               # Git worktree manager for sub-agent isolation
-├── eval/              # Tool call evaluation + regression benchmarks
-├── trace/             # Session execution trace logger
-├── preferences/       # User preference injection
-├── rules/             # Project rules file loader
-├── messages/          # Message data structures
-├── logging/           # Lightweight structured logger
-└── index.ts           # Public API surface (~295 exports)
+├── core/          # Agent 基类 + 4 种范式（ReAct/PlanSolve/Fusion/Orchestrator）
+├── intent/        # 意图识别：信号检测 + Skill 关键词匹配
+├── verification/  # 答案验证：Fork VerifyAgent 审查正确性
+├── reflection/    # 反思系统：ReflectionAgent + MemoryReflector + ErrorNotebook
+├── precipitation/ # 技能沉淀：PrecipitateAgent 自动提取可复用技能
+├── skills/        # 渐进式技能：FileSkillLoader + SkillManager
+├── tools/         # 工具系统：Registry / CircuitBreaker / Validator / Filter
+├── llm/           # LLM 抽象：OpenAI / Anthropic / Fallback / Router / TokenBudget
+├── subagent/      # 子 Agent 生命周期管理
+├── session/       # 会话持久化：Checkpoint + Resume
+├── context/       # 上下文管理 + 渐进 4 步压缩
+├── security/      # Prompt Injection 防护
+├── memory/        # 长期记忆：Markdown 文件 + [[wiki-link]]
+├── mcp/           # MCP 协议客户端
+├── rag/           # 混合检索：向量 + BM25 + RRF + LLM 重排序
+├── eval/          # 评估体系：ToolCallEvaluator + EvalRunner + Benchmark
+├── trace/         # 全链路追踪：TraceLogger
+├── git/           # Git Worktree 隔离执行
+└── preferences/   # 用户偏好注入 + 项目规则
 ```
 
 ---
 
-## Documentation
+## 文档
 
-Full documentation available at: **[https://kkhhhh-ll.github.io/kagent-ts](https://kkhhhh-ll.github.io/kagent-ts)**
+**[kkhhhh-ll.github.io/kagent-ts](https://kkhhhh-ll.github.io/kagent-ts)**
 
-Run docs locally:
-
-```bash
-npm run docs:dev
-```
-
----
+本地运行：`npm run docs:dev`
 
 ## License
 
-BUSL-1.1 — Business Source License. See [LICENSE](LICENSE) for details.
-
----
-
----
-
-*Built with TypeScript • Node.js ≥ 18 • OpenAI + Anthropic*
+BUSL-1.1 — Business Source License.

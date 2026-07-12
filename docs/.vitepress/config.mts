@@ -90,6 +90,7 @@ export default defineConfig({
             { text: 'Git Worktree 隔离', link: '/advanced/git' },
             { text: 'MCP 协议', link: '/advanced/mcp' },
             { text: 'RAG 知识库', link: '/advanced/rag' },
+            { text: 'Intent 意图识别', link: '/advanced/intent' },
             { text: 'Reflection 反思', link: '/advanced/reflection' },
             { text: 'Verification 答案验证', link: '/advanced/verification' },
             { text: 'Memory 记忆', link: '/advanced/memory' },

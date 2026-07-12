@@ -185,9 +185,29 @@ export class FileSkillLoader {
         continue;
       }
 
+      // Parse keywords: comma-separated string or JSON array in frontmatter
+      let keywords: string[] | undefined;
+      const kwRaw = frontmatter.keywords?.trim();
+      if (kwRaw) {
+        try {
+          // Try JSON array first: ["review", "code"]
+          const parsed = JSON.parse(kwRaw);
+          if (Array.isArray(parsed)) {
+            keywords = parsed.map((k: unknown) => String(k).trim()).filter(Boolean);
+          }
+        } catch {
+          // Fallback: comma-separated string: "review, code, audit"
+          keywords = kwRaw
+            .split(",")
+            .map((k) => k.trim())
+            .filter(Boolean);
+        }
+      }
+
       skills.push({
         name,
         description: frontmatter.description?.trim() ?? "",
+        keywords,
         systemPrompt: "", // Loaded lazily on activation
       });
       this.skillDirs.set(name, entry.name);

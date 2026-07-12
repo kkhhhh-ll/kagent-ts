@@ -1,6 +1,7 @@
 import { Agent, AgentConfig } from "./agent";
 import { Message } from "../messages/message";
 import { Role } from "../messages/types";
+import { planHasRiskyOps } from "../intent/signal-detector";
 import {
   FUSION_ROUTE_INSTRUCTIONS,
   FUSION_EXECUTION_INSTRUCTIONS,
@@ -251,6 +252,10 @@ export class FusionAgent extends Agent {
     // ── Reload dynamic resources ─────────────────────────────────────
     await this.reloadDynamicResources();
 
+    // ── Intent detection (zero LLM cost, runs once per run) ────────
+    this.detectInputSignals(input);
+    this.matchInputSkills(input);
+
     // ── Recover orphaned sub-agent results ───────────────────────────
     this.recoverOrphanedSubAgentResults();
 
@@ -344,8 +349,7 @@ export class FusionAgent extends Agent {
       this.precipitationMode === "post-hoc" ||
       (this.precipitationMode !== "off" &&
         this.consecutiveFailures >= FAILURE_THRESHOLD) ||
-      (this.precipitationMode !== "off" &&
-        /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
+      this.inputSignals.wantsRemember;
     if (shouldPrecipitate) {
       this.runPrecipitation(input, answer).catch((err: unknown) =>
         this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
@@ -357,8 +361,7 @@ export class FusionAgent extends Agent {
       this.memoryReflectionMode === "post-hoc" ||
       (this.memoryReflectionMode !== "off" &&
         this.consecutiveFailures >= FAILURE_THRESHOLD) ||
-      (this.memoryReflectionMode !== "off" &&
-        /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
+      this.inputSignals.wantsRemember;
     if (shouldReflectMemory) {
       this.runMemoryReflection(input, answer).catch((err: unknown) =>
         this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
@@ -554,14 +557,8 @@ export class FusionAgent extends Agent {
       case "never":
         return false;
       case "auto":
-        // Auto: check if plan contains risky keywords
-        // (deploy, delete, drop, migration, etc.)
-        const riskyKeywords = [
-          "deploy", "delete", "drop", "migrate", "truncate",
-          "destroy", "purge", "reset", "format",
-        ];
-        const planText = _plan.join(" ").toLowerCase();
-        return riskyKeywords.some((kw) => planText.includes(kw));
+        // Auto: check if plan contains risky operations
+        return planHasRiskyOps(_plan);
       default:
         return false;
     }
@@ -1243,6 +1240,10 @@ export class FusionAgent extends Agent {
 
     await this.init();
     await this.reloadDynamicResources();
+
+    // ── Intent detection (zero LLM cost, runs once per run) ────────
+    this.detectInputSignals(input);
+    this.matchInputSkills(input);
     this.recoverOrphanedSubAgentResults();
 
     // Reset state
@@ -1289,16 +1290,10 @@ export class FusionAgent extends Agent {
     // Determine if precipitation should run (mode + signals)
     const FAILURE_THRESHOLD = 2;
     let shouldPrecipitate = this.precipitationMode === "post-hoc";
-    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
-      shouldPrecipitate = true;
-      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
-    }
-
-    // Determine if memory reflection should run (mode + signals)
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
-    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+    if (this.inputSignals.wantsRemember) {
+      shouldPrecipitate = true;
       shouldReflectMemory = true;
-      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
     }
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -1431,10 +1426,6 @@ export class FusionAgent extends Agent {
           if (this.consecutiveFailures >= FAILURE_THRESHOLD
               && this.precipitationMode !== "off") {
             shouldPrecipitate = true;
-          }
-          if (this.consecutiveFailures >= FAILURE_THRESHOLD
-              && this.memoryReflectionMode !== "off") {
-            shouldReflectMemory = true;
           }
         } else {
           this.consecutiveFailures = 0;

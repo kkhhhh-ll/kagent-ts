@@ -118,6 +118,10 @@ export class ReActAgent extends Agent {
     // ── Reload dynamic resources (preferences, skills, MCP) ─────────
     await this.reloadDynamicResources();
 
+    // ── Intent detection (zero LLM cost, runs once per run) ────────
+    this.detectInputSignals(input);
+    this.matchInputSkills(input);
+
     // ── Recover orphaned sub-agent results from a cancelled session ──
     this.recoverOrphanedSubAgentResults();
 
@@ -144,16 +148,11 @@ export class ReActAgent extends Agent {
 
     // Determine if precipitation should run (mode + signals)
     let shouldPrecipitate = this.precipitationMode === "post-hoc";
-    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
-      shouldPrecipitate = true;
-      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
-    }
-
-    // Determine if memory reflection should run (mode + signals)
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
-    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+    // User explicitly asked to remember — override mode config
+    if (this.inputSignals.wantsRemember) {
+      shouldPrecipitate = true;
       shouldReflectMemory = true;
-      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
     }
 
     // Determine if error reflection should run
@@ -444,16 +443,11 @@ export class ReActAgent extends Agent {
 
     // Determine if precipitation should run (mode + signals)
     let shouldPrecipitate = this.precipitationMode === "post-hoc";
-    if (this.precipitationMode !== "off" && /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input)) {
-      shouldPrecipitate = true;
-      this.logger.info("Precipitation", "User intent to remember detected — will precipitate.");
-    }
-
-    // Determine if memory reflection should run (mode + signals)
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
-    if (this.memoryReflectionMode !== "off" && /remember|记住|記住|儲存|记录下来|保存/i.test(input)) {
+    // User explicitly asked to remember — override mode config
+    if (this.inputSignals.wantsRemember) {
+      shouldPrecipitate = true;
       shouldReflectMemory = true;
-      this.logger.info("MemoryReflection", "User intent to remember detected — will reflect.");
     }
 
     // Determine if error reflection should run

@@ -41,6 +41,12 @@ export interface SkillCandidate {
   name: string;
   /** One-line summary shown in the available skills list. */
   description: string;
+  /**
+   * Keywords for fast-path intent matching. When the user's input
+   * contains any keyword, the skill is auto-activated without an
+   * LLM `skill` tool call. 3-8 lowercase words/phrases recommended.
+   */
+  keywords: string[];
   /** Full system prompt body (markdown, goes after the frontmatter). */
   content: string;
 }
@@ -120,6 +126,7 @@ In your final answer, output a JSON object with this structure:
     {
       "name": "kebab-case-unique-name",
       "description": "One-line summary of what this skill covers.",
+      "keywords": ["3-8", "lowercase", "words", "that", "match", "user", "intent"],
       "content": "Full system prompt body in markdown. Include concrete steps, examples, warnings, and references to relevant files or conventions."
     }
   ]
@@ -129,6 +136,10 @@ Rules:
 - Only propose skills when there is genuinely reusable knowledge.
 - If nothing is worth saving long-term, return an empty skills array.
 - Each skill's name must be kebab-case, unique, and descriptive.
+- Each skill's keywords array must contain 3-8 lowercase words or short phrases that
+  future users might type when they need this skill. Think: "what would someone say
+  to trigger this?" — e.g. ["deploy", "release", "production", "ship"]. Keywords
+  enable automatic skill activation without the LLM calling the skill tool.
 - Each skill's content must be concrete and actionable — vague generalities are NOT skills.
 - The content should be written as instructions to a future LLM agent.
 - Use your tools to verify claims against the actual codebase.
@@ -286,9 +297,24 @@ function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
       );
       continue;
     }
+    // Parse keywords: accept string[] or comma-separated string
+    const kwRaw: unknown = s.keywords;
+    let keywords: string[] = [];
+    if (Array.isArray(kwRaw)) {
+      keywords = kwRaw
+        .map((k: unknown) => String(k).trim().toLowerCase())
+        .filter(Boolean);
+    } else if (typeof kwRaw === "string") {
+      keywords = kwRaw
+        .split(",")
+        .map((k) => k.trim().toLowerCase())
+        .filter(Boolean);
+    }
+
     candidates.push({
       name: s.name,
       description: s.description,
+      keywords,
       content: s.content,
     });
   }
@@ -554,7 +580,7 @@ export class PrecipitateAgent {
         const skillDir = path.join(this.skillsDir, c.name);
         await mkdir(skillDir, { recursive: true });
 
-        const fileContent = buildSkillMarkdown(c.name, c.description, c.content);
+        const fileContent = buildSkillMarkdown(c.name, c.description, c.content, c.keywords);
         const filePath = path.join(skillDir, "SKILL.md");
         await writeFile(filePath, fileContent, "utf-8");
 

@@ -43,6 +43,8 @@ import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
+import { detectSignals, matchSkills } from "../intent";
+import type { UserSignals, SkillMatch } from "../intent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -479,6 +481,12 @@ export abstract class Agent {
 
   /** Minimum score (0-100) to pass verification. Default: 70. */
   protected verificationThreshold: number = 70;
+
+  /** Signals detected from the current run's user input. */
+  protected inputSignals: UserSignals = { wantsRemember: false, hasRiskyOps: false };
+
+  /** Skills auto-activated by keyword/name matching (before LLM involvement). */
+  protected autoActivatedSkills: SkillMatch[] = [];
 
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?:
@@ -1648,6 +1656,63 @@ export abstract class Agent {
     if (!tracker)
       return "# Tool Error Trace Report\n\n*Error tracker not configured.*\n";
     return tracker.generateMarkdownReport();
+  }
+
+  // ─── Intent Detection ─────────────────────────────────────────────────
+
+  /**
+   * Detect user signals from the input string (zero LLM cost).
+   *
+   * Stores results on `this.inputSignals` so downstream logic
+   * (precipitation trigger, memory reflection, plan confirmation)
+   * reads flags instead of running ad-hoc regex.
+   *
+   * Called once at the start of every `run()`.
+   */
+  protected detectInputSignals(input: string): void {
+    this.inputSignals = detectSignals(input);
+
+    if (this.inputSignals.wantsRemember) {
+      this.logger.info("Intent", "User intent to remember detected.");
+    }
+    if (this.inputSignals.hasRiskyOps) {
+      this.logger.info("Intent", "Risky operation keywords detected in user input.");
+    }
+  }
+
+  /**
+   * Match skills by keyword/name against user input (zero LLM cost).
+   *
+   * Matched skills have their full system prompt loaded and stored on
+   * `this.autoActivatedSkills`. The system prompt builder should
+   * include them so the LLM never needs to call the `skill` tool
+   * for obviously-relevant skills.
+   *
+   * Called once at the start of every `run()`.
+   */
+  protected matchInputSkills(input: string): void {
+    if (!this.skillManager) return;
+
+    const skills = this.skillManager.getAll();
+    if (skills.length === 0) return;
+
+    this.autoActivatedSkills = matchSkills(input, skills);
+
+    // Activate matched skills to load full system prompts
+    for (const m of this.autoActivatedSkills) {
+      this.skillManager.activate(m.skill.name);
+      const reloaded = this.skillManager.get(m.skill.name);
+      if (reloaded) m.skill = reloaded;
+    }
+
+    if (this.autoActivatedSkills.length > 0) {
+      this.logger.info(
+        "Intent",
+        `Auto-activated ${this.autoActivatedSkills.length} skill(s): ${this.autoActivatedSkills.map((m) => m.skill.name).join(", ")}`,
+      );
+      // Rebuild system prompt so auto-activated skills take effect immediately
+      this.rebuildSystemPrompt();
+    }
   }
 
   // ─── Answer Verification ────────────────────────────────────────────────

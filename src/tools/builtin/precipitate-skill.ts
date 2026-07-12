@@ -53,6 +53,14 @@ export function createPrecipitateSkillTool(
             "when this skill is activated. Include concrete steps, examples, " +
             "warnings, and references to relevant files or conventions.",
         },
+        keywords: {
+          type: "array",
+          description:
+            "3-8 lowercase keywords or short phrases a user might type to " +
+            "trigger this skill. Example: [\"deploy\", \"release\", \"production\"]. " +
+            "Enables automatic skill activation without the LLM calling the skill tool.",
+          items: { type: "string" },
+        },
       },
       required: ["name", "description", "content"],
     },
@@ -62,6 +70,9 @@ export function createPrecipitateSkillTool(
       const name = String(params.name ?? "").trim();
       const description = String(params.description ?? "").trim();
       const content = String(params.content ?? "").trim();
+      const keywords: string[] | undefined = Array.isArray(params.keywords)
+        ? params.keywords.map((k: unknown) => String(k).trim().toLowerCase()).filter(Boolean)
+        : undefined;
 
       // Validate inputs
       if (!name) return "Error: skill name is required.";
@@ -89,7 +100,7 @@ export function createPrecipitateSkillTool(
         const skillDir = path.join(skillsDir, name);
         fs.mkdirSync(skillDir, { recursive: true });
 
-        const fileContent = buildSkillMarkdown(name, description, content);
+        const fileContent = buildSkillMarkdown(name, description, content, keywords);
         const filePath = path.join(skillDir, "SKILL.md");
         fs.writeFileSync(filePath, fileContent, "utf-8");
 

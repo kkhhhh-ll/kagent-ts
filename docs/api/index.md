@@ -27,6 +27,8 @@ import {
   SkillManager, FileSkillLoader, parseFrontmatter,
   // Precipitation
   PrecipitateAgent,
+  // Intent
+  detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt,
   // Verification
   VerifyAgent,
   // MCP
@@ -70,8 +72,9 @@ import {
 | **Message 类型** | Message / Role / ToolCall / MessageData | [API - Messages](/api/messages) |
 | **Session** | SessionManager / SessionState / Checkpoint | [API - Session](/api/session) |
 | **Context & Compression** | ContextManager / ProgressiveCompressor | [API - Context](/api/context) |
-| **Skills** | SkillManager / FileSkillLoader | [指南 - Skills](/advanced/skills) |
-| **Precipitation** | PrecipitateAgent — 技能自动沉淀 | [指南 - Precipitation](/advanced/precipitation) |
+| **Intent** | detectSignals / matchSkills — 意图识别 | [指南 - Intent](/advanced/intent) |
+| **Skills** | SkillManager / FileSkillLoader / parseFrontmatter | [指南 - Skills](/advanced/skills) |
+| **Precipitation** | PrecipitateAgent — 技能自动沉淀（含关键词） | [指南 - Precipitation](/advanced/precipitation) |
 | **Verification** | VerifyAgent — 答案验证（阻塞式） | [指南 - Verification](/advanced/verification) |
 | **SubAgent** | SubAgentManager / SubAgentLoader | [指南 - SubAgent](/advanced/subagents) |
 | **MCP** | McpClientManager / McpServerConfig | [指南 - MCP](/advanced/mcp) |
@@ -126,6 +129,9 @@ type Tool / ToolResult / ToolErrorCode
 type ToolFilter
 type ToolErrorTrace / TraceEvent / ErrorTraceSummary
 type BreakerState / BreakerStatus / CircuitBreakerConfig
+
+// 意图识别
+type UserSignals / SkillMatch
 
 // 验证
 type VerificationResult / VerificationInput

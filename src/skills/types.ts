@@ -14,6 +14,13 @@ export interface Skill {
   description: string;
 
   /**
+   * Optional keywords for fast-path matching against user input.
+   * When the user's input contains any keyword, the skill prompt is
+   * injected at startup without waiting for an LLM `skill` tool call.
+   */
+  keywords?: string[];
+
+  /**
    * System prompt content injected into the agent's system message
    * when this skill is activated.
    */
