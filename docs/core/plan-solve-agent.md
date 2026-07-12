@@ -17,6 +17,10 @@ Phase 2 — RESOLVE:
   └── 继续执行...
   ↓
 Final Answer: 所有步骤完成，输出完整答案
+  ↓
+[VERIFY] (可选): Fork VerifyAgent 验证答案正确性
+  ├── 通过 → 返回答案
+  └── 不通过 → 注入反馈 → 一次 LLM 修正 → 返回修正后答案
 ```
 
 > **注意**：Plan 阶段首轮 LLM 调用**不传工具**，强制模型先输出计划。拿到计划后，后续轮次恢复工具，进入执行阶段。这避免了弱模型跳过规划直接干活。
@@ -78,7 +82,10 @@ interface PlanSolveAgentConfig extends AgentConfig {
    */
   replanThreshold?: number
 
-  /** 错题本反思模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 阻塞式 */
+  verification?: "off" | "post-hoc"
+
+  /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */

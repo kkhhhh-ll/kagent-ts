@@ -264,6 +264,11 @@ export type {
   MemoryReflectionInput,
   ExtractedMemory,
 } from "./reflection/memory-reflector";
+// Verification — answer correctness & completeness check
+export { VerifyAgent } from "./verification/verify-agent";
+export type { VerifyAgentConfig } from "./verification/verify-agent";
+export type { VerificationResult, VerificationInput } from "./verification/types";
+
 // Precipitation — post-execution skill extraction
 export { PrecipitateAgent } from "./precipitation/precipitate-agent";
 export type {

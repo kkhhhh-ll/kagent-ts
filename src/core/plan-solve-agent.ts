@@ -464,34 +464,40 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        this.fireOnFinish(parsed.answer);
-
-        // ── Skill precipitation (best-effort, post-hoc) ─────────────────
-        if (shouldPrecipitate) {
+        // ── Answer verification (blocking, runs before returning) ──────
+        let verifiedAnswer = parsed.answer;
+        if (this.verificationMode === "post-hoc") {
           try {
-            await this.runPrecipitation(input, parsed.answer);
+            verifiedAnswer = await this.runVerification(input, parsed.answer);
           } catch (err: unknown) {
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
           }
         }
 
-        // ── Memory reflection (best-effort, post-hoc) ──────────────────
+        this.fireOnFinish(verifiedAnswer);
+
+        // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
+        if (shouldPrecipitate) {
+          this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
+        }
+
+        // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          try {
-            await this.runMemoryReflection(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         // ── Error reflection (fire-and-forget, post-hoc) ───────────────
         if (shouldReflect) {
-          this.runReflection(input, parsed.answer).catch((err: unknown) =>
+          this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
             this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
-        return parsed.answer;
+        return verifiedAnswer;
       }
 
       // ── Initial plan creation ───────────────────────────────────
@@ -851,29 +857,36 @@ export class PlanSolveAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         this.logger.info("Plan-Solve", "Task complete.");
-        this.fireOnFinish(parsed.answer);
-        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-        if (shouldPrecipitate) {
+        // ── Answer verification (blocking, runs before returning) ──
+        let verifiedAnswer = parsed.answer;
+        if (this.verificationMode === "post-hoc") {
           try {
-            await this.runPrecipitation(input, parsed.answer);
+            verifiedAnswer = await this.runVerification(input, parsed.answer);
           } catch (err: unknown) {
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
           }
         }
 
-        // ── Memory reflection (best-effort, post-hoc) ──────────────────
+        this.fireOnFinish(verifiedAnswer);
+        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+        if (shouldPrecipitate) {
+          this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
+        }
+
+        // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          try {
-            await this.runMemoryReflection(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         // ── Error reflection (fire-and-forget, post-hoc) ───────────────
         if (shouldReflect) {
-          this.runReflection(input, parsed.answer).catch((err: unknown) =>
+          this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
             this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }

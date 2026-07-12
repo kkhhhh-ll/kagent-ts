@@ -302,6 +302,37 @@ export interface AgentConfig {
    * 2. Otherwise falls back to the main `llm`
    */
   reflectionLLM?: LLMProvider;
+
+  // ─── Answer Verification ──────────────────────────────────────────────
+
+  /**
+   * Answer verification mode. After the agent produces a final answer,
+   * forks an independent VerifyAgent to check correctness and completeness.
+   * Default: `"off"`.
+   */
+  verification?: "off" | "post-hoc";
+
+  /** Max iterations for the verification sub-agent. Default: 3. */
+  verificationMaxIterations?: number;
+
+  /**
+   * Minimum score (0-100) to pass verification. Default: 70.
+   * When the score is below this threshold, the verification issues are
+   * injected back into the main agent for one correction attempt.
+   */
+  verificationThreshold?: number;
+
+  /**
+   * LLM provider for answer verification.
+   *
+   * When set, this provider is used for the VerifyAgent fork.
+   * When not set, the resolution order is:
+   * 1. `ModelRouter.forVerification()` if the main `llm` is a ModelRouter
+   * 2. Otherwise falls back to the main `llm`
+   *
+   * Using an independent model here provides an unbiased review.
+   */
+  verificationLLM?: LLMProvider;
 }
 
 /**
@@ -436,6 +467,18 @@ export abstract class Agent {
 
   /** LLM provider for error reflection (defaults to main llm if not set). */
   protected reflectionLLM?: LLMProvider;
+
+  /** LLM provider for answer verification (defaults to main llm if not set). */
+  protected verificationLLM?: LLMProvider;
+
+  /** Answer verification mode. Default: `"off"`. */
+  protected verificationMode: "off" | "post-hoc" = "off";
+
+  /** Max iterations for the verification sub-agent. Default: 3. */
+  protected verificationMaxIterations: number = 3;
+
+  /** Minimum score (0-100) to pass verification. Default: 70. */
+  protected verificationThreshold: number = 70;
 
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?:
@@ -575,6 +618,21 @@ export abstract class Agent {
     } else if (cfg.llm instanceof ModelRouter) {
       this.reflectionLLM = cfg.llm.forReflection();
     }
+
+    // Resolve verification LLM:
+    // 1. Explicit `verificationLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forVerification()
+    // 3. Fallback → verification shares the main `llm`
+    if (cfg.verificationLLM) {
+      this.verificationLLM = cfg.verificationLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.verificationLLM = cfg.llm.forVerification();
+    }
+
+    // Verification settings
+    this.verificationMode = cfg.verification ?? "off";
+    this.verificationMaxIterations = cfg.verificationMaxIterations ?? 3;
+    this.verificationThreshold = cfg.verificationThreshold ?? 70;
 
     // Token budget — session-level cost control
     if (cfg.tokenBudgetConfig) {
@@ -1590,5 +1648,98 @@ export abstract class Agent {
     if (!tracker)
       return "# Tool Error Trace Report\n\n*Error tracker not configured.*\n";
     return tracker.generateMarkdownReport();
+  }
+
+  // ─── Answer Verification ────────────────────────────────────────────────
+
+  /**
+   * Run answer verification and, if needed, one correction cycle.
+   *
+   * Flow:
+   * 1. Fork a VerifyAgent to check the answer.
+   * 2. If it passes (score >= threshold) → return the original answer.
+   * 3. If it fails → inject issues as feedback, make one LLM call to
+   *    correct, then return the corrected answer.
+   *
+   * Failures (timeout, parse error) are non-fatal — the original answer
+   * is returned so the user is never blocked.
+   */
+  protected async runVerification(
+    input: string,
+    answer: string,
+  ): Promise<string> {
+    const { VerifyAgent } = await import("../verification/verify-agent.js");
+
+    const verifier = new VerifyAgent({
+      llm: this.verificationLLM ?? this.llm,
+      maxIterations: this.verificationMaxIterations,
+      threshold: this.verificationThreshold,
+      logger: this.logger,
+      hooks: this.hooks,
+    });
+
+    const result = await verifier.verify({
+      userQuery: input,
+      answer,
+    });
+
+    if (result.valid) {
+      this.logger.info(
+        "Verification",
+        `Answer passed verification (score: ${result.score}).`,
+      );
+      return answer;
+    }
+
+    this.logger.info(
+      "Verification",
+      `Answer failed verification (score: ${result.score}, threshold: ${this.verificationThreshold}). ` +
+        `Issues: ${result.issues.length}. Attempting one correction cycle...`,
+    );
+
+    // Inject verification feedback and make one LLM call to correct
+    const issuesText = result.issues
+      .map((issue, i) => `${i + 1}. ${issue}`)
+      .join("\n");
+
+    const feedbackMsg = Message.user(
+      `⚠️ [VERIFICATION FAILED] The previous answer did not pass quality review ` +
+        `(score: ${result.score}/100). Please fix the following issues:\n\n` +
+        `${issuesText}\n\n` +
+        `Assessment: ${result.assessment}\n\n` +
+        `Please provide a corrected answer addressing each issue. Do NOT repeat the original answer — only output the corrected version.`,
+    );
+    this.contextManager.addMessage(feedbackMsg.toDict());
+
+    // Make one LLM call (no tools) to get a corrected answer
+    try {
+      this._abortController = new AbortController();
+      const messages = this.contextManager.getContextMessages();
+      const llmResponse = await this.llm.chat(
+        messages,
+        undefined,
+        this._abortController.signal,
+      );
+
+      if (llmResponse.content && llmResponse.content.trim().length > 5) {
+        const assistantMsg = Message.assistant(llmResponse.content);
+        this.contextManager.addMessage(assistantMsg.toDict());
+        this.logger.info("Verification", "Correction applied.");
+        return llmResponse.content;
+      }
+    } catch (err: unknown) {
+      this.logger.warn(
+        "Verification",
+        `Correction LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Fallback: return original answer with verification note
+    return (
+      answer +
+      `\n\n[Note: This answer scored ${result.score}/100 on quality verification. Issues found:\n` +
+      issuesText +
+      `\nAssessment: ${result.assessment}]`
+    );
   }
 }

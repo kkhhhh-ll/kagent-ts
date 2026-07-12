@@ -198,6 +198,9 @@ interface ModelRouterConfig {
   /** 记忆提取专用模型（默认: main） */
   memory?: LLMProvider
 
+  /** 答案验证专用模型（默认: main） */
+  verification?: LLMProvider
+
   /** 共享 Fallback 链（所有 route 的网络错误都会尝试这些 provider） */
   fallbacks?: LLMProvider[]
 
@@ -211,6 +214,7 @@ router.forReflection(): LLMProvider
 router.forLightweight(): LLMProvider
 router.forPrecipitation(): LLMProvider
 router.forMemory(): LLMProvider
+router.forVerification(): LLMProvider
 ```
 
 ---

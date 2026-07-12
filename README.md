@@ -1,6 +1,6 @@
 # kagent-ts
 
-A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.
+A production-grade TypeScript agent framework with multi-paradigm agent loops, adaptive routing, answer verification, tool governance with circuit breaker, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.
 
 [![npm version](https://img.shields.io/npm/v/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
@@ -49,12 +49,12 @@ A production-grade TypeScript agent framework with multi-paradigm agent loops, m
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐ │
 │  │                      Extension Points                                 │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │ │
-│  │  │ MCP      │ │ RAG      │ │ Skills   │ │ Memory   │ │ Security   │ │ │
-│  │  │ Protocol │ │ Hybrid   │ │ Prog.    │ │ Long/    │ │ Prompt     │ │ │
-│  │  │ Dynamic  │ │ Search   │ │ Disc.    │ │ Short    │ │ Injection  │ │ │
-│  │  │ Tools    │ │ +Rerank  │ │ +Precip. │ │ Term     │ │ Defense    │ │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────────┘ │ │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │ │
+│  │  │ MCP      │ │ RAG      │ │ Skills   │ │ Memory   │ │ Verify   │ │ Security   │ │ │
+│  │  │ Protocol │ │ Hybrid   │ │ Prog.    │ │ Long/    │ │ Answer   │ │ Prompt     │ │ │
+│  │  │ Dynamic  │ │ Search   │ │ Disc.    │ │ Short    │ │ Quality  │ │ Injection  │ │ │
+│  │  │ Tools    │ │ +Rerank  │ │ +Precip. │ │ Term     │ │ Check    │ │ Defense    │ │ │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────────┘ │ │
 │  └──────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -127,7 +127,8 @@ flowchart TD
     GAPS -->|"no"| FORCE["Force Synthesize\nBest-effort answer"]
 
     FORCE --> FINAL
-    FINAL --> REFLECT["Post-hoc\nReflection + Memory\n+ Precipitation"]
+    FINAL --> VERIFY["Verify\nFork agent checks\nanswer quality"]
+    VERIFY --> REFLECT["Post-hoc\nReflection + Memory\n+ Precipitation\n(fire-and-forget)"]
     REFLECT --> OUT["Final Answer\nto User"]
 
     style D fill:#4a90d9,color:#fff
@@ -153,10 +154,11 @@ flowchart LR
     ASK -->|"approved"| EXEC
     ASK -->|"rejected"| RETURN["Return plan\nas answer"]
 
-    REACT --> REFLECT
-    EXEC --> REFLECT
+    REACT --> VERIFY
+    EXEC --> VERIFY
 
-    REFLECT["4. Post-hoc\nReflection +\nMemory +\nPrecipitation"] --> ANSWER["Final Answer"]
+    VERIFY["4. Verify\nFork agent checks\nanswer quality"] --> REFLECT
+    REFLECT["5. Post-hoc\nReflection + Memory\n+ Precipitation\n(fire-and-forget)"] --> ANSWER["Final Answer"]
 ```
 
 ---
@@ -220,7 +222,7 @@ flowchart LR
 |-------|---------|----------|
 | **ReActAgent** | Think → Act → Observe | Interactive Q&A, tool-augmented tasks |
 | **PlanSolveAgent** | Plan → Resolve → Revise | Multi-step structured tasks |
-| **FusionAgent** | Route → Plan/Execute → (post-hoc) | Adaptive: auto-selects the right strategy |
+| **FusionAgent** | Route → Plan/Execute → Verify → (post-hoc) | Adaptive: auto-selects strategy + quality gate |
 | **OrchestratorAgent** | Decompose → Dispatch → Synthesize → Adapt | Complex multi-agent workflows with DAG |
 
 ### 🔧 Tool Governance
@@ -237,7 +239,7 @@ flowchart LR
 
 - **Provider-agnostic interface** — OpenAI + Anthropic via unified `LLMProvider`
 - **Fallback chain** — Primary → fallback model on failure; orchestrator tracks degradation events
-- **Model router** — Route complex reasoning to large models, simple sub-agent tasks to cheaper models
+- **Model router** — Route by task: main / subAgent / reflection / verification / memory / precipitation / lightweight
 - **Rate limiter** — Token budget with session-level cost control and 80%-usage warnings
 - **Streaming** — `chatStream()` with `AsyncIterable<LLMStreamEvent>`, accumulating tool call deltas by index
 
@@ -295,13 +297,21 @@ flowchart LR
 - **Empty-response detection** — Consecutive empty/short responses > limit → graceful degradation
 - **Cancellation** — `AbortController`-based; aborts in-flight LLM requests, saves checkpoint
 
+### ✅ Answer Verification
+
+- **Blocking quality gate** — Before returning the answer, forks an independent agent to check correctness, completeness, consistency, and actionability
+- **Auto-correction** — Verification score below threshold → issues injected as feedback → one LLM call to fix → verified answer returned
+- **Independent LLM** — Configurable via `verificationLLM` or `ModelRouter.forVerification()` for unbiased review
+- **Non-blocking on failure** — Timeout (3 min) or error → original answer returned; user never blocked
+- **Enable via** — `verification: "post-hoc"` in AgentConfig (ReAct / PlanSolve / Fusion)
+
 ### 🔍 Observability & Learning
 
 - **Lifecycle hooks** — `onLLMStart/End`, `onToolStart/End/Error`, `onThought`, `onPlanCreated/Revised`, `onFinish`, `onChunk`
-- **TraceLogger** — Session execution traces with parent-child sub-agent tracking
-- **Post-hoc reflection** — Built-in error analysis (`reflection: "post-hoc"`), memory extraction, and skill precipitation after each session
+- **TraceLogger** — Session execution traces with parent-child sub-agent tracking; auto-propagates to nested agents
+- **Post-hoc reflection** — Built-in error analysis (`reflection: "post-hoc"`), memory extraction, and skill precipitation after each session (all fire-and-forget)
 - **ReflectionAgent** — Post-hoc session review across 6 dimensions (reasoning, tool misuse, optimization, completeness, hallucination, context)
-- **ErrorNotebook (错题本)** — Persistent error knowledge base; past findings injected into future system prompts
+- **ErrorNotebook (错题本)** — Persistent error knowledge base; past findings injected into future system prompts with anti-injection scanning
 - **Eval framework** — Tool call metrics (accuracy, latency, retry rate) + end-to-end regression benchmarks
 
 ---
@@ -393,8 +403,10 @@ const agent = new FusionAgent({
   llm: new OpenAIProvider({ model: "gpt-4o" }),
   routing: "auto",                // LLM judges task complexity
   planConfirmation: "auto",       // confirm only for risky operations
-  reflection: "post-hoc",         // post-hoc error analysis
-  memoryReflection: "post-hoc",   // post-hoc memory extraction
+  verification: "post-hoc",       // blocking: verify answer quality before returning
+  verificationThreshold: 75,      // minimum score to pass (default: 70)
+  reflection: "post-hoc",         // fire-and-forget: error analysis
+  memoryReflection: "post-hoc",   // fire-and-forget: memory extraction
 });
 
 const answer = await agent.run("Refactor the user service to use the repository pattern.");
@@ -540,6 +552,7 @@ src/
 ├── memory/            # Long-term memory (MEMORY.md + file store)
 ├── security/          # Prompt injection defense
 ├── reflection/        # ReflectionAgent + MemoryReflector + ErrorNotebook
+├── verification/      # VerifyAgent — answer correctness & completeness check
 ├── precipitation/     # Post-execution skill extraction
 ├── git/               # Git worktree manager for sub-agent isolation
 ├── eval/              # Tool call evaluation + regression benchmarks

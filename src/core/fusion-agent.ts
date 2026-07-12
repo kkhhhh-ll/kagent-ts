@@ -321,14 +321,23 @@ export class FusionAgent extends Agent {
     }
 
     // ── Phase 3: ReAct Execute Loop ───────────────────────────────────
-    const answer = await this.executeReActLoop();
+    let answer = await this.executeReActLoop();
 
-    // ── Phase 4: Reflection (best-effort, non-blocking) ──────────────
+    // ── Phase 4: Answer Verification (blocking) ───────────────────────
+    if (this.verificationMode === "post-hoc") {
+      try {
+        answer = await this.runVerification(input, answer);
+      } catch (err: unknown) {
+        this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
+      }
+    }
+
+    // ── Phase 5: Reflection (best-effort, non-blocking) ──────────────
     this.runReflection(input, answer).catch((err) =>
       this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
     );
 
-    // ── Phase 5: Precipitation (skill extraction) ─────────────────────
+    // ── Phase 6: Precipitation (skill extraction) ─────────────────────
     // Trigger on: post-hoc mode, or hard-won success (failures→success), or user intent
     const FAILURE_THRESHOLD = 2;
     const shouldPrecipitate =
@@ -338,14 +347,12 @@ export class FusionAgent extends Agent {
       (this.precipitationMode !== "off" &&
         /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
     if (shouldPrecipitate) {
-      try {
-        await this.runPrecipitation(input, answer);
-      } catch (err: unknown) {
-        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      this.runPrecipitation(input, answer).catch((err: unknown) =>
+        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
     }
 
-    // ── Phase 6: Memory Reflection ────────────────────────────────────
+    // ── Phase 7: Memory Reflection ────────────────────────────────────
     const shouldReflectMemory =
       this.memoryReflectionMode === "post-hoc" ||
       (this.memoryReflectionMode !== "off" &&
@@ -353,11 +360,9 @@ export class FusionAgent extends Agent {
       (this.memoryReflectionMode !== "off" &&
         /remember|save (this|it)|记住|保存|記住|儲存|记录下来/i.test(input));
     if (shouldReflectMemory) {
-      try {
-        await this.runMemoryReflection(input, answer);
-      } catch (err: unknown) {
-        this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      this.runMemoryReflection(input, answer).catch((err: unknown) =>
+        this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
     }
 
     this.fireOnFinish(answer);
@@ -1461,24 +1466,31 @@ export class FusionAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         this.logger.info("Fusion", "Task complete.");
-        this.fireOnFinish(parsed.answer);
-        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-        if (shouldPrecipitate) {
+        // ── Answer verification (blocking) ─────────────────────
+        let verifiedAnswer = parsed.answer;
+        if (this.verificationMode === "post-hoc") {
           try {
-            await this.runPrecipitation(input, parsed.answer);
+            verifiedAnswer = await this.runVerification(input, parsed.answer);
           } catch (err: unknown) {
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
           }
         }
 
-        // ── Memory reflection (best-effort, post-hoc) ──────────────────
+        this.fireOnFinish(verifiedAnswer);
+        if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+        if (shouldPrecipitate) {
+          this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
+        }
+
+        // ── Memory reflection (fire-and-forget, post-hoc) ──────
         if (shouldReflectMemory) {
-          try {
-            await this.runMemoryReflection(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
         }
 
         return;

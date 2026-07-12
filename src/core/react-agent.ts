@@ -364,35 +364,45 @@ export class ReActAgent extends Agent {
 
       // Normal answer — return content
       this.logger.info("Answer", answer);
-      this.fireOnFinish(answer);
-      if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-      // ── Skill precipitation (best-effort, post-hoc) ─────────────────
-      if (shouldPrecipitate) {
+      // ── Answer verification (blocking, runs before returning) ──────
+      let verifiedAnswer = answer;
+      if (this.verificationMode === "post-hoc") {
         try {
-          await this.runPrecipitation(input, answer);
+          verifiedAnswer = await this.runVerification(input, answer);
         } catch (err: unknown) {
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
+          this.logger.warn(
+            "Verification",
+            `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`,
+          );
         }
       }
 
-      // ── Memory reflection (best-effort, post-hoc) ──────────────────
+      this.fireOnFinish(verifiedAnswer);
+      if (this.checkpointingEnabled) this.saveCheckpoint("completed");
+
+      // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
+      if (shouldPrecipitate) {
+        this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
+
+      // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
-        try {
-          await this.runMemoryReflection(input, answer);
-        } catch (err: unknown) {
-          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
 
       // ── Error reflection (fire-and-forget, post-hoc) ───────────────
       if (shouldReflect) {
-        this.runReflection(input, answer).catch((err: unknown) =>
+        this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
           this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
 
-      return answer;
+      return verifiedAnswer;
     }
 
     // ── Max iterations reached without final answer ───────────────────
@@ -644,22 +654,18 @@ export class ReActAgent extends Agent {
       this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-      // ── Skill precipitation (best-effort, post-hoc) ─────────────────
+      // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
       if (shouldPrecipitate) {
-        try {
-          await this.runPrecipitation(input, answer);
-        } catch (err: unknown) {
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        this.runPrecipitation(input, answer).catch((err: unknown) =>
+          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
 
-      // ── Memory reflection (best-effort, post-hoc) ──────────────────
+      // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
-        try {
-          await this.runMemoryReflection(input, answer);
-        } catch (err: unknown) {
-          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        this.runMemoryReflection(input, answer).catch((err: unknown) =>
+          this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
       }
 
       // ── Error reflection (fire-and-forget, post-hoc) ───────────────

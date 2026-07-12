@@ -16,7 +16,8 @@ export type ModelRoute =
   | "reflection"
   | "lightweight"
   | "precipitation"
-  | "memory";
+  | "memory"
+  | "verification";
 
 /**
  * Configuration for the ModelRouter.
@@ -60,6 +61,13 @@ export interface ModelRouterConfig {
    * different models.
    */
   memory?: LLMProvider;
+
+  /**
+   * Model for answer verification (correctness / completeness check).
+   * Default: `main`.
+   * Using an independent model here provides an unbiased review perspective.
+   */
+  verification?: LLMProvider;
 
   /**
    * Shared fallback providers tried in order when the primary for
@@ -192,6 +200,16 @@ export class ModelRouter implements LLMProvider {
     return this.route("memory");
   }
 
+  /**
+   * Get the LLM provider for answer verification.
+   *
+   * Delegates to `verification` when configured, otherwise falls back to `main`.
+   * Wraps the provider with any shared fallback chain.
+   */
+  forVerification(): LLMProvider {
+    return this.route("verification");
+  }
+
   // ─── Internal ────────────────────────────────────────────────────────
 
   /**
@@ -229,6 +247,8 @@ export class ModelRouter implements LLMProvider {
         return this.config.precipitation ?? this.config.main;
       case "memory":
         return this.config.memory ?? this.config.main;
+      case "verification":
+        return this.config.verification ?? this.config.main;
     }
   }
 

@@ -28,6 +28,10 @@ const router = new ModelRouter({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
   }),
+  verification: new AnthropicProvider({
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    model: 'claude-haiku-4-5-20251001',
+  }),
   lightweight: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
@@ -44,6 +48,7 @@ const router = new ModelRouter({
 | `reflection` | 错误反思（错题本） | GPT-4o / Claude Sonnet |
 | `memory` | 记忆提取（用户偏好、项目决策） | GPT-4o-mini / Claude Haiku |
 | `precipitation` | Skill 沉淀（提取可复用技能） | GPT-4o-mini / Claude Haiku |
+| `verification` | 答案验证（正确性/完整性审查） | GPT-4o / Claude Sonnet |
 | `lightweight` | 轻量任务 (路由分类、简单判断) | GPT-4o-mini / Claude Haiku |
 
 ## 配置参数
@@ -64,6 +69,9 @@ interface ModelRouterConfig {
 
   /** Skill 沉淀专用模型（默认: main） */
   precipitation?: LLMProvider
+
+  /** 答案验证专用模型（默认: main） */
+  verification?: LLMProvider
 
   /** 轻量任务专用模型（默认: main） */
   lightweight?: LLMProvider

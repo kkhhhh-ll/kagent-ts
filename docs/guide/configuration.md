@@ -66,6 +66,15 @@ interface AgentConfig {
   // ── 记忆提取模式 (默认: "off") ──
   memoryReflection?: "off" | "post-hoc"
 
+  // ── 答案验证模式 (默认: "off") ──
+  verification?: "off" | "post-hoc"
+
+  // ── 答案验证专用 LLM Provider（默认复用 llm）──
+  verificationLLM?: LLMProvider
+
+  // ── 答案验证及格线 0-100（默认: 70）──
+  verificationThreshold?: number
+
   // ── 记忆存储目录 (默认: ".memory") ──
   memoryDir?: string
 
@@ -78,13 +87,14 @@ interface AgentConfig {
 
 ### 子系统的 LLM 分配
 
-Reflection、Memory、Precipitation 三个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
+Reflection、Memory、Precipitation、Verification 四个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
 
 | 子系统 | 配置方式 | 决策链 |
 | ------ | -------- | ------ |
 | **Reflection** | AgentConfig 中 `reflectionLLM` | 显式 → ModelRouter → llm |
 | **Memory** | AgentConfig 中 `memoryReflectorLLM` | 显式 → ModelRouter → llm |
 | **Precipitation** | AgentConfig 中 `precipitationLLM` | 显式 → ModelRouter → llm |
+| **Verification** | AgentConfig 中 `verificationLLM` | 显式 → ModelRouter → llm |
 | **SubAgent** | AgentConfig 中 `subAgentLLM` | 显式 → ModelRouter → llm |
 
 推荐使用 `ModelRouter` 集中管理所有模型路由，详见 [Model Router](/llm/model-router)。

@@ -19,7 +19,13 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
 [EXECUTE] 执行计划步骤 (ReAct 或 Plan-Solve)
   └── 继续直到完成
   ↓
-Final Answer（答案已返回给用户）
+Final Answer
+  ↓
+[VERIFY] (可选，post-hoc — 阻塞):
+  ├── VerifyAgent Fork — 验证正确性 / 完整性
+  ├── score < threshold → 注入反馈 → 一次 LLM 修正
+  └── 返回验证/修正后的答案
+  ↓ (答案返回给用户)
   ↓ (后台 fire-and-forget，不阻塞)
 [REFLECT] (可选，post-hoc):
   ├── ReflectionAgent 反思整个会话
@@ -58,8 +64,10 @@ const agent = new FusionAgent({
   // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── Post-hoc 子系统 ──
-  reflection: 'post-hoc',          // "off" | "post-hoc" — 错题本反思
-  memoryReflection: 'post-hoc',    // "off" | "post-hoc" — 记忆提取
+  verification: 'post-hoc',          // "off" | "post-hoc" — 答案验证（阻塞式）
+  verificationThreshold: 75,         // 验证及格线 0-100 (默认: 70)
+  reflection: 'post-hoc',          // "off" | "post-hoc" — 错题本反思（fire-and-forget）
+  memoryReflection: 'post-hoc',    // "off" | "post-hoc" — 记忆提取（fire-and-forget）
   // notebook: new ErrorNotebook(), // 可选，不传自动创建
 
   // ── 沉淀配置 ──
@@ -85,6 +93,11 @@ interface FusionAgentConfig extends AgentConfig {
   // "never":  直接执行，不确认
   // "always": 始终先让用户确认计划
   // "auto":   仅当检测到高风险工具时请求确认
+
+  // ── 答案验证 ──
+  verification?: 'off' | 'post-hoc'     // (默认: "off") — 阻塞式
+  verificationThreshold?: number        // 及格线 0-100 (默认: 70)
+  verificationMaxIterations?: number    // (默认: 3)
 
   // ── Post-hoc 反思 ──
   reflection?: 'off' | 'post-hoc'       // 错题本反思 (默认: "off")
@@ -120,7 +133,7 @@ LLM: {"complexity": "simple", "reason": "单步工具调用即可完成"}
 
 ## Post-hoc 子系统
 
-Fusion Agent 内置三个 post-hoc（执行后）子系统，在 answer 返回给用户后自动触发，全部 best-effort，失败不影响主流程。
+Fusion Agent 内置四个 post-hoc 子系统。**Verification 是阻塞式的**，在 answer 返回前验证/修正；其余三个在 answer 返回后 fire-and-forget，失败不影响主流程。
 
 ### 错题本反思
 

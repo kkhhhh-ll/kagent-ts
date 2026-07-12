@@ -15,19 +15,22 @@ interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
 
-  /** 错题本反思模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
+  verification?: "off" | "post-hoc"
+
+  /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */
   reflectionMaxIterations?: number
 
-  /** 记忆提取模式 (默认: "off") */
+  /** 记忆提取模式 (默认: "off") — fire-and-forget */
   memoryReflection?: "off" | "post-hoc"
 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
-  /** Skill 沉淀模式 (默认: "off") */
+  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
   precipitation?: "off" | "post-hoc"
 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
@@ -62,19 +65,22 @@ interface PlanSolveAgentConfig extends AgentConfig {
   /** 连续失败 N 次后触发自动 replan (默认: 2, 设为 0 禁用) */
   replanThreshold?: number
 
-  /** 错题本反思模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
+  verification?: "off" | "post-hoc"
+
+  /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */
   reflectionMaxIterations?: number
 
-  /** 记忆提取模式 (默认: "off") */
+  /** 记忆提取模式 (默认: "off") — fire-and-forget */
   memoryReflection?: "off" | "post-hoc"
 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
-  /** Skill 沉淀模式 (默认: "off") */
+  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
   precipitation?: "off" | "post-hoc"
 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
@@ -105,13 +111,16 @@ interface FusionAgentConfig extends AgentConfig {
   /** 计划确认回调 */
   onPlanConfirm?: PlanConfirmCallback
 
-  /** 错题本反思模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
+  verification?: "off" | "post-hoc"
+
+  /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */
   reflectionMaxIterations?: number
 
-  /** 记忆提取模式 (默认: "off") */
+  /** 记忆提取模式 (默认: "off") — fire-and-forget */
   memoryReflection?: "off" | "post-hoc"
 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
@@ -129,7 +138,7 @@ interface FusionAgentConfig extends AgentConfig {
   /** 连续工具失败 N 次后注入 replan 提示 (默认: 2，设为 0 禁用) */
   replanThreshold?: number
 
-  /** Skill 沉淀模式 (默认: "off") */
+  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
   precipitation?: "off" | "post-hoc"
 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
@@ -251,14 +260,23 @@ interface AgentConfig {
   skillsDir?: string                                // 技能文件目录
 
   // ── 后处理 ──
-  /** 技能沉淀模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 阻塞式：验证不通过则自动修正 */
+  verification?: "off" | "post-hoc"
+  /** 验证子 Agent 最大迭代次数 (默认: 3) */
+  verificationMaxIterations?: number
+  /** 验证及格线 0-100 (默认: 70) */
+  verificationThreshold?: number
+  /** 答案验证专用 LLM Provider（不设置时自动走 ModelRouter.forVerification() 或复用 llm） */
+  verificationLLM?: LLMProvider
+
+  /** 技能沉淀模式 (默认: "off") — fire-and-forget */
   precipitation?: "off" | "post-hoc"
   /** 沉淀子 Agent 最大迭代次数 */
   precipitationMaxIterations?: number
   /** 技能沉淀专用 LLM Provider（不设置时自动走 ModelRouter.forPrecipitation() 或复用 llm） */
   precipitationLLM?: LLMProvider
 
-  /** 记忆提取模式 (默认: "off") */
+  /** 记忆提取模式 (默认: "off") — fire-and-forget */
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 */
   memoryReflectionMaxIterations?: number
@@ -282,7 +300,7 @@ type ApprovalCallback = (
 ) => Promise<boolean>
 ```
 
-> **注意**：`maxIterations`、`reflection`、`reflectionMaxIterations`、`notebook` 等字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中（如 `ReActAgentConfig`、`PlanSolveAgentConfig` 等）。
+> **注意**：`maxIterations`、`reflection`、`reflectionMaxIterations`、`notebook` 等 Agent 特有字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中。`verification`、`precipitation`、`memoryReflection` 及其 LLM 配置在 `AgentConfig` 基类中，所有 Agent 共享。
 
 ---
 
@@ -310,8 +328,63 @@ interface AgentHooks {
 }
 ```
 
+---
+
+## VerifyAgent
+
+```ts
+import { VerifyAgent } from 'kagent-ts'
+
+const verifier = new VerifyAgent(config: VerifyAgentConfig)
+```
+
+### VerifyAgentConfig
+
+```ts
+interface VerifyAgentConfig {
+  /** LLM Provider 实例（必填） */
+  llm: LLMProvider
+
+  /** 验证子 Agent 最大 ReAct 迭代次数 (默认: 3) */
+  maxIterations?: number
+
+  /** 验证及格线 0-100 (默认: 70) */
+  threshold?: number
+
+  /** 日志实例 */
+  logger?: Logger
+
+  /** 生命周期钩子，传入 Fork 子 Agent */
+  hooks?: AgentHooks | AgentHooks[]
+}
+```
+
+### 方法
+
+```ts
+/** Fork 子 Agent 验证答案，返回结构化验证结果 */
+verify(input: VerificationInput): Promise<VerificationResult>
+```
+
+### 相关类型
+
+```ts
+interface VerificationInput {
+  userQuery: string    // 原始用户问题
+  answer: string       // 待验证的答案
+}
+
+interface VerificationResult {
+  valid: boolean       // 是否通过验证
+  score: number        // 质量评分 0-100
+  issues: string[]     // 具体问题列表
+  assessment: string   // 简要评估说明
+}
+```
+
 ## 下一步
 
 - [API - LLM](/api/llm) — LLM Provider API
 - [API - Tools](/api/tools) — Tool 系统 API
 - [API - Messages](/api/messages) — Message 类型 API
+- [Verification 答案验证](/advanced/verification) — 完整文档

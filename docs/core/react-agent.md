@@ -16,6 +16,10 @@ Observation (观察): 解析工具返回的结果
 [判断是否完成?]
   ├── 否 → 回到 Thought (下一轮迭代)
   └── 是 → Final Answer (最终答案)
+  ↓
+[VERIFY] (可选): Fork VerifyAgent 验证答案正确性
+  ├── 通过 → 返回答案
+  └── 不通过 → 注入反馈 → 一次 LLM 修正 → 返回修正后答案
 ```
 
 ## 基本用法
@@ -73,7 +77,10 @@ interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
 
-  /** 错题本反思模式 (默认: "off") */
+  /** 答案验证模式 (默认: "off") — 阻塞式 */
+  verification?: "off" | "post-hoc"
+
+  /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */
@@ -97,6 +104,7 @@ interface ReActAgentConfig extends AgentConfig {
 
 ReAct Agent 内置以下保护机制：
 
+- **答案验证**: 开启 `verification: "post-hoc"` 后，答案在返回前自动 Fork 独立 Agent 验证正确性与完整性
 - **空响应检测**: 连续 3 次空/极短响应（< 5 字符）后自动终止
 - **Token 截断处理**: 当 LLM 响应被 `max_tokens` 截断时，Agent 会注入续写提示
 - **自动 Checkpoint**: 每个迭代步骤后自动保存会话检查点

@@ -91,6 +91,7 @@ export default defineConfig({
             { text: 'MCP 协议', link: '/advanced/mcp' },
             { text: 'RAG 知识库', link: '/advanced/rag' },
             { text: 'Reflection 反思', link: '/advanced/reflection' },
+            { text: 'Verification 答案验证', link: '/advanced/verification' },
             { text: 'Memory 记忆', link: '/advanced/memory' },
             { text: 'Preferences 偏好', link: '/advanced/preferences' },
             { text: 'Rules 项目规则', link: '/advanced/rules' },
