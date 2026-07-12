@@ -5,6 +5,7 @@ import {
   detectInjectionSignatures,
   buildInjectionWarning,
 } from "../security/boundaries";
+import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export interface ErrorNotebookEntry {
   cause: string;
   suggestion: string;
   userQuery?: string;
+  /** The agent's final answer that was analyzed to produce this entry. */
+  finalAnswer?: string;
   relatedTraceIds?: string[];
 }
 
@@ -43,6 +46,8 @@ export interface ErrorNotebookConfig {
   storageDir?: string;
   /** Max entries to keep. Default: 200. */
   maxEntries?: number;
+  /** Logger instance (defaults to ConsoleLogger). */
+  logger?: Logger;
 }
 
 // ─── Index entry (metadata only, written to index.json) ──────────────────────
@@ -92,12 +97,14 @@ export class ErrorNotebook {
   private entriesDir: string;
   private indexFile: string;
   private maxEntries: number;
+  private logger: Logger;
 
   constructor(config?: ErrorNotebookConfig) {
     this.storageDir = path.resolve(config?.storageDir ?? ".error-notebook");
     this.entriesDir = path.join(this.storageDir, "entries");
     this.indexFile = path.join(this.storageDir, "index.json");
     this.maxEntries = config?.maxEntries ?? 200;
+    this.logger = config?.logger ?? new ConsoleLogger();
     this.ensureDirs();
     this.loadIndex();
   }
@@ -106,6 +113,10 @@ export class ErrorNotebook {
 
   /**
    * Add an entry to the notebook.
+   *
+   * Each entry is persisted as a JSON file under `entries/nb_<id>.json`.
+   * The in-memory index is updated immediately so {@link getAll} and
+   * friends reflect the new entry without re-reading from disk.
    */
   add(entry: Omit<ErrorNotebookEntry, "id" | "timestamp">): ErrorNotebookEntry {
     const full: ErrorNotebookEntry = {
@@ -114,9 +125,23 @@ export class ErrorNotebook {
       timestamp: nowISO(),
     };
 
+    // Ensure dirs exist before writing (fire-and-forget reflection may run
+    // after the original working directory has been cleaned up)
+    this.ensureDirs();
+
     // Write individual entry file
     const filePath = this.entryPath(full.id);
     fs.writeFileSync(filePath, JSON.stringify(full, null, 2), "utf-8");
+
+    // Log what was recorded so there's a human-readable trail of *why*
+    // each entry was created (category + description + triggering query).
+    const querySuffix = full.userQuery
+      ? ` — query: "${full.userQuery.slice(0, 80)}${full.userQuery.length > 80 ? "…" : ""}"`
+      : "";
+    this.logger.info(
+      "ErrorNotebook",
+      `+${full.id} [${full.category}] ${full.description}${querySuffix}`,
+    );
 
     // Update in-memory index
     this.index.push({
@@ -391,6 +416,9 @@ export class ErrorNotebook {
       report += `- **Cause:** ${e.cause}\n`;
       report += `- **Suggestion:** ${e.suggestion}\n`;
       if (e.userQuery) report += `- **User Query:** ${e.userQuery}\n`;
+      if (e.finalAnswer) {
+        report += `- **Final Answer (analyzed):** ${e.finalAnswer.slice(0, 200)}${e.finalAnswer.length > 200 ? "…" : ""}\n`;
+      }
       if (e.relatedTraceIds?.length) {
         report += `- **Related Traces:** ${e.relatedTraceIds.join(", ")}\n`;
       }

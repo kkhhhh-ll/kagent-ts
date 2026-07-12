@@ -1025,8 +1025,10 @@ describe("FusionAgent", () => {
       const result = await agent.run("important task");
       expect(result).toContain("A possibly incomplete answer.");
 
-      // Wait for background reflection to complete (now fire-and-forget)
-      await new Promise((r) => setTimeout(r, 50));
+      // Wait for background reflection to complete (now fire-and-forget).
+      // Needs enough time for the full async chain: runReflection →
+      // forkAgent → ReActAgent.run() → LLM → parseFindings → notebook.add().
+      await new Promise((r) => setTimeout(r, 500));
 
       // Verify findings were written to the notebook
       const entries = notebook.getAll();

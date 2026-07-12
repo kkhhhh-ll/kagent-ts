@@ -106,7 +106,7 @@ interface FusionAgentConfig extends AgentConfig {
 
   // ── Post-hoc 反思 ──
   reflection?: 'off' | 'post-hoc'       // 错题本反思 (默认: "off")
-  reflectionMaxIterations?: number      // (默认: 4)
+  reflectionMaxIterations?: number      // (默认: 6)
   notebook?: ErrorNotebook              // 可选，不传自动创建
 
   // ── 记忆提取 ──

@@ -78,6 +78,10 @@ export interface RunFromAgentOptions {
   contextMessages: MessageData[];
   /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
   hooks?: AgentHooks | AgentHooks[];
+  /** Verify skills before persisting (default: true). */
+  verifySkills?: boolean;
+  /** LLM for skill verification (default: reuse llm). */
+  skillVerificationLLM?: LLMProvider;
 }
 
 /**
@@ -322,6 +326,144 @@ function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
   return candidates;
 }
 
+// ─── Skill Verification ──────────────────────────────────────────────────────
+
+/** Structured output from skill verification fork. */
+interface SkillVerifyResult {
+  valid: boolean;
+  score: number;
+  issues: string[];
+}
+
+const SKILL_VERIFY_SYSTEM_PROMPT = `You are a skill-quality reviewer. Your job is to check whether a newly
+extracted skill candidate is worth saving permanently.
+
+You have access to read_file and grep_search tools to verify claims against
+the actual codebase when applicable.
+
+Review the skill across these dimensions:
+- **Actionable**: Is the content concrete and step-by-step? Can a future LLM
+  actually follow these instructions?
+- **Self-consistent**: Are the steps logical and non-contradictory?
+- **Evidence**: Do the claims match what actually happened in the session?
+  Check the original conversation for contradictions.
+- **Non-duplicate**: Does this skill add genuinely new information vs. what
+  existing skills already cover?
+- **Worth keeping**: Is this a genuinely reusable pattern, or just a one-off
+  task log?
+
+In your final answer, output a JSON object:
+{
+  "valid": true,
+  "score": 85,
+  "issues": ["Step 2 references a file that was never created in the session"]
+}
+
+Rules:
+- Score 0-100; "valid" should be false when score < 60 or critical issues exist.
+- Only flag real problems — don't fabricate issues.
+- Be specific: cite exact claims that are wrong or unsupported.
+- Use your tools to verify claims.`;
+
+/**
+ * Build the verification prompt for a single skill candidate.
+ */
+function buildVerifyPrompt(
+  candidate: SkillCandidate,
+  input: PrecipitationInput,
+): string {
+  return [
+    "Please review this skill candidate extracted from an agent session.",
+    "",
+    "=== Skill Candidate ===",
+    `Name: ${candidate.name}`,
+    `Description: ${candidate.description}`,
+    `Keywords: ${candidate.keywords.join(", ")}`,
+    `Content:`,
+    candidate.content,
+    "",
+    "=== Original User Query ===",
+    input.userQuery,
+    "",
+    "=== Existing Skills (check for duplication) ===",
+    ...input.existingSkillNames.map(
+      (n) => `- ${n}: ${input.existingSkillDescriptions[n] || "(no description)"}`,
+    ),
+    "",
+    "Review the candidate and output your verdict as JSON.",
+  ].join("\n");
+}
+
+/**
+ * Parse the verification fork's answer into a structured result.
+ *
+ * Uses the same robust {@link extractJSON} parser as {@link parseCandidates}
+ * so that nested code fences, bare JSON, and markdown noise are all handled
+ * consistently.  Unlike the precipitation fork the verify agent is a
+ * single-candidate, single-answer check — when it doesn't produce a score we
+ * should NOT silently default to a passing score; we require an explicit
+ * `valid: true` or a numeric `score >= 60` to pass.
+ *
+ * Fail-open ONLY for genuine parse errors (malformed JSON that
+ * `extractJSON` couldn't salvage) — those are infra issues and shouldn't
+ * block skill extraction.
+ */
+function parseVerifyResult(answer: string, logger: Logger): SkillVerifyResult {
+  const json = extractJSON(answer);
+
+  // No structured output at all — the verify agent didn't follow the
+  // output contract.  Treat as a soft failure: the skill is NOT
+  // verified, but we log prominently so operators can tune the prompt.
+  if (!json) {
+    logger.warn(
+      "Precipitation",
+      "Skill verify: no JSON in response — verify agent may not be following the output format. Rejecting candidate.",
+    );
+    return {
+      valid: false,
+      score: 0,
+      issues: ["Verification agent did not produce structured JSON output."],
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(json);
+
+    const hasExplicitValid = typeof parsed.valid === "boolean";
+    const hasScore = typeof parsed.score === "number";
+    const issues: string[] = Array.isArray(parsed.issues)
+      ? parsed.issues.filter((i: unknown): i is string => typeof i === "string")
+      : [];
+
+    // Determine validity:
+    //   valid: true  → explicit pass (regardless of score)
+    //   score >= 60  → pass by score threshold
+    //   neither      → fail (no evidence of quality)
+    const valid = hasExplicitValid
+      ? parsed.valid
+      : hasScore
+        ? parsed.score >= 60
+        : false;
+
+    const score = hasScore ? parsed.score : 0;
+
+    if (!hasScore && !hasExplicitValid) {
+      logger.warn(
+        "Precipitation",
+        "Skill verify: JSON found but neither 'valid' nor 'score' field present — rejecting by default.",
+      );
+    }
+
+    return { valid, score, issues };
+  } catch {
+    // Genuine parse error — `extractJSON` found something that looks like
+    // JSON but `JSON.parse` rejected it.  Fail-open to avoid blocking
+    // skill extraction on an infra / model glitch.
+    logger.warn("Precipitation", "Skill verify: parse error — treating as pass (fail-open).");
+    return { valid: true, score: 70, issues: [] };
+  }
+}
+
 // ─── PrecipitateAgent ────────────────────────────────────────────────────────
 
 /**
@@ -338,6 +480,17 @@ export interface PrecipitateAgentConfig {
    * Maximum ReAct iterations for the sub-agent (default: 15).
    */
   maxIterations?: number;
+  /**
+   * Verify skill candidates before persisting. Forks an independent agent
+   * to check each skill for actionability, self-consistency, and evidence
+   * from the session. Default: true.
+   */
+  verifySkills?: boolean;
+  /**
+   * LLM provider for skill verification. When omitted, reuses `llm`.
+   * Using an independent model here provides unbiased review.
+   */
+  skillVerificationLLM?: LLMProvider;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
   /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
@@ -378,17 +531,24 @@ export class PrecipitateAgent {
   private skillsDir: string;
   private skillManager: SkillManager;
   private maxIterations: number;
+  private verifySkills: boolean;
+  private skillVerificationLLM?: LLMProvider;
   private logger: Logger;
   private hooks: AgentHooks | AgentHooks[] | undefined;
 
   /** Hard timeout for the entire precipitation fork (5 minutes). */
   private static readonly PRECIPITATION_TIMEOUT_MS = 5 * 60 * 1000;
 
+  /** Hard timeout for skill verification fork (2 minutes per candidate). */
+  private static readonly SKILL_VERIFY_TIMEOUT_MS = 2 * 60 * 1000;
+
   constructor(config: PrecipitateAgentConfig) {
     this.llm = config.llm;
     this.skillsDir = config.skillsDir;
     this.skillManager = config.skillManager;
     this.maxIterations = config.maxIterations ?? 15;
+    this.verifySkills = config.verifySkills ?? true;
+    this.skillVerificationLLM = config.skillVerificationLLM;
     this.logger = config.logger ?? new ConsoleLogger();
     this.hooks = config.hooks;
   }
@@ -432,8 +592,11 @@ export class PrecipitateAgent {
 
       const candidates = parseCandidates(answer, this.logger);
 
+      // Verify candidates before persisting
+      const verified = await this.verifyCandidates(candidates, input);
+
       // Persist to disk and reload
-      return await this.persistCandidates(candidates);
+      return await this.persistCandidates(verified);
     } catch (err: unknown) {
       // Distinguish "cancelled by timeout" from genuine failures
       if (err instanceof Error && err.name === "AbortError") {
@@ -473,6 +636,8 @@ export class PrecipitateAgent {
       skillsDir: opts.skillsDir,
       skillManager: opts.skillManager,
       maxIterations: opts.maxIterations,
+      verifySkills: opts.verifySkills,
+      skillVerificationLLM: opts.skillVerificationLLM,
       logger: opts.logger,
       hooks: opts.hooks,
     });
@@ -523,6 +688,119 @@ export class PrecipitateAgent {
       signal,
       hooks: TraceLogger.wrapHooksForFork(this.hooks, "precipitation"),
     });
+  }
+
+  // ─── Private: Skill Verification ─────────────────────────────────────
+
+  /**
+   * Verify each skill candidate before persisting.
+   *
+   * When {@link verifySkills} is enabled (default), forks an independent
+   * agent per candidate to check:
+   * - Actionability — is the content concrete enough to be useful?
+   * - Self-consistency — are the steps/steps logical and non-contradictory?
+   * - Evidence — can the claims be verified against the original session?
+   * - Non-duplication — does this meaningfully differ from existing skills?
+   *
+   * Failed candidates are logged and filtered out. Verification timeout
+   * or error → candidate passes (fail-open: don't block on infra issues).
+   */
+  private async verifyCandidates(
+    candidates: SkillCandidate[],
+    input: PrecipitationInput,
+  ): Promise<SkillCandidate[]> {
+    if (!this.verifySkills || candidates.length === 0) return candidates;
+
+    this.logger.info(
+      "Precipitation",
+      `Verifying ${candidates.length} skill candidate(s)...`,
+    );
+
+    const verifyLLM = this.skillVerificationLLM ?? this.llm;
+    const results: SkillCandidate[] = [];
+
+    for (const c of candidates) {
+      try {
+        const passed = await this.verifyOne(c, input, verifyLLM);
+        if (passed) {
+          results.push(c);
+        }
+      } catch (err: unknown) {
+        // Verification error → fail-open: include the candidate
+        this.logger.warn(
+          "Precipitation",
+          `Skill verification error for "${c.name}": ${err instanceof Error ? err.message : String(err)} — including anyway.`,
+        );
+        results.push(c);
+      }
+    }
+
+    const skipped = candidates.length - results.length;
+    if (skipped > 0) {
+      this.logger.info(
+        "Precipitation",
+        `${skipped} candidate(s) rejected by verification, ${results.length} passed.`,
+      );
+    }
+
+    return results;
+  }
+
+  /**
+   * Verify a single skill candidate by forking a lightweight agent.
+   *
+   * @returns true if the candidate passes verification.
+   */
+  private async verifyOne(
+    candidate: SkillCandidate,
+    input: PrecipitationInput,
+    verifyLLM: LLMProvider,
+  ): Promise<boolean> {
+    const taskPrompt = buildVerifyPrompt(candidate, input);
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(
+      () => abortController.abort(),
+      PrecipitateAgent.SKILL_VERIFY_TIMEOUT_MS,
+    );
+
+    try {
+      const answer = await forkAgent(taskPrompt, {
+        llm: verifyLLM,
+        systemPrompt: SKILL_VERIFY_SYSTEM_PROMPT,
+        maxIterations: 3,
+        logger: this.logger,
+        signal: abortController.signal,
+        hooks: TraceLogger.wrapHooksForFork(this.hooks, `skill-verify:${candidate.name}`),
+      });
+
+      const result = parseVerifyResult(answer, this.logger);
+
+      if (result.valid) {
+        this.logger.info(
+          "Precipitation",
+          `Skill "${candidate.name}" verified (score: ${result.score}).`,
+        );
+        return true;
+      }
+
+      this.logger.warn(
+        "Precipitation",
+        `Skill "${candidate.name}" rejected by verification (score: ${result.score}): ${result.issues.join("; ")}`,
+      );
+      return false;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logger.warn(
+          "Precipitation",
+          `Skill verification timed out for "${candidate.name}" — including anyway.`,
+        );
+        return true; // fail-open
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   // ─── Private: Persistence ──────────────────────────────────────────────

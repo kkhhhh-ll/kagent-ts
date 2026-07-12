@@ -234,6 +234,19 @@ export interface AgentConfig {
   precipitationLLM?: LLMProvider;
 
   /**
+   * Verify precipitated skills before persisting to disk.
+   * Forks an independent agent per candidate to check quality.
+   * Default: true.
+   */
+  verifySkills?: boolean;
+
+  /**
+   * LLM provider for skill verification. When omitted, reuses
+   * `precipitationLLM` → `llm`.
+   */
+  skillVerificationLLM?: LLMProvider;
+
+  /**
    * Hooks for sub-agents. Accepts a single {@link AgentHooks}, an array, or a
    * factory `(name, runId) => AgentHooks | AgentHooks[]`. **WARNING**: Do NOT
    * pass hooks that spawn sub-agents (e.g. ReflectionHook) — unbounded recursion.
@@ -464,6 +477,12 @@ export abstract class Agent {
   /** LLM provider for skill precipitation (defaults to main llm if not set). */
   protected precipitationLLM?: LLMProvider;
 
+  /** Verify precipitated skills before persisting. Default: true. */
+  protected verifySkills: boolean = true;
+
+  /** LLM provider for skill verification (defaults to precipitationLLM → llm). */
+  protected skillVerificationLLM?: LLMProvider;
+
   /** LLM provider for memory reflection (defaults to main llm if not set). */
   protected memoryReflectorLLM?: LLMProvider;
 
@@ -606,6 +625,9 @@ export abstract class Agent {
     } else if (cfg.llm instanceof ModelRouter) {
       this.precipitationLLM = cfg.llm.forPrecipitation();
     }
+
+    this.verifySkills = cfg.verifySkills ?? true;
+    this.skillVerificationLLM = cfg.skillVerificationLLM;
 
     // Resolve memory reflector LLM:
     // 1. Explicit `memoryReflectorLLM` → use it directly
@@ -1336,6 +1358,25 @@ export abstract class Agent {
    */
   get isCancelled(): boolean {
     return this._cancelled;
+  }
+
+  // ─── Session ID ──────────────────────────────────────────────────────
+
+  /**
+   * Lazily-generated fallback session ID for runs that don't configure
+   * session persistence. Generated once per instance so all notebook
+   * entries and log messages within a single agent lifetime share the
+   * same ID.
+   */
+  private _fallbackSessionId?: string;
+
+  /** Return a session ID suitable for logging and notebook entries. */
+  protected getSessionId(): string {
+    if (this.sessionManager) return this.sessionManager.getSessionId();
+    if (!this._fallbackSessionId) {
+      this._fallbackSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    }
+    return this._fallbackSessionId;
   }
 
   // ─── Session Persistence ─────────────────────────────────────────────

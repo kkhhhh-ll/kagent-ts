@@ -107,7 +107,7 @@ export interface FusionAgentConfig extends AgentConfig {
    */
   notebook?: ErrorNotebook;
 
-  /** Max iterations for the reflection sub-agent. Default: 4. */
+  /** Max iterations for the reflection sub-agent. Default: 6. */
   reflectionMaxIterations?: number;
 
   // ── Loop control ────────────────────────────────────────────────────
@@ -220,7 +220,7 @@ export class FusionAgent extends Agent {
     this.onPlanConfirm = config.onPlanConfirm;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.reflectionMode = config.reflection ?? "off";
-    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 4;
+    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
     this.notebook = config.notebook;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
@@ -1001,6 +1001,7 @@ export class FusionAgent extends Agent {
         llm: this.reflectionLLM ?? this.llm,
         notebook,
         maxIterations: this.reflectionMaxIterations,
+        hooks: this.hooks,
       });
 
       const contextMessages = this.contextManager.getContextMessages();
@@ -1009,7 +1010,7 @@ export class FusionAgent extends Agent {
         userQuery: input,
         finalAnswer: answer,
         conversation: contextMessages,
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
       });
 
       if (entries.length > 0) {
@@ -1056,7 +1057,7 @@ export class FusionAgent extends Agent {
         skillsDir: this.skillsDir,
         skillManager: this.skillManager,
         llm: this.precipitationLLM ?? this.llm,
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
         maxIterations: this.precipitationMaxIterations,
         logger: this.logger,
         contextMessages: this.contextManager.getContextMessages(),
@@ -1103,7 +1104,7 @@ export class FusionAgent extends Agent {
         userQuery: input,
         finalAnswer: answer,
         conversation: this.contextManager.getContextMessages(),
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
       });
 
       if (memories.length > 0) {
@@ -1287,6 +1288,9 @@ export class FusionAgent extends Agent {
     let consecutiveEmptyIterations = 0;
     const EMPTY_ITERATION_LIMIT = 5;
 
+    let consecutiveTruncations = 0;
+    const MAX_TRUNCATION_CONTINUES = 3;
+
     // Determine if precipitation should run (mode + signals)
     const FAILURE_THRESHOLD = 2;
     let shouldPrecipitate = this.precipitationMode === "post-hoc";
@@ -1300,6 +1304,7 @@ export class FusionAgent extends Agent {
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
+        this.saveCheckpoint("cancelled");
         const sid = this.sessionManager?.getSessionId() ?? "unknown";
         yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
         return;
@@ -1338,11 +1343,8 @@ export class FusionAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              // Stop yielding once [Answer] appears (duplicate content)
-              if (!/\[Answer\]/i.test(rawContent)) {
-                yield event.content;
-                for (const h of this.hooks) h.onChunk?.(event.content);
-              }
+              yield event.content;
+              for (const h of this.hooks) h.onChunk?.(event.content);
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
@@ -1360,13 +1362,19 @@ export class FusionAgent extends Agent {
         }
       } catch (err: unknown) {
         if (this.isCancelled) {
+          this.saveCheckpoint("cancelled");
           const sid = this.sessionManager?.getSessionId() ?? "unknown";
           yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
           return;
         }
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
-          yield `\n\n[Network error: ${err.message}]`;
+          const msg = await this.handleNetworkError(
+            err,
+            iteration + 1,
+            "continue with what you were doing",
+          );
+          yield `\n\n[Network error: ${err.message}${msg ? " — " + msg : ""}]`;
           return;
         }
         throw err;
@@ -1396,22 +1404,40 @@ export class FusionAgent extends Agent {
       const parsed = parseFusionResponse(rawContent);
       if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
 
-      const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
-      this.contextManager.addMessage(assistantMessage.toDict());
-
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {
         consecutiveEmptyIterations = 0;
         if (parsed.thought) {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+
+        const assistantMessage = Message.assistant(rawContent, toolCalls);
+
+        if (isTruncated) {
+          consecutiveTruncations++;
+          if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+            // Don't add truncated junk to context — bail out cleanly.
+            const fallback = parsed.answer
+              ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+              : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+                "Please try breaking your request into smaller steps.";
+            this.fireOnFinish(fallback);
+            yield fallback;
+            return;
+          }
+        } else {
+          consecutiveTruncations = 0;
+        }
+
+        // Add assistant BEFORE tool execution so tool results follow
+        // immediately after (API pairing requirement).
+        this.contextManager.addMessage(assistantMessage.toDict());
+
         const mcpWarnedServers = new Set<string>();
         const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
         // Inject truncation continuation AFTER tool execution so the
         // assistant(tool_calls) → tool_result pairing is preserved.
-        // If inserted before, the API rejects the request because tool
-        // results must immediately follow the tool_calls message.
         if (isTruncated) {
           this.contextManager.addMessage(
             Message.user(
@@ -1440,8 +1466,24 @@ export class FusionAgent extends Agent {
         continue;
       }
 
+      // ── No tool calls ─────────────────────────────────────────────
+      const assistantMessage = Message.assistant(rawContent);
+
       // ── Truncation without tool calls ─────────────────────────────
       if (isTruncated) {
+        consecutiveTruncations++;
+        if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          // Don't add truncated junk to context — bail out cleanly.
+          const fallback = parsed.answer
+            ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+            : "I apologize, but I'm unable to complete this response due to output length constraints. " +
+              "Please try breaking your request into smaller steps.";
+          this.fireOnFinish(fallback);
+          yield fallback;
+          return;
+        }
+        // Store truncated message + inject continuation
+        this.contextManager.addMessage(assistantMessage.toDict());
         this.contextManager.addMessage(
           Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -1450,6 +1492,10 @@ export class FusionAgent extends Agent {
         );
         continue;
       }
+      consecutiveTruncations = 0;
+
+      // Normal (non-truncated) response — store in context
+      this.contextManager.addMessage(assistantMessage.toDict());
 
       // ── Final answer ──────────────────────────────────────────────
       if (parsed.answer) {
@@ -1484,6 +1530,7 @@ export class FusionAgent extends Agent {
           );
         }
 
+        yield "\n\n[DONE]";
         return;
       }
 

@@ -160,6 +160,9 @@ function buildTaskPrompt(input: ReflectionInput): string {
   ].join("\n");
 }
 
+/** Pattern matching the ReActAgent iteration-exhaustion message. */
+const ITERATION_EXHAUSTED_RE = /unable to complete the task within \d+ iterations/i;
+
 /**
  * Parse the sub-agent's final answer into a list of ReflectionFindings.
  *
@@ -172,6 +175,19 @@ function parseFindings(answer: string, logger: Logger): ReflectionFinding[] {
   let raw = answer.trim();
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (fenceMatch) raw = fenceMatch[1];
+
+  // Detect iteration-exhausted fork agent — the ReAct loop timed out
+  // before producing a valid analysis. This is not a "no findings" case;
+  // it's a resource issue that should be surfaced.
+  if (ITERATION_EXHAUSTED_RE.test(answer)) {
+    logger.warn(
+      "ReflectionAgent",
+      `Fork agent exhausted its iterations before producing findings. ` +
+      `Consider increasing reflectionMaxIterations. Raw output starts with: ` +
+      `"${answer.slice(0, 120)}"`,
+    );
+    return [];
+  }
 
   // No JSON-like content — the LLM chose natural language over structured
   // output. Not an error, just means nothing worth reporting.
@@ -232,7 +248,7 @@ export interface ReflectionAgentConfig {
   /** ErrorNotebook for persisting findings. */
   notebook: ErrorNotebook;
   /**
-   * Maximum ReAct iterations for the sub-agent (default: 4).
+   * Maximum ReAct iterations for the sub-agent (default: 6).
    */
   maxIterations?: number;
   /** Logger instance (defaults to ConsoleLogger). */
@@ -276,7 +292,7 @@ export class ReflectionAgent {
   constructor(config: ReflectionAgentConfig) {
     this.llm = config.llm;
     this.notebook = config.notebook;
-    this.maxIterations = config.maxIterations ?? 4;
+    this.maxIterations = config.maxIterations ?? 6;
     this.logger = config.logger ?? new ConsoleLogger();
     this.hooks = config.hooks;
   }
@@ -328,6 +344,7 @@ export class ReflectionAgent {
           cause: f.cause,
           suggestion: f.suggestion,
           userQuery: input.userQuery,
+          finalAnswer: input.finalAnswer,
           relatedTraceIds: f.relatedTraceIds,
         });
         entries.push(entry);

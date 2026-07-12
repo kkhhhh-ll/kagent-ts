@@ -52,7 +52,7 @@ export interface ReActAgentConfig extends AgentConfig {
   /** Error reflection mode. Default: "off". */
   reflection?: "off" | "post-hoc";
 
-  /** Max iterations for the reflection sub-agent. Default: 4. */
+  /** Max iterations for the reflection sub-agent. Default: 6. */
   reflectionMaxIterations?: number;
 
   /**
@@ -100,7 +100,7 @@ export class ReActAgent extends Agent {
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
     this.reflectionMode = config.reflection ?? "off";
-    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 4;
+    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
     this.notebook = config.notebook;
 
     // Build the full system prompt once all sections are ready
@@ -119,8 +119,13 @@ export class ReActAgent extends Agent {
     await this.reloadDynamicResources();
 
     // ── Intent detection (zero LLM cost, runs once per run) ────────
-    this.detectInputSignals(input);
-    this.matchInputSkills(input);
+    // Skip for fork / minimal agents that have no side-effect tools
+    // (remember, recall, skill) — intents are only actionable by the
+    // main agent which can trigger precipitation & memory reflection.
+    if (!this.skipAutoTools) {
+      this.detectInputSignals(input);
+      this.matchInputSkills(input);
+    }
 
     // ── Recover orphaned sub-agent results from a cancelled session ──
     this.recoverOrphanedSubAgentResults();
@@ -307,6 +312,7 @@ export class ReActAgent extends Agent {
           }
         } else {
           consecutiveFailures = 0;
+          consecutiveEmptyResponses = 0;
         }
 
         // Inject continuation AFTER tool execution (Anthropic API pairing)
@@ -422,6 +428,14 @@ export class ReActAgent extends Agent {
 
     await this.init();
     await this.reloadDynamicResources();
+
+    // ── Intent detection (zero LLM cost, runs once per run) ────────
+    // Skip for fork / minimal agents — same rationale as run().
+    if (!this.skipAutoTools) {
+      this.detectInputSignals(input);
+      this.matchInputSkills(input);
+    }
+
     this.recoverOrphanedSubAgentResults();
 
     const userMessage = Message.user(input);
@@ -458,6 +472,7 @@ export class ReActAgent extends Agent {
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
+        this.saveCheckpoint("cancelled");
         const sid = this.sessionManager?.getSessionId() ?? "unknown";
         yield `\n\n[Cancelled. Session "${sid}" preserved.]`;
         return;
@@ -496,11 +511,8 @@ export class ReActAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              // Stop yielding once [Answer] appears (duplicate content)
-              if (!/\[Answer\]/i.test(rawContent)) {
-                yield event.content;
-                for (const h of this.hooks) h.onChunk?.(event.content);
-              }
+              yield event.content;
+              for (const h of this.hooks) h.onChunk?.(event.content);
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
@@ -526,7 +538,12 @@ export class ReActAgent extends Agent {
         }
         if (err instanceof LLMNetworkError) {
           for (const h of this.hooks) h.onLLMError?.(err);
-          yield `\n\n[Network error: ${err.message}]`;
+          const msg = await this.handleNetworkError(
+            err,
+            iteration + 1,
+            "continue with my previous request",
+          );
+          yield `\n\n[Network error: ${err.message}${msg ? " — " + msg : ""}]`;
           return;
         }
         throw err;
@@ -536,7 +553,7 @@ export class ReActAgent extends Agent {
       const toolCalls = Array.from(toolCallsAccumulated.entries())
         .filter(([, tc]) => tc.name && tc.args !== undefined)
         .map(([, tc]) => ({
-          id: tc.id ?? `call_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+          id: tc.id ?? `call_${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
           type: "function" as const,
           function: { name: tc.name!, arguments: tc.args! },
         }));
@@ -558,39 +575,39 @@ export class ReActAgent extends Agent {
       const parsed = parseReActResponse(rawContent);
       if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
 
-      const assistantMessage = Message.assistant(rawContent, toolCalls.length > 0 ? toolCalls : undefined);
-      this.contextManager.addMessage(assistantMessage.toDict());
-
       // ── Tool calls → execute and continue ───────────────────────────
       if (toolCalls.length > 0) {
         if (parsed.thought) {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
-        const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
-        // Inject truncation continuation AFTER tool execution so the
-        // assistant(tool_calls) → tool_result pairing is preserved.
+        const assistantMessage = Message.assistant(rawContent, toolCalls);
+
         if (isTruncated) {
           consecutiveTruncations++;
           if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+            // Don't add truncated junk to context — bail out cleanly.
+            // fireOnFinish before yield so hooks fire even if consumer
+            // closes the iterator after receiving the chunk.
             const fallback = parsed.answer
               ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
               : "I apologize, but I'm unable to complete this response due to output length constraints. " +
                 "Please try breaking your request into smaller steps.";
-            yield fallback;
             this.fireOnFinish(fallback);
+            yield fallback;
             return;
           }
-          this.contextManager.addMessage(
-            Message.user(
-              "Your previous response was cut off (max output tokens reached). " +
-              "Continue exactly where you left off — do NOT repeat any content already written."
-            ).toDict(),
-          );
         } else {
           consecutiveTruncations = 0;
         }
+
+        // Add assistant message (with tool_calls) to context BEFORE tool
+        // execution so tool results appear immediately after — required
+        // by the OpenAI / Anthropic API pairing rules.
+        this.contextManager.addMessage(assistantMessage.toDict());
+
+        const mcpWarnedServers = new Set<string>();
+        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
         if (hadFailure) {
           consecutiveFailures++;
@@ -600,23 +617,42 @@ export class ReActAgent extends Agent {
           }
         } else {
           consecutiveFailures = 0;
+          consecutiveEmptyResponses = 0;
         }
+
+        // Inject truncation continuation AFTER tool execution so the
+        // assistant(tool_calls) → tool_result pairing is preserved.
+        if (isTruncated) {
+          this.contextManager.addMessage(
+            Message.user(
+              "Your previous response was cut off (max output tokens reached). " +
+              "Continue exactly where you left off — do NOT repeat any content already written."
+            ).toDict(),
+          );
+        }
+
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
         continue;
       }
+
+      // ── No tool calls ───────────────────────────────────────────────
+      const assistantMessage = Message.assistant(rawContent);
 
       // ── Truncation without tool calls ──────────────────────────────
       if (isTruncated) {
         consecutiveTruncations++;
         if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
+          // Don't add truncated junk to context — bail out cleanly.
           const fallback = parsed.answer
             ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
               "Please try breaking your request into smaller steps.";
-          yield fallback;
           this.fireOnFinish(fallback);
+          yield fallback;
           return;
         }
+        // Store truncated message + inject continuation
+        this.contextManager.addMessage(assistantMessage.toDict());
         this.contextManager.addMessage(
           Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -626,6 +662,9 @@ export class ReActAgent extends Agent {
         continue;
       }
       consecutiveTruncations = 0;
+
+      // Normal (non-truncated) response — store in context
+      this.contextManager.addMessage(assistantMessage.toDict());
 
       // ── No tool calls → final answer (already streamed) ─────────────
       const answer = parsed.answer || rawContent;
@@ -640,6 +679,7 @@ export class ReActAgent extends Agent {
           const stuckMsgObj = Message.assistant(stuckMsg);
           this.contextManager.addMessage(stuckMsgObj.toDict());
           this.fireOnFinish(stuckMsg);
+          yield stuckMsg;
           return;
         }
         continue;
@@ -669,6 +709,7 @@ export class ReActAgent extends Agent {
         );
       }
 
+      yield "\n\n[DONE]";
       return;
     }
 
@@ -716,8 +757,10 @@ export class ReActAgent extends Agent {
         skillsDir: this.skillsDir,
         skillManager: this.skillManager,
         llm: this.precipitationLLM ?? this.llm,
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
         maxIterations: this.precipitationMaxIterations,
+        verifySkills: this.verifySkills,
+        skillVerificationLLM: this.skillVerificationLLM,
         logger: this.logger,
         contextMessages: this.contextManager.getContextMessages(),
         hooks: this.hooks,
@@ -758,7 +801,7 @@ export class ReActAgent extends Agent {
         userQuery: input,
         finalAnswer: answer,
         conversation: this.contextManager.getContextMessages(),
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
       });
 
       if (memories.length > 0) {
@@ -804,13 +847,14 @@ export class ReActAgent extends Agent {
         llm: this.reflectionLLM ?? this.llm,
         notebook,
         maxIterations: this.reflectionMaxIterations,
+        hooks: this.hooks,
       });
 
       const entries = await reflector.reflect({
         userQuery: input,
         finalAnswer: answer,
         conversation: this.contextManager.getContextMessages(),
-        sessionId: this.sessionManager?.getSessionId() ?? "unknown",
+        sessionId: this.getSessionId(),
       });
 
       if (entries.length > 0) {
