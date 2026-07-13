@@ -1,6 +1,6 @@
 import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
-import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
+import { STRUCTURED_OUTPUT_INSTRUCTIONS, extractJSON } from "../core/response-schema";
 import { ErrorNotebook, ErrorNotebookEntry, ReflectionErrorCategory } from "./error-notebook";
 import type { AgentScenario } from "../intent/signal-detector";
 import type { ToolErrorTrace } from "../tools/types";
@@ -58,37 +58,58 @@ interface ReflectionResponse {
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
 const ERROR_REFLECTION_SYSTEM_PROMPT = `You are a reflective quality-assurance agent. Your job is to review a completed
-agent session and identify mistakes, missed opportunities, and improvement suggestions.
+agent session and identify two kinds of findings:
+
+1. **Agent mistakes** — errors the agent made during the session (wrong reasoning,
+   tool misuse, inefficiency, etc.).
+2. **Code issues discovered** — pre-existing bugs, design flaws, or code quality
+   problems the agent found in the project during the session.
 
 You have access to read_file and grep_search tools to verify your findings against the actual codebase.
 
 Analyze the session across these dimensions:
+
+=== Agent Performance (how well did the agent execute?) ===
 - **Reasoning**: Was the agent's logic sound? Any flawed deductions?
 - **Tool use**: Were the right tools used with correct parameters? Any misuse?
 - **Efficiency**: Could the task have been completed faster or with fewer steps?
 - **Completeness**: Does the answer fully address the user's query? Any missing information?
 - **Context**: Was the context window managed well? Any irrelevant noise?
 
+=== Code Issues Discovered (what bugs did the agent find?) ===
+- **Bugs found**: Did the agent discover real bugs, missing edge cases, or
+  incorrect logic in the project code? If so, capture them.
+- **Design flaws**: Did the agent identify architectural problems, inconsistent
+  patterns, or missing features in the codebase? Record them.
+- **Verification**: Use your tools to VERIFY each bug before recording — read the
+  relevant file, check if the issue is real. Do NOT record issues the agent only
+  guessed at without evidence.
+
+IMPORTANT: Code issues are about the PROJECT being worked on, NOT about the agent's
+own performance. If the agent used the wrong tool → "tool_misuse". If the agent
+found the project's signal-detector.ts has a bug → "code_issue_found".
+
 In your final answer, output a JSON object with this structure:
 {
-  "analysis": "overall assessment (2-4 sentences)",
+  "analysis": "overall assessment (2-4 sentences, covering BOTH agent performance and code issues found)",
   "findings": [
     {
-      "category": "reasoning_error | tool_misuse | missed_optimization | incomplete_answer | hallucination | context_mismanagement | other",
-      "description": "concise description of what went wrong",
-      "cause": "root cause — why did this happen?",
-      "suggestion": "how to avoid this next time",
+      "category": "reasoning_error | tool_misuse | missed_optimization | incomplete_answer | hallucination | context_mismanagement | code_issue_found | other",
+      "description": "concise description of the error or code issue",
+      "cause": "root cause — why did this happen? (for code issues: why does the bug exist — design oversight? edge case? etc.)",
+      "suggestion": "how to avoid or fix this (for code issues: concrete fix suggestion)",
       "relatedTraceIds": ["trace_abc123"]
     }
   ]
 }
 
 Rules:
-- Only include findings for actual issues — do NOT fabricate problems.
-- If the session was perfect, return an empty findings array.
+- Include both agent performance issues AND code issues discovered in the same findings array.
+- Only include findings for ACTUAL issues — do NOT fabricate problems.
+- If the session was perfect and no code issues were found, return an empty findings array.
 - Group related findings; don't duplicate.
-- Be specific: cite exact tool names, file paths, reasoning steps where applicable.
-- Use your tools to verify findings against the actual codebase before reporting them.
+- Be specific: cite exact tool names, file paths, line numbers, reasoning steps where applicable.
+- Use your tools to verify code issues against the actual codebase before reporting them.
 ${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
 
 // ─── Pure Helpers ────────────────────────────────────────────────────────────
@@ -100,7 +121,8 @@ const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
 
 const VALID_FINDING_CATEGORIES = new Set<string>([
   "reasoning_error", "tool_misuse", "missed_optimization",
-  "incomplete_answer", "hallucination", "context_mismanagement", "other",
+  "incomplete_answer", "hallucination", "context_mismanagement",
+  "code_issue_found", "other",
 ]);
 
 /**
@@ -174,11 +196,6 @@ const ITERATION_EXHAUSTED_RE = /unable to complete the task within \d+ iteration
  *         this is a fatal error distinct from "no findings."
  */
 function parseFindings(answer: string, logger: Logger): ReflectionFinding[] {
-  // Extract JSON from the answer (may be wrapped in ```json fences)
-  let raw = answer.trim();
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) raw = fenceMatch[1];
-
   // Detect iteration-exhausted fork agent — the ReAct loop timed out
   // before producing a valid analysis. This is not a "no findings" case;
   // it's a resource issue that should be surfaced.
@@ -192,9 +209,14 @@ function parseFindings(answer: string, logger: Logger): ReflectionFinding[] {
     return [];
   }
 
+  // Use the robust multi-strategy extractJSON from response-schema.
+  // Handles: markdown fences (any language tag), balanced-brace extraction,
+  // JSON repair (trailing commas, comments), and direct JSON.
+  const raw = extractJSON(answer);
+
   // No JSON-like content — the LLM chose natural language over structured
   // output. Not an error, just means nothing worth reporting.
-  if (!fenceMatch && !raw.startsWith("{") && !raw.startsWith("[")) {
+  if (!raw) {
     logger.info("ReflectionAgent", "LLM output contained no JSON — no findings.");
     return [];
   }

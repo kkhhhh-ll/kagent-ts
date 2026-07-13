@@ -97,8 +97,18 @@ const REMEMBER_PATTERN =
  * confirmation when `planConfirmation` is `"auto"`.
  */
 const HIGH_RISK_KEYWORDS = [
+  // English
   "rm -rf", "force push", "hard reset",
   "delete", "drop", "destroy", "purge", "format", "truncate",
+  // CJK (traditional & simplified)
+  "删除", "刪除",           // delete
+  "销毁", "銷毀",           // destroy
+  "格式化",                 // format
+  "清空",                   // purge / truncate
+  "丢弃", "丟棄",           // drop / discard
+  "彻底删除", "徹底刪除",   // permanently delete
+  "强制推送", "強制推送",   // force push
+  "硬重置",                 // hard reset
 ];
 
 /**
@@ -107,7 +117,14 @@ const HIGH_RISK_KEYWORDS = [
  * These trigger `riskLevel: "low"` — worth noting but not alarming.
  */
 const LOW_RISK_KEYWORDS = [
+  // English
   "deploy", "release", "publish", "ship", "migrate", "reset",
+  // CJK (traditional & simplified)
+  "部署",                   // deploy
+  "发布", "發布",           // release / publish
+  "上线", "上線",           // ship / go live
+  "迁移", "遷移",           // migrate
+  "重置",                   // reset
 ];
 
 /**
@@ -144,7 +161,9 @@ interface ScenarioPattern {
 
 const SCENARIO_PATTERNS: ScenarioPattern[] = [
   {
-    latin: ["refactor", "restructur", "renam", "mov", "extract"],
+    // "mov(?:e|ed|es|ing)?(?![a-z])" matches move / moved / moves / moving
+    // but NOT movie, movement, movable, etc.
+    latin: ["refactor", "restructur", "renam", "mov(?:e|ed|es|ing)?(?![a-z])", "extract"],
     cjk: ["重构", "重命名", "重構"],
     scenario: "refactoring",
   },
@@ -179,7 +198,9 @@ const SCENARIO_PATTERNS: ScenarioPattern[] = [
     scenario: "code-read",
   },
   {
-    latin: ["writ", "implement", "add", "creat", "generat"],
+    // "add(?:ing|ed|s)?(?![a-z])" matches add / adds / added / adding
+    // but NOT address, addition, additional, additive, etc.
+    latin: ["writ", "implement", "add(?:ing|ed|s)?(?![a-z])", "creat", "generat"],
     cjk: ["写", "实现", "创建", "寫", "實現", "創建"],
     scenario: "code-write",
   },
@@ -295,16 +316,25 @@ function hasNegation(text: string): boolean {
 
 // ─── Risk-level computation ──────────────────────────────────────────────────
 
-/** Build a word-boundary regex for a keyword (handles multi-word phrases). */
+/**
+ * Contrastive conjunctions used to split chunks so negation in one clause
+ * doesn't suppress risk keywords in a contrasting clause.
+ *
+ * English entries use `\b` boundaries; CJK entries use plain substring match
+ * (no `\b`) because CJK characters aren't `\w` in JavaScript regex.
+ */
+const CONTRAST_SPLITTER_EN = /\b(?:but|however|yet|though|although)\b/i;
+const CONTRAST_SPLITTER_CJK = /(?:但是|然而|不过|可是|但|却|卻)/i;
+
+/** Build a regex for a risk keyword. */
 function keywordRegex(keyword: string): RegExp {
-  if (keyword.includes(" ")) {
-    // Multi-word phrase: use case-insensitive substring match
-    return new RegExp(
-      keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      "i",
-    );
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Multi-word phrases and CJK keywords use plain substring match (no \b
+  // boundaries) because \b doesn't work between CJK characters.
+  if (keyword.includes(" ") || /[^\x00-\x7F]/.test(keyword)) {
+    return new RegExp(escaped, "i");
   }
-  return new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  return new RegExp(`\\b${escaped}\\b`, "i");
 }
 
 /** Lazily cached compiled regexes for high-risk keywords. */
@@ -329,17 +359,31 @@ function lowRiskRegexes(): RegExp[] {
  * Determine the risk level of user input.
  *
  * Rules:
- * 1. Split input into sentences.
- * 2. In sentences with negation markers, risky keywords are ignored.
+ * 1. Split input into clauses (by punctuation + contrastive conjunctions).
+ * 2. In clauses with negation markers, risky keywords are ignored.
  * 3. Otherwise, any high-risk match → `"high"`.
  * 4. Any low-risk match → `"low"`.
  * 5. Nothing matched → `"none"`.
+ *
+ * Supports both English and CJK risk keywords.
  */
 function computeRiskLevel(input: string): RiskLevel {
-  const sentences = input.split(/[.!?。！？\n]+/).filter((s) => s.trim().length > 0);
+  // 1) Split on punctuation (sentence-ending + clause separators)
+  const punctuationChunks = input
+    .split(/[.!?。！？\n,，;；]+/)
+    .filter((s) => s.trim().length > 0);
 
-  // If there are no clear sentence boundaries, treat the whole input as one sentence
-  const chunks = sentences.length > 0 ? sentences : [input];
+  // 2) Split each chunk on contrastive conjunctions so negation in one
+  //    clause doesn't suppress risk keywords in a contrasting clause.
+  //    e.g. "don't delete the config but do format the disk"
+  //         → ["don't delete the config ", " do format the disk"]
+  //         "format" is correctly detected because only the first chunk is negated.
+  const chunks = punctuationChunks.length > 0
+    ? punctuationChunks
+        .flatMap((c) => c.split(CONTRAST_SPLITTER_EN))
+        .flatMap((c) => c.split(CONTRAST_SPLITTER_CJK))
+        .filter((s) => s.trim().length > 0)
+    : [input];
 
   let hasHigh = false;
   let hasLow = false;
@@ -414,5 +458,10 @@ export function detectSignals(input: string): UserSignals {
  */
 export function planHasRiskyOps(planSteps: string[]): RiskLevel {
   const text = planSteps.join(" ");
-  return computeRiskLevel(text);
+  const level = computeRiskLevel(text);
+  // Never return "none" for a non-empty plan — default to "low" for
+  // conservatism, so callers that check !== "none" still trigger
+  // plan-review flows even when no explicit risk keywords are detected.
+  if (level === "none" && planSteps.length > 0) return "low";
+  return level;
 }

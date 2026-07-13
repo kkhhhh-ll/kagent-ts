@@ -21,6 +21,7 @@ export type ReflectionErrorCategory =
   | "incomplete_answer"     // answer missing key information
   | "hallucination"         // fabricated fact or API
   | "context_mismanagement" // lost important context / too much noise
+  | "code_issue_found"      // pre-existing bug / design flaw discovered in project code
   | "other";
 
 /**
@@ -107,6 +108,7 @@ const CATEGORY_EMOJI: Record<ReflectionErrorCategory, string> = {
   incomplete_answer: "📝",
   hallucination: "💭",
   context_mismanagement: "📋",
+  code_issue_found: "🐛",
   other: "❓",
 };
 
@@ -552,7 +554,8 @@ export class ErrorNotebook {
     // Validate category
     const validCategories: ReflectionErrorCategory[] = [
       "reasoning_error", "tool_misuse", "missed_optimization",
-      "incomplete_answer", "hallucination", "context_mismanagement", "other",
+      "incomplete_answer", "hallucination", "context_mismanagement",
+      "code_issue_found", "other",
     ];
     if (!validCategories.includes(category)) return null;
 
@@ -778,6 +781,7 @@ function formatCategoryLabel(cat: ReflectionErrorCategory): string {
     case "incomplete_answer":     return "Incomplete Answer";
     case "hallucination":         return "Hallucination";
     case "context_mismanagement": return "Context Mismanagement";
+    case "code_issue_found":      return "Code Issue Found";
     case "other":                 return "Other";
   }
 }
@@ -809,6 +813,7 @@ function inferCategoryFromLabel(emojiAndLabel: string): ReflectionErrorCategory 
     case "Incomplete Answer":      return "incomplete_answer";
     case "Hallucination":          return "hallucination";
     case "Context Mismanagement":  return "context_mismanagement";
+    case "Code Issue Found":       return "code_issue_found";
     case "Other":                  return "other";
     default:                       return null;
   }

@@ -1,6 +1,6 @@
 import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
-import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
+import { STRUCTURED_OUTPUT_INSTRUCTIONS, extractJSON } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { forkAgent } from "../core/fork.js";
@@ -57,9 +57,11 @@ Categories of memory to extract:
 - **rule**: A constraint the user explicitly set — why they required it, and when it takes
   effect. Rules are hard requirements the user stated directly (e.g. "must use X", "never do Y").
   Example: "Always use kebab-case for file names."
-- **project**: A fact or decision about the project — what happened, why (constraint / deadline
-  that drove it), and how the agent should apply it.
+- **project**: A PROJECT-LEVEL fact or decision — something about the project's architecture,
+  tech stack, conventions, or history that future agents need to know to work correctly.
   Example: "We switched from MySQL to PostgreSQL because of JSONB support."
+  Example: "This project uses pnpm workspaces with no hoisting."
+  Example: "The config loader reads from .env.kagent, NOT .env."
 - **preference**: A user habit or style preference observed during the conversation —
   patterns the user consistently prefers but did NOT state as a hard requirement.
   Example: "User prefers short, direct answers without boilerplate explanations."
@@ -67,9 +69,26 @@ Categories of memory to extract:
 
 What to look for:
 - Explicit user constraints ("must", "must not", "always", "never", "don't use X") → rule
-- Project decisions (architecture choices, tool/library selections, migration decisions) → project
+- Project-level decisions (architecture choices, tool/library selections, config conventions,
+  migration decisions, naming conventions adopted by the project) → project
 - User style/habit patterns (communication style, tool preference, workflow habits) → preference
-- Patterns worth repeating or avoiding (successful or failed approaches in this project)
+- Successful approaches the agent discovered (e.g. "running tests requires --no-cache flag
+  in this project") → project
+
+What NOT to record:
+- **Code bugs or defects**: If the agent found a bug in specific code (missing keywords,
+  incorrect regex, wrong logic at a specific line number), do NOT record it as a memory.
+  These are code issues to fix now, not project knowledge for future sessions.
+- **Implementation details that change**: A bug in signal-detector.ts line 182 is a fix
+  to apply today; it will be gone tomorrow and the memory becomes stale noise.
+- **Agent performance issues**: The agent's own mistakes, inefficiencies, or wrong tool
+  choices belong to the error-reflection system, NOT to project memory.
+- **Session-specific trivia**: Things only relevant to that one conversation.
+
+Judgment rule for "project" type — ask yourself:
+  "Will this fact still be true and useful six months from now?"
+- "The project uses PostgreSQL with JSONB columns" → YES, record as project.
+- "signal-detector.ts line 182 has an overmatching regex bug" → NO, skip it.
 
 IMPORTANT: User habits and style preferences (communication style, tool preference, etc.) go in
 'preference', NOT in 'rule'. 'rule' is ONLY for explicit constraints the user stated as requirements.
@@ -179,14 +198,14 @@ function buildTaskPrompt(
  *         this is a fatal error distinct from "no memories extracted."
  */
 function parseMemories(answer: string, logger: Logger): ExtractedMemory[] {
-  // Extract JSON from the answer (may be wrapped in ```json fences)
-  let raw = answer.trim();
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) raw = fenceMatch[1];
+  // Use the robust multi-strategy extractJSON from response-schema.
+  // Handles: markdown fences (any language tag), balanced-brace extraction,
+  // JSON repair (trailing commas, comments), and direct JSON.
+  const raw = extractJSON(answer);
 
   // No JSON-like content — the LLM chose natural language over structured
   // output. Not an error, just means nothing worth remembering.
-  if (!fenceMatch && !raw.startsWith("{") && !raw.startsWith("[")) {
+  if (!raw) {
     logger.info("MemoryReflector", "LLM output contained no JSON — no memories extracted.");
     return [];
   }

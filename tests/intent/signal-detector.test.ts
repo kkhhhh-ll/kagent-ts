@@ -63,6 +63,33 @@ describe("detectSignals", () => {
       }
     });
 
+    // ── CJK risk keywords ───────────────────────────────────────────────
+
+    describe("CJK risk keywords", () => {
+      it("detects CJK high-risk keywords", () => {
+        expect(detectSignals("删除数据库").riskLevel).toBe("high");
+        expect(detectSignals("刪除所有使用者資料").riskLevel).toBe("high");
+        expect(detectSignals("销毁临时文件").riskLevel).toBe("high");
+        expect(detectSignals("格式化硬盘").riskLevel).toBe("high");
+        expect(detectSignals("清空日志表").riskLevel).toBe("high");
+        expect(detectSignals("丢弃更改").riskLevel).toBe("high");
+        expect(detectSignals("强制推送到主分支").riskLevel).toBe("high");
+        expect(detectSignals("硬重置分支").riskLevel).toBe("high");
+      });
+
+      it("detects CJK low-risk keywords", () => {
+        expect(detectSignals("部署到生产环境").riskLevel).toBe("low");
+        expect(detectSignals("发布新版本").riskLevel).toBe("low");
+        expect(detectSignals("上线新功能").riskLevel).toBe("low");
+        expect(detectSignals("迁移数据库").riskLevel).toBe("low");
+        expect(detectSignals("重置配置").riskLevel).toBe("low");
+      });
+
+      it("CJK high-risk takes precedence over CJK low-risk", () => {
+        expect(detectSignals("部署应用并删除旧数据").riskLevel).toBe("high");
+      });
+    });
+
     it("high-risk takes precedence over low-risk", () => {
       expect(detectSignals("deploy the app and delete old data").riskLevel).toBe("high");
     });
@@ -100,6 +127,67 @@ describe("detectSignals", () => {
         expect(detectSignals("you can't delete this").riskLevel).toBe("none");
         expect(detectSignals("we cannot drop the table").riskLevel).toBe("none");
         expect(detectSignals("you shouldn't format it").riskLevel).toBe("none");
+      });
+
+      it("negation only suppresses risk keywords in its own comma-separated clause", () => {
+        // "don't delete" is negated, but "deploy" in the next clause should still be detected
+        expect(
+          detectSignals("don't delete the database, deploy to production").riskLevel,
+        ).toBe("low");
+      });
+
+      it("negation only suppresses risk keywords in its own semicolon-separated clause", () => {
+        expect(
+          detectSignals("don't drop tables; migrate the data carefully").riskLevel,
+        ).toBe("low");
+      });
+
+      it("negation with Chinese clause separators: negation stays scoped", () => {
+        // Chinese comma ， delimits clauses — negation in first clause shouldn't
+        // suppress "deploy" in the second clause
+        expect(
+          detectSignals("不要强制推送，deploy 到生产环境").riskLevel,
+        ).toBe("low");
+      });
+
+      it("contrastive conjunction 'but' scopes negation to its own clause", () => {
+        // "don't delete" is negated, but "format" in the contrasting clause
+        // should still be detected as high-risk
+        expect(
+          detectSignals("don't delete the config but do format the disk").riskLevel,
+        ).toBe("high");
+      });
+
+      it("contrastive conjunction 'however' scopes negation to its own clause", () => {
+        expect(
+          detectSignals("don't drop the table however you can deploy to production").riskLevel,
+        ).toBe("low");
+      });
+
+      it("contrastive conjunction 'yet' scopes negation correctly", () => {
+        expect(
+          detectSignals("never delete the cache yet format the logs regularly").riskLevel,
+        ).toBe("high");
+      });
+
+      it("CJK contrastive conjunction '但是' scopes negation to its own clause", () => {
+        // "不要删除" is negated, but "格式化" in the contrasting clause
+        // should still be detected as high-risk
+        expect(
+          detectSignals("不要删除配置文件，但是要格式化磁盘").riskLevel,
+        ).toBe("high");
+      });
+
+      it("CJK contrastive conjunction '然而' scopes negation correctly", () => {
+        expect(
+          detectSignals("不要强制推送，然而可以部署到生产环境").riskLevel,
+        ).toBe("low");
+      });
+
+      it("CJK contrastive conjunction '但' scopes negation correctly", () => {
+        expect(
+          detectSignals("不要删除数据库但可以重置配置").riskLevel,
+        ).toBe("low");
       });
     });
   });
@@ -140,6 +228,26 @@ describe("detectSignals", () => {
       expect(detectSignals("搜索并修复bug").scenarios).toContain("file-search");
       expect(detectSignals("請閱讀這份代碼").scenarios).toContain("code-read");
       expect(detectSignals("创建一个新的API").scenarios).toContain("code-write");
+    });
+
+    describe("stem precision (short stems should not over-match)", () => {
+      it("'add' stem matches add / adds / added / adding but NOT address / addition", () => {
+        expect(detectSignals("add a new function").scenarios).toContain("code-write");
+        expect(detectSignals("adding a new feature").scenarios).toContain("code-write");
+        expect(detectSignals("added error handling").scenarios).toContain("code-write");
+        // These should NOT trigger code-write
+        expect(detectSignals("please check the address field").scenarios).not.toContain("code-write");
+        expect(detectSignals("in addition to the above").scenarios).not.toContain("code-write");
+        expect(detectSignals("additional context is needed").scenarios).not.toContain("code-write");
+      });
+
+      it("'mov' stem matches move / moved / moves / moving but NOT movie / movement", () => {
+        expect(detectSignals("move the file to src/").scenarios).toContain("refactoring");
+        expect(detectSignals("moved the function to utils").scenarios).toContain("refactoring");
+        // These should NOT trigger refactoring
+        expect(detectSignals("watch a movie then go home").scenarios).not.toContain("refactoring");
+        expect(detectSignals("the movement of data").scenarios).not.toContain("refactoring");
+      });
     });
   });
 
@@ -205,9 +313,14 @@ describe("detectSignals", () => {
 // ─── planHasRiskyOps ─────────────────────────────────────────────────────────
 
 describe("planHasRiskyOps", () => {
-  it("returns 'none' for safe plans", () => {
+  it("returns 'low' for safe non-empty plans (conservative default)", () => {
     const plan = ["read the config file", "parse the JSON", "output the result"];
-    expect(planHasRiskyOps(plan)).toBe("none");
+    // Non-empty plans default to "low" — never "none" per JSDoc contract
+    expect(planHasRiskyOps(plan)).toBe("low");
+  });
+
+  it("returns 'none' for empty plans", () => {
+    expect(planHasRiskyOps([])).toBe("none");
   });
 
   it("returns 'low' for plans with low-risk keywords", () => {
@@ -226,8 +339,9 @@ describe("planHasRiskyOps", () => {
     expect(planHasRiskyOps(["deploy the app", "delete old data"])).toBe("high");
   });
 
-  it("returns 'none' for fully negated high-risk plans", () => {
-    // "don't delete" covers the whole joined plan text → risk is excluded
-    expect(planHasRiskyOps(["don't delete any records", "just migrate the data"])).toBe("none");
+  it("returns 'low' for fully negated high-risk plans (non-empty conservative default)", () => {
+    // "don't delete" + "just migrate" → both negated or safe, computeRiskLevel
+    // returns "none", but planHasRiskyOps defaults to "low" for non-empty plans
+    expect(planHasRiskyOps(["don't delete any records", "just migrate the data"])).toBe("low");
   });
 });

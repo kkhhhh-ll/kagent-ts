@@ -75,11 +75,13 @@ function parseNLFallback(raw: string): ReActResponse {
   const trimmed = raw.trim();
   if (!trimmed) return { thought: raw };
 
-  // 1. Try explicit "Final Answer:" markers (case-insensitive, multiline)
+  // 1. Try explicit "Final Answer:" markers (case-insensitive, multiline).
+  //    CJK patterns use (?:^|\s) instead of \b because CJK characters are
+  //    not \w in JavaScript regex — \b behaves unpredictably around them.
   const finalAnswerPatterns = [
     /\bFinal\s+Answer\s*:\s*/i,
-    /\b最终回答\s*[：:]\s*/,
-    /\b回答\s*[：:]\s*/,
+    /(?:^|\s)最终回答\s*[：:]\s*/,
+    /(?:^|\s)回答\s*[：:]\s*/,
     /\bAnswer\s*:\s*/i,
   ];
 
@@ -142,6 +144,22 @@ export function extractJSON(text: string): string | null {
     if (result) return result;
   }
 
+  // Final fallback: try to repair any brace-delimited JSON-like content
+  // in the original text, even when balanced-brace extraction fails
+  // due to syntax errors.
+  for (const variant of uniqueVariants) {
+    const braceStart = variant.indexOf("{");
+    if (braceStart >= 0) {
+      const fromBrace = variant.slice(braceStart);
+      const endIdx = fromBrace.lastIndexOf("}");
+      if (endIdx > 0) {
+        const candidate = fromBrace.slice(0, endIdx + 1);
+        const repaired = repairJSON(candidate);
+        if (repaired && isValidJSON(repaired)) return repaired;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -152,18 +170,39 @@ function tryExtractJSON(text: string): string | null {
   // 1. Try the entire string as JSON
   if (isValidJSON(text)) return text;
 
-  // 2. Try extracting from markdown code blocks: ```json ... ```
+  // 2. Try extracting from markdown code blocks (any language tag or none).
+  //    LLMs sometimes use ```typescript, ```javascript, etc. around JSON.
   const blockMatch = text.match(
-    /```(?:json)?\s*(\{[\s\S]*?\})\s*```/
+    /```(?:\w+)?\s*([\s\S]*?)\s*```/
   );
-  if (blockMatch && isValidJSON(blockMatch[1])) return blockMatch[1];
+  if (blockMatch) {
+    const inner = blockMatch[1].trim();
+    // Direct valid JSON
+    if (isValidJSON(inner)) return inner;
+    // Try to find a JSON object within the code block content
+    const braceStart = inner.indexOf("{");
+    if (braceStart >= 0) {
+      const fromBrace = inner.slice(braceStart);
+      const result = extractBalancedBraces(fromBrace);
+      if (result) return result;
+    }
+  }
 
-  // 3. Try finding the first { ... } with balanced braces
+  // 3. Try finding the first { ... } with balanced braces in the full text
   const braceStart = text.indexOf("{");
   if (braceStart >= 0) {
     const fromBrace = text.slice(braceStart);
     const result = extractBalancedBraces(fromBrace);
     if (result) return result;
+  }
+
+  // 4. Try repair on the fence-extracted content (even if not valid JSON)
+  if (blockMatch) {
+    const inner = blockMatch[1].trim();
+    if (inner.startsWith("{") || inner.startsWith("[")) {
+      const repaired = repairJSON(inner);
+      if (repaired && isValidJSON(repaired)) return repaired;
+    }
   }
 
   return null;
@@ -217,6 +256,51 @@ function cleanupJSON(text: string): string {
 
   // Normalize CRLF → LF, strip isolated CR (Windows/macOS line endings)
   result = result.replace(/\r\n/g, "\n").replace(/\r/g, "");
+
+  return result;
+}
+
+/**
+ * Attempt to repair common JSON formatting errors made by LLMs.
+ *
+ * Handles (in order):
+ * - Single-line comments:    // comment  (string-value aware)
+ * - Multi-line comments:     /* comment *​/
+ * - Trailing commas:        {"a": 1,}  → {"a": 1}
+ *
+ * Returns the repaired string, or the original if repair is not applicable.
+ */
+/**
+ * Remove JavaScript-style comments from text while preserving `//` inside
+ * JSON string values (e.g. URLs like "https://example.com/api").
+ *
+ * Splits on JSON string boundaries so comment stripping is only applied
+ * to regions outside of strings.
+ */
+function removeJSONComments(text: string): string {
+  // Split on JSON string literals: "…" with escaped-quote awareness.
+  // Matches a string token; capture group keeps it in the output array.
+  const parts = text.split(/("(?:\\.|[^"\\])*")/g);
+  return parts
+    .map((part, i) => {
+      // Odd indices are inside string values — preserve exactly
+      if (i % 2 === 1) return part;
+      // Even indices are outside strings — safe to strip comments
+      return part
+        .replace(/\/\/[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "");
+    })
+    .join("");
+}
+
+function repairJSON(text: string): string {
+  let result = text;
+
+  // 1. Remove single-line and multi-line comments (string-value aware)
+  result = removeJSONComments(result);
+
+  // 2. Remove trailing commas before } or ]
+  result = result.replace(/,(\s*[}\]])/g, "$1");
 
   return result;
 }
@@ -313,6 +397,12 @@ function splitByBracketMarkers(text: string): BracketSection[] {
         marker: lastMarker,
         content: text.slice(lastIndex, match.index).trim(),
       });
+    } else if (match.index > 0) {
+      // Text before the first marker — capture as preamble (treated as Thought)
+      const preamble = text.slice(0, match.index).trim();
+      if (preamble) {
+        sections.push({ marker: "Thought", content: preamble });
+      }
     }
     lastMarker = match[1];
     lastIndex = match.index + match[0].length;
@@ -383,11 +473,18 @@ function parseBracketMarkers(raw: string): PlanSolveResponse | null {
   result.thought = thoughts.join("\n") || trimmed;
 
   // If nothing actionable was found (no plan, no answer, no step),
-  // promote the thought to the answer. This handles models that write
-  // [Thought] <conclusion> without using [Final Answer] — without this
-  // promotion the main loop treats it as an empty iteration and spins.
+  // promote the thought to the answer ONLY when it looks like a conclusion.
+  // Skip promotion when the thought contains mid-reasoning markers
+  // (e.g. "I need to think", "让我想想", etc.) — promoting those would
+  // prematurely terminate the agent loop.
   if (!result.plan && !result.revised_plan && !result.answer && result.currentStep === undefined) {
-    result.answer = result.thought;
+    const looksLikeMidReasoning =
+      /\b(?:need to|should I|let me|maybe|perhaps|possibly|再想想|再看看|先看看|让我想|我得想|还不确定|maybe)\b/i.test(
+        result.thought,
+      );
+    if (!looksLikeMidReasoning) {
+      result.answer = result.thought;
+    }
     return result;
   }
 
@@ -396,38 +493,42 @@ function parseBracketMarkers(raw: string): PlanSolveResponse | null {
 
 // ─── Plan-Solve Response Parsing ────────────────────────────────────────────
 
+/**
+ * Populate plan/revised_plan/answer/currentStep from a parsed JSON object.
+ *
+ * Extracted so both `parsePlanSolveResponse` and `parseFusionResponse`
+ * share a single implementation — their response shapes are identical.
+ */
+function populatePlanSolveFields(
+  parsed: Record<string, unknown>,
+): PlanSolveResponse {
+  const thought = String(parsed.thought ?? "");
+  const result: PlanSolveResponse = { thought };
+
+  if (parsed.plan && Array.isArray(parsed.plan)) {
+    result.plan = parsed.plan.map(String);
+  }
+  if (parsed.revised_plan && Array.isArray(parsed.revised_plan)) {
+    result.revised_plan = parsed.revised_plan.map(String);
+  }
+  if (parsed.answer !== undefined && parsed.answer !== null) {
+    result.answer = String(parsed.answer);
+  }
+  if (typeof parsed.currentStep === "number" && parsed.currentStep >= 1) {
+    result.currentStep = Math.floor(parsed.currentStep);
+  }
+
+  return result;
+}
+
 export function parsePlanSolveResponse(raw: string): PlanSolveResponse {
   const json = extractJSON(raw);
 
   if (json) {
     try {
       const parsed = JSON.parse(json);
-
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        const thought = String(parsed.thought ?? "");
-        const result: PlanSolveResponse = { thought };
-
-        // plan — array of strings
-        if (parsed.plan && Array.isArray(parsed.plan)) {
-          result.plan = parsed.plan.map(String);
-        }
-
-        // revised_plan — array of strings
-        if (parsed.revised_plan && Array.isArray(parsed.revised_plan)) {
-          result.revised_plan = parsed.revised_plan.map(String);
-        }
-
-        // answer — final response
-        if (parsed.answer !== undefined && parsed.answer !== null) {
-          result.answer = String(parsed.answer);
-        }
-
-        // currentStep — step progress indicator (1-based)
-        if (typeof parsed.currentStep === "number" && parsed.currentStep >= 1) {
-          result.currentStep = Math.floor(parsed.currentStep);
-        }
-
-        return result;
+        return populatePlanSolveFields(parsed);
       }
     } catch {
       // JSON parse failed — fall through to fallback
@@ -657,28 +758,8 @@ export function parseFusionResponse(raw: string): FusionResponse {
   if (json) {
     try {
       const parsed = JSON.parse(json);
-
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        const thought = String(parsed.thought ?? "");
-        const result: FusionResponse = { thought };
-
-        if (parsed.plan && Array.isArray(parsed.plan)) {
-          result.plan = parsed.plan.map(String);
-        }
-
-        if (parsed.revised_plan && Array.isArray(parsed.revised_plan)) {
-          result.revised_plan = parsed.revised_plan.map(String);
-        }
-
-        if (parsed.answer !== undefined && parsed.answer !== null) {
-          result.answer = String(parsed.answer);
-        }
-
-        if (typeof parsed.currentStep === "number" && parsed.currentStep >= 1) {
-          result.currentStep = Math.floor(parsed.currentStep);
-        }
-
-        return result;
+        return populatePlanSolveFields(parsed) as FusionResponse;
       }
     } catch {
       // Fall through
@@ -686,7 +767,6 @@ export function parseFusionResponse(raw: string): FusionResponse {
   }
 
   // Fallback 1: try bracket-delimited markers ([Thought], [Plan], etc.)
-  // PlanSolveResponse and FusionResponse are structurally identical
   const bracketResult = parseBracketMarkers(raw);
   if (bracketResult) return bracketResult as FusionResponse;
 
@@ -863,19 +943,26 @@ export function parseTextReActResponse(raw: string): TextReActResponse {
  * Action Input: {"key": "value"}
  * ```
  *
- * Handles multi-line Action Input by reading until the next Action:,
- * Final Answer:, or end-of-text marker.
+ * Handles multi-line Action Input and nested JSON objects/arrays.
  */
 function parseTextToolCalls(text: string): ToolCall[] {
   const results: ToolCall[] = [];
-  // Match Action: <name> followed by Action Input: <json>
-  const actionRegex = /\bAction\s*:\s*([^\n]+)\s*\n\s*\bAction\s+Input\s*:\s*(\{[\s\S]*?\})\s*(?=\n\s*(?:Action|Final\s+Answer|Thought)|$)/gi;
+  // Match Action: <name> followed (on the next line) by Action Input: <json>
+  const actionPattern = /\bAction\s*:\s*([^\n]+)\s*\n\s*\bAction\s+Input\s*:\s*\{/gi;
 
-  let match;
+  let match: RegExpExecArray | null;
   let idx = 0;
-  while ((match = actionRegex.exec(text)) !== null) {
+
+  while ((match = actionPattern.exec(text)) !== null) {
     const name = match[1].trim();
-    let args = match[2].trim();
+    // The regex consumed up to and including the opening `{`
+    const braceStart = match.index + match[0].length - 1; // position of '{'
+
+    // Extract balanced JSON (handles nested objects / arrays)
+    const jsonStr = extractBracedJSON(text, braceStart);
+    if (!jsonStr) continue;
+
+    let args = jsonStr;
 
     // Validate JSON
     try {
@@ -884,7 +971,7 @@ function parseTextToolCalls(text: string): ToolCall[] {
       // Try to fix common issues: unescaped newlines, trailing commas
       args = args
         .replace(/\n/g, "\\n")
-        .replace(/,\s*}/g, "}");
+        .replace(/,(\s*[}\]])/g, "$1");
       try {
         JSON.parse(args);
       } catch {
@@ -901,6 +988,48 @@ function parseTextToolCalls(text: string): ToolCall[] {
   }
 
   return results;
+}
+
+/**
+ * Extract a balanced `{…}` JSON object starting at `startPos` within `text`.
+ *
+ * Tracks nesting depth, strings, and escape sequences.  Does NOT validate
+ * JSON — callers should validate separately so they can apply repair logic
+ * for common LLM formatting errors.
+ *
+ * Returns the substring or null if no balanced closing `}` is found.
+ */
+function extractBracedJSON(text: string, startPos: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startPos; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(startPos, i + 1);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -928,8 +1057,8 @@ function extractThought(text: string): string {
 function extractFinalAnswer(text: string): string | undefined {
   const patterns = [
     /\bFinal\s+Answer\s*:\s*([\s\S]*?)$/i,
-    /\b最终回答\s*[：:]\s*([\s\S]*?)$/,
-    /\b回答\s*[：:]\s*([\s\S]*?)$/,
+    /(?:^|\s)最终回答\s*[：:]\s*([\s\S]*?)$/,
+    /(?:^|\s)回答\s*[：:]\s*([\s\S]*?)$/,
   ];
 
   for (const pattern of patterns) {
