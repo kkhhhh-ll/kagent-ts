@@ -258,6 +258,13 @@ export interface AgentConfig {
     | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
   /**
+   * Maximum concurrent sub-agent runs. Default: 3. The spawn tool returns
+   * a "wait" error when this limit is reached, signaling the LLM to wait
+   * for a running sub-agent to complete before spawning another.
+   */
+  maxPending?: number;
+
+  /**
    * RAG configuration. When set, documents are indexed at startup and the
    * `search_knowledge` tool is registered for context retrieval.
    */
@@ -482,6 +489,9 @@ export abstract class Agent {
   /** LLM provider for sub-agents (defaults to main llm if not set). */
   protected subAgentLLM?: LLMProvider;
 
+  /** Max concurrent sub-agent runs (default: 3). */
+  protected maxPending?: number;
+
   /** LLM provider for skill precipitation (defaults to main llm if not set). */
   protected precipitationLLM?: LLMProvider;
 
@@ -626,6 +636,7 @@ export abstract class Agent {
     } else if (cfg.llm instanceof ModelRouter) {
       this.subAgentLLM = cfg.llm.forSubAgent();
     }
+    this.maxPending = cfg.maxPending;
 
     // Resolve precipitation LLM:
     // 1. Explicit `precipitationLLM` → use it directly
@@ -1599,6 +1610,7 @@ export abstract class Agent {
         undefined,
         this.subAgentLLM,
         this.subAgentHooks,
+        this.maxPending,
       );
       this.subAgentManager.registerFromDirectory(this.subAgentsDir);
 

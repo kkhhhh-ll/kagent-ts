@@ -77,6 +77,9 @@ export class SubAgentManager {
   /** Max wall-clock duration for a single sub-agent run (ms). Default: 5 min. */
   private timeoutMs: number = 5 * 60 * 1000;
 
+  /** Maximum concurrent sub-agent runs. Default: 3. */
+  private maxPending: number = 3;
+
   /**
    * Default ToolFilter applied to every sub-agent's tool set.
    * Useful for globally disallowing certain tools (e.g., sub-agent spawning).
@@ -160,6 +163,7 @@ export class SubAgentManager {
     defaultFilter?: ToolFilter,
     subAgentLLM?: LLMProvider,
     subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]),
+    maxPending?: number,
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
@@ -169,6 +173,7 @@ export class SubAgentManager {
     this.defaultFilter = defaultFilter;
     this.subAgentLLM = subAgentLLM;
     this.subAgentHooks = subAgentHooks;
+    if (maxPending !== undefined) this.maxPending = maxPending;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -188,9 +193,6 @@ export class SubAgentManager {
    * @returns The unique run ID (used to correlate results later).
    * @throws If the definition is unknown or the manager is not yet bound.
    */
-  /** Maximum concurrent sub-agent runs before the spawn tool returns a "wait" message. */
-  private static MAX_PENDING = 3;
-
   spawn(name: string, input: string, options?: { workdir?: string }): string {
     const definition = this.definitions.get(name);
     if (!definition) {
@@ -202,7 +204,7 @@ export class SubAgentManager {
 
     // Prevent runaway spawns — if there are already several sub-agents
     // running, tell the LLM to wait instead of spawning more.
-    if (this.pending.length >= SubAgentManager.MAX_PENDING) {
+    if (this.pending.length >= this.maxPending) {
       throw new Error(
         `Too many sub-agents already running (${this.pending.length}). ` +
         `Wait for at least one to complete before spawning another.`,
@@ -265,8 +267,8 @@ export class SubAgentManager {
     // Block until at least one pending sub-agent completes.
     // This prevents the main agent from spinning the LLM loop while
     // waiting for async sub-agent results — no wasted iterations.
-    const firstDone = await Promise.race(
-      this.pending.map((r) => r.promise.then(() => r)),
+    await Promise.race(
+      this.pending.map((r) => r.promise),
     );
     // Quick yield so any other recently-completed runs also surface
     await new Promise((r) => setImmediate(r));
