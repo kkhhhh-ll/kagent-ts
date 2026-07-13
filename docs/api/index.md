@@ -22,9 +22,9 @@ import {
   // Context & Compression
   ContextManager, ProgressiveCompressor,
   // Session
-  SessionManager,
+  SessionManager, FileSystemSessionStore,
   // Skills
-  SkillManager, FileSkillLoader, parseFrontmatter,
+  SkillManager, FileSkillLoader, FileSystemSkillStore, parseFrontmatter,
   // Precipitation
   PrecipitateAgent,
   // Intent
@@ -36,14 +36,17 @@ import {
   // RAG
   RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore,
   InMemoryKeywordIndex, LLMReRanker, rrfFusion, chunkKey,
+  DirectoryLoader, UrlLoader, TextLoader, FileLoader,
+  createIngestKnowledgeTool,
   // SubAgent
   SubAgentManager, SubAgentLoader,
   // Memory
-  MemoryManager,
+  MemoryManager, FileSystemMemoryStore,
   // Reflection
-  ReflectionAgent, ErrorNotebook, MemoryReflector,
+  ReflectionAgent, ErrorNotebook, FileSystemErrorNotebookStore, MemoryReflector,
   // Preferences & Rules
-  PreferenceManager, ProjectRules,
+  PreferenceManager, FileSystemPreferencesStore,
+  ProjectRules, FileSystemRulesStore,
   // Git
   GitWorktreeManager, GitWorktreeError,
   // Security
@@ -52,7 +55,7 @@ import {
   // Eval
   ToolCallEvaluator, EvalRunner, Benchmark,
   // Trace
-  TraceLogger,
+  TraceLogger, FileSystemTraceStore,
   // Utils
   countTokens, countMessageTokens,
   // Logging
@@ -78,7 +81,7 @@ import {
 | **Verification** | VerifyAgent — 答案验证（阻塞式） | [指南 - Verification](/advanced/verification) |
 | **SubAgent** | SubAgentManager / SubAgentLoader | [指南 - SubAgent](/advanced/subagents) |
 | **MCP** | McpClientManager / McpServerConfig | [指南 - MCP](/advanced/mcp) |
-| **RAG** | RAGManager / EmbeddingProvider / VectorStore / ReRanker | [指南 - RAG](/advanced/rag) |
+| **RAG** | RAGManager / EmbeddingProvider / VectorStore / DocumentLoader / ReRanker | [指南 - RAG](/advanced/rag) |
 | **Memory** | MemoryManager / Memory | [指南 - Memory](/advanced/memory) |
 | **Reflection** | ReflectionAgent / ErrorNotebook / MemoryReflector | [指南 - Reflection](/advanced/reflection) |
 | **Preferences** | PreferenceManager — 用户偏好注入 | [指南 - Preferences](/advanced/preferences) |
@@ -119,7 +122,7 @@ type RetryConfig / NetworkErrorCause
 
 // RAG
 type RAGConfig / RAGDocument / RAGChunk
-type EmbeddingProvider / VectorStore
+type EmbeddingProvider / VectorStore / DocumentLoader / DocumentSource
 type OpenAIEmbeddingConfig / ChromaVectorStoreConfig
 type RAGSearchResult / BM25Result / RankedResult / RRFFusionResult
 type ReRanker / LLMReRankerConfig
@@ -172,6 +175,15 @@ type TraceLoggerConfig / AgentTraceEvent / AgentTraceEventType
 
 // 偏好 & 规则
 type Preferences / PreferenceManagerConfig
+
+// 存储后端（可插拔）
+type MemoryStore / FileSystemMemoryStore
+type SessionStore / FileSystemSessionStore
+type SkillStore / FileSystemSkillStore
+type ErrorNotebookStore / FileSystemErrorNotebookStore
+type TraceStore / FileSystemTraceStore
+type PreferencesStore / FileSystemPreferencesStore
+type RulesStore / FileSystemRulesStore
 ```
 
 ## 下一步

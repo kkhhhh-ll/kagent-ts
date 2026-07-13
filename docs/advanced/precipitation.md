@@ -32,6 +32,8 @@ runPrecipitation()
 
 PrecipitateAgent Fork 一个轻量的 ReAct Agent，拥有独立上下文和只读工具，不污染主 Agent 上下文。沉淀在后台执行，失败不阻塞——调用方用 `try-catch`（旧版）或 `.catch()`（当前：fire-and-forget）包裹，沉淀失败以 `error` 级别记录日志，不会影响用户拿到的答案。
 
+**技能写入**默认输出到 `skillsDir` 指定的本地目录。可通过 `skillStore` 注入自定义存储后端（Postgres、S3 等），此时写入目标由存储后端决定，`skillsDir` 仅作为回退路径。
+
 整个沉淀过程有 **5 分钟硬超时**保护：通过 `AbortController` 将取消信号传递到 fork → ReActAgent → LLM `chat()` 调用，**真正中止** HTTP 请求，而非仅让 Promise 超时后后台继续消耗 API 配额。
 
 ## 触发条件

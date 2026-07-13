@@ -1088,6 +1088,7 @@ export class PlanSolveAgent extends Agent {
         logger: this.logger,
         contextMessages: this.contextManager.getContextMessages(),
         hooks: this.hooks,
+        skillStore: this.skillManager.getStore(),
       });
     } catch (err: unknown) {
       this.logger.error(
@@ -1164,7 +1165,7 @@ export class PlanSolveAgent extends Agent {
     const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
 
     // Auto-create notebook if not provided
-    const notebook = this.notebook ?? new NB();
+    const notebook = this.notebook ?? new NB({ store: this.errorNotebookStore });
 
     try {
       const reflector = new ReflectionAgent({

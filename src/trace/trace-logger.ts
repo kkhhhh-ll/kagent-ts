@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { AgentHooks } from "../core/hooks";
 import { LLMResponse } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
@@ -7,6 +5,7 @@ import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
 import { AgentTraceEvent, AgentTraceEventType } from "./types";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import { TraceStore, FileSystemTraceStore } from "./trace-store";
 
 /**
  * Configuration for the TraceLogger.
@@ -23,6 +22,12 @@ export interface TraceLoggerConfig {
    * Defaults to `.kagent-traces/`.
    */
   outputDir?: string;
+
+  /**
+   * Storage backend. When provided, `outputDir` is ignored.
+   * Omit to use the default file-system store.
+   */
+  store?: TraceStore;
 
   /**
    * Optional agent label shown in the trace report header.
@@ -77,7 +82,7 @@ export class TraceLogger implements AgentHooks {
   private events: AgentTraceEvent[] = [];
   private eventId = 0;
   private sessionId: string;
-  private outputDir: string;
+  private store: TraceStore;
   private agentLabel: string;
   private modelName: string;
   private startTime: number;
@@ -113,12 +118,21 @@ export class TraceLogger implements AgentHooks {
     const rand = Math.random().toString(36).slice(2, 6);
     this.sessionId =
       config?.sessionId ?? `trace-${ts}-${rand}`;
-    this.outputDir = path.resolve(config?.outputDir ?? ".kagent-traces");
+    this.store =
+      config?.store ??
+      new FileSystemTraceStore(config?.outputDir ?? ".kagent-traces");
     this.agentLabel = config?.agentLabel ?? "Agent";
     this.modelName = config?.modelName ?? "unknown";
     this.logger = config?.logger ?? new ConsoleLogger();
     this.pricing = config?.pricing;
     this.startTime = ts;
+  }
+
+  /**
+   * Get the underlying storage backend.
+   */
+  getStore(): TraceStore {
+    return this.store;
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -163,7 +177,7 @@ export class TraceLogger implements AgentHooks {
   createChildTrace(name: string, runId: string): TraceLogger {
     const child = new TraceLogger({
       sessionId: runId,
-      outputDir: this.outputDir,
+      store: this.store,
       agentLabel: `${this.agentLabel} › ${name}`,
       modelName: this.modelName,
       logger: this.logger,
@@ -189,7 +203,7 @@ export class TraceLogger implements AgentHooks {
     const sessionId = `fork-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const child = new TraceLogger({
       sessionId,
-      outputDir: this.outputDir,
+      store: this.store,
       agentLabel: `${this.agentLabel} › ${forkLabel}`,
       modelName: this.modelName,
       logger: this.logger,
@@ -232,11 +246,10 @@ export class TraceLogger implements AgentHooks {
   flush(): string {
     try {
       const html = this.generateHTML();
-      fs.mkdirSync(this.outputDir, { recursive: true });
-      const filePath = path.join(this.outputDir, `${this.sessionId}.html`);
-      fs.writeFileSync(filePath, html, "utf-8");
-      this.logger.info("Trace", `Saved session trace → ${filePath}`);
-      return filePath;
+      this.store.write(this.sessionId, html);
+      const dir = this.store.getDir();
+      this.logger.info("Trace", `Saved session trace → ${this.sessionId}`);
+      return dir;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error("Trace", `Failed to write trace file: ${message}`);

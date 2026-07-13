@@ -40,7 +40,7 @@ features:
     details: 支持 Model Context Protocol，可连接外部 MCP Server（stdio/SSE），自动发现工具并注册到 Tool Registry。
   - icon: 📚
     title: RAG 知识检索
-    details: 开箱即用的 RAG 模块，自动加载本地文档、递归文本切分、向量语义检索。Agent 自动调用 search_knowledge 工具检索相关知识。
+    details: 开箱即用的 RAG 模块，支持本地文档加载、URL 抓取、运行时动态摄入。向量/BM25 混合检索 + Re-rank 精排，Agent 自动调用 search_knowledge 工具检索相关知识。
 ---
 
 ## 快速体验

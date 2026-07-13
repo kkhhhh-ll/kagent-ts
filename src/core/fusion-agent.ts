@@ -987,7 +987,7 @@ export class FusionAgent extends Agent {
     const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
 
     // Auto-create notebook if not provided
-    const notebook = this.notebook ?? new NB();
+    const notebook = this.notebook ?? new NB({ store: this.errorNotebookStore });
 
     this.logger.info("Reflection", "Starting post-hoc reflection...");
 
@@ -1055,9 +1055,12 @@ export class FusionAgent extends Agent {
         llm: this.precipitationLLM ?? this.llm,
         sessionId: this.getSessionId(),
         maxIterations: this.precipitationMaxIterations,
+        verifySkills: this.verifySkills,
+        skillVerificationLLM: this.skillVerificationLLM,
         logger: this.logger,
         contextMessages: this.contextManager.getContextMessages(),
         hooks: this.hooks,
+        skillStore: this.skillManager.getStore(),
       });
     } catch (err: unknown) {
       this.logger.error(

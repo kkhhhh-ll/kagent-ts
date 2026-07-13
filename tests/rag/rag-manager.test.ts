@@ -3,8 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { RAGManager } from "../../src/rag/rag-manager";
-import { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../../src/rag/search-knowledge";
+import { createSearchKnowledgeTool, createListKnowledgeDocumentsTool, createIngestKnowledgeTool } from "../../src/rag/search-knowledge";
 import { SilentLogger } from "../../src/logging/logger";
+import { splitText } from "../../src/rag/text-splitter";
 import type { EmbeddingProvider } from "../../src/rag/rag-types";
 
 // ─── Mock embedding provider ──────────────────────────────────────────────
@@ -455,5 +456,318 @@ describe("RAGManager — hybrid search", () => {
 
     const results = await manager.search("hello", 3);
     expect(results.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── Runtime Document Operations ────────────────────────────────────────────
+
+describe("RAGManager — runtime addDocument / removeDocument", () => {
+  let docsDir: string;
+
+  beforeEach(() => {
+    docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "kagent-rag-runtime-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(docsDir, { recursive: true, force: true });
+  });
+
+  it("addDocument adds a single document at runtime", async () => {
+    // Start with an empty index
+    writeFile(docsDir, "seed.md", "# Seed\n\nInitial content.");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+    const initialCount = manager.documentCount;
+    const initialChunks = manager.chunkCount;
+
+    // Add a new document at runtime (raw text split into chunks)
+    const doc: {
+      path: string;
+      content: string;
+      chunks: Array<{ text: string; embedding: number[]; sourcePath: string; chunkIndex: number }>;
+    } = {
+      path: "runtime-doc.md",
+      content: "Runtime content for testing. ".repeat(50),
+      chunks: [],
+    };
+    // Use splitText to create chunks manually (simulating a loader)
+    const texts = splitText(doc.content, 1000, 200);
+    doc.chunks = texts.map((text, i) => ({
+      text,
+      embedding: [],
+      sourcePath: doc.path,
+      chunkIndex: i,
+    }));
+
+    await manager.addDocument(doc);
+
+    expect(manager.documentCount).toBe(initialCount + 1);
+    expect(manager.chunkCount).toBeGreaterThan(initialChunks);
+    expect(manager.documentPaths).toContain("runtime-doc.md");
+
+    // Should be searchable immediately
+    const results = await manager.search("runtime testing", 2);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.some((r) => r.chunk.sourcePath === "runtime-doc.md")).toBe(true);
+  });
+
+  it("addDocument replaces existing document with same path", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    // Add doc v1
+    const docV1 = {
+      path: "dynamic.md",
+      content: "Version one.",
+      chunks: splitText("Version one.", 1000, 200).map((t: string, i: number) => ({
+        text: t, embedding: [], sourcePath: "dynamic.md", chunkIndex: i,
+      })),
+    };
+    await manager.addDocument(docV1);
+    const countAfterV1 = manager.chunkCount;
+
+    // Add doc v2 with same path (more content → more chunks)
+    const docV2 = {
+      path: "dynamic.md",
+      content: "Version two. ".repeat(100),
+      chunks: splitText("Version two. ".repeat(100), 1000, 200).map((t: string, i: number) => ({
+        text: t, embedding: [], sourcePath: "dynamic.md", chunkIndex: i,
+      })),
+    };
+    await manager.addDocument(docV2);
+
+    // Should have replaced, not duplicated
+    expect(manager.documentCount).toBe(2); // seed + dynamic (not 3)
+    expect(manager.chunkCount).not.toBe(countAfterV1 + docV2.chunks.length); // v1 chunks removed
+  });
+
+  it("removeDocument removes a document by path", async () => {
+    writeFile(docsDir, "a.md", "# A\n\nDoc A content.");
+    writeFile(docsDir, "b.md", "# B\n\nDoc B content.");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+    expect(manager.documentPaths).toContain("a.md");
+
+    const removed = await manager.removeDocument("a.md");
+    expect(removed).toBe(true);
+    expect(manager.documentPaths).not.toContain("a.md");
+    expect(manager.documentPaths).toContain("b.md"); // b.md is untouched
+  });
+
+  it("removeDocument returns false for unknown path", async () => {
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const removed = await manager.removeDocument("non-existent.md");
+    expect(removed).toBe(false);
+  });
+
+  it("addFromSource supports 'text' type", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const doc = await manager.addFromSource({
+      type: "text",
+      content: "Inline text about machine learning.",
+      title: "ml-notes",
+    });
+
+    expect(doc).not.toBeNull();
+    expect(doc!.chunks.length).toBeGreaterThan(0);
+    expect(manager.documentPaths.some((p) => p.includes("ml-notes"))).toBe(true);
+
+    // Searchable
+    const results = await manager.search("machine learning", 3);
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("addFromSource supports 'text' type with short content", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const doc = await manager.addFromSource({
+      type: "text",
+      content: "Quick note.",
+      title: "quick-note",
+    });
+    expect(doc).not.toBeNull();
+    expect(doc!.chunks.length).toBe(1);
+  });
+
+  it("addDocument on empty store makes it indexed and searchable", async () => {
+    // Start with NO documentsDir indexing at all
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    // Not calling index() — simulating a store that was never initialized
+
+    const doc = {
+      path: "late-doc.md",
+      content: "Late content for testing.",
+      chunks: splitText("Late content for testing.", 1000, 200).map((t: string, i: number) => ({
+        text: t, embedding: [], sourcePath: "late-doc.md", chunkIndex: i,
+      })),
+    };
+
+    await manager.addDocument(doc);
+
+    expect(manager.indexed).toBe(true);
+    expect(manager.documentCount).toBe(1);
+
+    const results = await manager.search("late content", 3);
+    expect(results.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── ingest_knowledge Tool ──────────────────────────────────────────────────
+
+describe("ingest_knowledge tool", () => {
+  let docsDir: string;
+
+  beforeEach(() => {
+    docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "kagent-rag-ingest-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(docsDir, { recursive: true, force: true });
+  });
+
+  it("ingest_knowledge with text source works", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const tool = createIngestKnowledgeTool(manager);
+
+    const result = await tool.execute({
+      source: "text",
+      content: "Important information about Kubernetes pods.",
+      title: "k8s-pods",
+    });
+
+    expect(result).toContain("ingested successfully");
+    expect(result).toContain("k8s-pods");
+    expect(manager.documentCount).toBe(2); // seed + k8s-pods
+  });
+
+  it("ingest_knowledge with text source rejects missing title", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const tool = createIngestKnowledgeTool(manager);
+
+    const result = await tool.execute({
+      source: "text",
+      content: "Some content without a title.",
+    });
+
+    expect(result).toContain("Error");
+    expect(result).toContain("title");
+  });
+
+  it("ingest_knowledge with text source rejects empty content", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const tool = createIngestKnowledgeTool(manager);
+
+    const result = await tool.execute({
+      source: "text",
+      content: "   ",
+      title: "empty-doc",
+    });
+
+    expect(result).toContain("Error");
+    expect(result).toContain("content");
+  });
+
+  it("ingest_knowledge rejects invalid source type", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const tool = createIngestKnowledgeTool(manager);
+
+    const result = await tool.execute({ source: "invalid" });
+    expect(result).toContain("Error");
+    expect(result).toContain('"url", "text", "file"');
+  });
+
+  it("ingest_knowledge with file source works", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    // Place the external file outside docsDir so index() doesn't pick it up
+    const externalFile = path.join(os.tmpdir(), `kagent-rag-external-${Date.now()}.txt`);
+    fs.writeFileSync(externalFile, "External document content for testing.\n\nMore content here.", "utf-8");
+
+    try {
+      const manager = new RAGManager(
+        { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+        new SilentLogger(),
+      );
+      await manager.index();
+
+      const tool = createIngestKnowledgeTool(manager);
+
+      const result = await tool.execute({
+        source: "file",
+        filePath: externalFile,
+      });
+
+      expect(result).toContain("ingested successfully");
+      expect(manager.documentCount).toBe(2); // seed + external
+    } finally {
+      try { fs.unlinkSync(externalFile); } catch { /* */ }
+    }
+  });
+
+  it("ingest_knowledge with file source rejects missing path", async () => {
+    writeFile(docsDir, "seed.md", "# Seed");
+    const manager = new RAGManager(
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      new SilentLogger(),
+    );
+    await manager.index();
+
+    const tool = createIngestKnowledgeTool(manager);
+
+    const result = await tool.execute({ source: "file" });
+    expect(result).toContain("Error");
+    expect(result).toContain("filePath");
   });
 });

@@ -60,7 +60,15 @@ Agent 在每次 `run()` 开始时自动调用 `reloadIfChanged()`，所以编辑
 ```ts
 import { ProjectRules } from 'kagent-ts'
 
-const rules = new ProjectRules('.kagent/rules/')
+// 默认目录
+const rules = new ProjectRules()
+// 自定义路径
+const rules2 = new ProjectRules('.kagent/rules/')
+// 或使用配置对象
+const rules3 = new ProjectRules({ rulesPath: '.kagent/rules/' })
+// 注入自定义存储后端
+const rules4 = new ProjectRules({ store: new PostgresRulesStore(db) })
+
 console.log(rules.isConfigured)  // true
 
 // 手动检查并重载
@@ -86,9 +94,10 @@ if (rules.reloadIfChanged()) {
 
 ```ts
 class ProjectRules {
-  constructor(rulesPath?: string)  // 不传默认 .kagent/rules/
+  constructor(config?: string | ProjectRulesConfig)  // 字符串路径（向后兼容）或配置对象
+  getStore(): RulesStore          // 获取底层存储后端
   isConfigured: boolean           // 是否已配置规则源
-  reloadIfChanged(): boolean      // 磁盘有变化则重载
+  reloadIfChanged(): boolean      // 存储有变化则重载
   buildPrompt(): string            // 生成系统提示词片段（超限返回 ""）
 }
 

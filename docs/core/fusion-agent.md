@@ -79,6 +79,7 @@ const agent = new FusionAgent({
 
   // ── 沉淀配置 ──
   skillsDir: './skills',               // 技能存储目录
+  // skillStore: new PostgresSkillStore(db),  // 或注入自定义技能存储后端
   precipitation: 'post-hoc',           // "off" | "post-hoc"
   precipitationMaxIterations: 5,       // (默认: 5)
 })

@@ -1,100 +1,98 @@
-import * as fs from "fs";
-import * as path from "path";
-import { Preferences, PreferenceManagerConfig } from "./types";
 import {
   detectInjectionSignatures,
   buildUserContentInjectionWarning,
   wrapUserAuthored,
 } from "../security/boundaries";
+import { Preferences, PreferenceManagerConfig } from "./types";
 import { Logger, ConsoleLogger } from "../logging/logger";
+import {
+  PreferencesStore,
+  FileSystemPreferencesStore,
+} from "./preferences-store";
 
 /** Maximum file size for preferences (10 KB). */
 const MAX_PREFERENCES_BYTES = 10 * 1024;
 
 /**
- * Manages user preferences loaded from a Markdown file.
+ * Manages user preferences loaded from a pluggable store.
  *
  * Preferences are stored as `key: value` lines (one per line).
  * Lines starting with `#` are comments, empty lines are ignored.
- * The default path is `.kagent/preferences.md`.
  *
  * Like ProjectRules, preferences are reloaded at the start of each run
  * so manual edits take effect on the next conversation turn.
  */
 export class PreferenceManager {
-  private filePath: string;
+  private store: PreferencesStore;
   private lastLoadedMtime: number = 0;
   private cachedContent: string = "";
   private logger: Logger;
 
   constructor(config?: PreferenceManagerConfig, logger?: Logger) {
     this.logger = logger ?? new ConsoleLogger();
-    this.filePath = path.resolve(config?.filePath ?? ".kagent/preferences.md");
+    this.store =
+      config?.store ??
+      new FileSystemPreferencesStore(config?.filePath ?? ".kagent/preferences.md");
   }
 
   /**
-   * Whether the file exists on disk.
+   * Get the underlying storage backend.
+   */
+  getStore(): PreferencesStore {
+    return this.store;
+  }
+
+  /**
+   * Whether the preferences source is available.
    */
   get isConfigured(): boolean {
-    try {
-      fs.statSync(this.filePath);
-      return true;
-    } catch {
-      return false;
-    }
+    const result = this.store.tryRead();
+    return result !== null;
   }
 
   /**
-   * Reload preferences from disk if the file has changed.
+   * Reload preferences from the store if the source has changed.
    * @returns true if preferences were actually reloaded.
    */
   reloadIfChanged(): boolean {
-    try {
-      const stat = fs.statSync(this.filePath);
-
-      // Reject oversized files — preferences are user-authored and should
-      // be small. Large files are likely accidental and would bloat the
-      // system prompt.
-      if (stat.size > MAX_PREFERENCES_BYTES) {
-        this.logger.warn(
-          "Preferences",
-          `File exceeds ${MAX_PREFERENCES_BYTES / 1024} KB limit (${(stat.size / 1024).toFixed(1)} KB) — skipped.`,
-        );
-        if (this.cachedContent !== "") {
-          this.cachedContent = "";
-          return true;
-        }
-        return false;
-      }
-
-      if (stat.mtimeMs === this.lastLoadedMtime && this.cachedContent !== "") {
-        // Same mtime — double-check content hasn't changed (handles
-        // filesystems with coarse mtime resolution).
-        const raw = fs.readFileSync(this.filePath, "utf-8").trim();
-        if (raw === this.cachedContent) return false;
-        this.lastLoadedMtime = stat.mtimeMs;
-        this.cachedContent = raw;
-        return true;
-      }
-      this.lastLoadedMtime = stat.mtimeMs;
-      this.cachedContent = fs.readFileSync(this.filePath, "utf-8").trim();
-      return true;
-    } catch {
+    const result = this.store.tryRead();
+    if (!result) {
       if (this.cachedContent !== "") {
         this.cachedContent = "";
         return true;
       }
       return false;
     }
+
+    // Reject oversized files
+    if (result.size > MAX_PREFERENCES_BYTES) {
+      this.logger.warn(
+        "Preferences",
+        `File exceeds ${MAX_PREFERENCES_BYTES / 1024} KB limit (${(result.size / 1024).toFixed(1)} KB) — skipped.`,
+      );
+      if (this.cachedContent !== "") {
+        this.cachedContent = "";
+        return true;
+      }
+      return false;
+    }
+
+    if (result.mtimeMs === this.lastLoadedMtime && this.cachedContent !== "") {
+      if (result.content === this.cachedContent) return false;
+      this.lastLoadedMtime = result.mtimeMs;
+      this.cachedContent = result.content;
+      return true;
+    }
+    this.lastLoadedMtime = result.mtimeMs;
+    this.cachedContent = result.content;
+    return true;
   }
 
   /**
    * Build the preferences prompt section for injection into the system prompt.
-   * Returns an empty string when preferences are empty.
    */
   buildPrompt(): string {
     if (!this.cachedContent) {
-      // Try loading if not yet loaded
       this.reloadIfChanged();
       if (!this.cachedContent) return "";
     }
@@ -106,22 +104,14 @@ export class PreferenceManager {
     const lines = entries.map(([k, v]) => `  - ${k}: ${v}`);
     const body = "=== User Preferences ===\n" + lines.join("\n") + "\n";
 
-    // Scan for prompt-injection signatures
     const patterns = detectInjectionSignatures(body);
     const warning = buildUserContentInjectionWarning(patterns, "user preferences");
 
-    // Wrap in boundaries so the LLM can distinguish user-authored
-    // guidance from core system instructions
     const wrapped = wrapUserAuthored("User Preferences", body);
 
     return "\n\n" + warning + wrapped;
   }
 
-  // ─── Private helpers ────────────────────────────────────────────────────
-
-  /**
-   * Parse preferences from the cached raw content.
-   */
   private parseContent(): Preferences {
     const prefs: Preferences = {};
     for (const line of this.cachedContent.split("\n")) {

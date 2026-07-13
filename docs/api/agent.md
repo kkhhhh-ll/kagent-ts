@@ -227,15 +227,27 @@ interface AgentConfig {
 
   // ── 用户配置 ──
   preferencesPath?: string                          // 偏好文件路径 (默认: ".kagent/preferences.md")
+  preferencesStore?: PreferencesStore               // 偏好存储后端（传入后忽略 preferencesPath）
   rulesPath?: string                                // 规则文件/目录路径 (默认: ".kagent/rules/")
+  rulesStore?: RulesStore                           // 规则存储后端（传入后忽略 rulesPath）
 
   // ── 记忆 ──
   memoryDir?: string                                // 记忆存储目录 (默认: ".memory")
+  memoryStore?: MemoryStore                         // 记忆存储后端（传入后忽略 memoryDir）
 
   // ── 会话 ──
   sessionId?: string                                // 会话 ID
   sessionDir?: string                               // 会话存储目录
+  sessionStore?: SessionStore                       // 会话存储后端（传入后忽略 sessionDir）
   enableCheckpointing?: boolean                     // 启用会话持久化
+
+  // ── 技能 ──
+  skillManager?: SkillManager                       // SkillManager 实例
+  skillsDir?: string                                // 技能文件目录
+  skillStore?: SkillStore                           // 技能存储后端（传入后忽略 skillsDir）
+
+  // ── 错题本 ──
+  errorNotebookStore?: ErrorNotebookStore           // 错题本存储后端（仅 auto-create 时生效）
 
   // ── MCP ──
   mcpConfigPath?: string                            // mcp.json 文件路径

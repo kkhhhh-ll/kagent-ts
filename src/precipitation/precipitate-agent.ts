@@ -2,9 +2,8 @@ import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
 import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
+import { SkillStore, FileSystemSkillStore } from "../skills/skill-store";
 import { Logger, ConsoleLogger } from "../logging/logger";
-import { mkdir, writeFile } from "fs/promises";
-import * as path from "path";
 import { forkAgent } from "../core/fork.js";
 import type { AgentHooks } from "../core/hooks";
 import { TraceLogger } from "../trace/trace-logger.js";
@@ -82,6 +81,11 @@ export interface RunFromAgentOptions {
   verifySkills?: boolean;
   /** LLM for skill verification (default: reuse llm). */
   skillVerificationLLM?: LLMProvider;
+  /**
+   * Skill storage backend. When provided, used for writing skills.
+   * Falls back to FileSystemSkillStore using `skillsDir` when omitted.
+   */
+  skillStore?: SkillStore;
 }
 
 /**
@@ -495,6 +499,11 @@ export interface PrecipitateAgentConfig {
   logger?: Logger;
   /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
   hooks?: AgentHooks | AgentHooks[];
+  /**
+   * Skill storage backend. When provided, used for writing skills.
+   * Falls back to FileSystemSkillStore using `skillsDir` when omitted.
+   */
+  skillStore?: SkillStore;
 }
 
 /**
@@ -530,6 +539,7 @@ export class PrecipitateAgent {
   private llm: LLMProvider;
   private skillsDir: string;
   private skillManager: SkillManager;
+  private skillStore: SkillStore;
   private maxIterations: number;
   private verifySkills: boolean;
   private skillVerificationLLM?: LLMProvider;
@@ -546,6 +556,9 @@ export class PrecipitateAgent {
     this.llm = config.llm;
     this.skillsDir = config.skillsDir;
     this.skillManager = config.skillManager;
+    this.skillStore =
+      config.skillStore ??
+      new FileSystemSkillStore(config.skillsDir);
     this.maxIterations = config.maxIterations ?? 15;
     this.verifySkills = config.verifySkills ?? true;
     this.skillVerificationLLM = config.skillVerificationLLM;
@@ -566,12 +579,8 @@ export class PrecipitateAgent {
    * @throws If skill persistence or reload fails.
    */
   async precipitate(input: PrecipitationInput): Promise<SkillCandidate[]> {
-    // Ensure the skills directory exists. Create it if it doesn't —
-    // precipitation is best-effort post-hoc work and a missing directory
-    // is not a fatal error (mkdir with recursive: true is a no-op if
-    // the directory already exists).
-    await mkdir(this.skillsDir, { recursive: true });
-
+    // The skill store manages its own directory (FileSystemSkillStore creates
+    // dirs on write; DB-backed stores don't need directories).
     const taskPrompt = buildTaskPrompt(input);
 
     // Enforce a hard timeout so a slow/stuck LLM call can't block
@@ -640,6 +649,7 @@ export class PrecipitateAgent {
       skillVerificationLLM: opts.skillVerificationLLM,
       logger: opts.logger,
       hooks: opts.hooks,
+      skillStore: opts.skillStore,
     });
 
     const existingSkills = opts.skillManager.getAll();
@@ -855,14 +865,10 @@ export class PrecipitateAgent {
       }
 
       try {
-        const skillDir = path.join(this.skillsDir, c.name);
-        await mkdir(skillDir, { recursive: true });
-
         const fileContent = buildSkillMarkdown(c.name, c.description, c.content, c.keywords);
-        const filePath = path.join(skillDir, "SKILL.md");
-        await writeFile(filePath, fileContent, "utf-8");
+        await this.skillStore.writeSkill(c.name, fileContent);
 
-        this.logger.info("Precipitation", `Written: ${filePath}`);
+        this.logger.info("Precipitation", `Written: ${c.name}/SKILL.md`);
         persisted.push(c);
       } catch (err: unknown) {
         this.logger.warn(

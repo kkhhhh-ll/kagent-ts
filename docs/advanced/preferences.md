@@ -47,14 +47,23 @@ const agent = new ReActAgent({
 
 编辑 `.kagent/preferences.md` 后，Agent 在下次 `run()` 时自动重载，无需重启。
 
-如需自定义文件路径：
+如需自定义文件路径或存储后端：
 
 ```ts
+// 自定义文件路径
 const agent = new ReActAgent({
-  // ...
+  llm: provider,
   preferencesPath: './custom/path.md',
 })
+
+// 注入自定义存储后端（生产环境）
+const agent2 = new ReActAgent({
+  llm: provider,
+  preferencesStore: new PostgresPreferencesStore(db),
+})
 ```
+
+`preferencesStore` 与 `preferencesPath` 互斥：传入 `store` 时 `filePath` 被忽略。
 
 ## 注入格式
 

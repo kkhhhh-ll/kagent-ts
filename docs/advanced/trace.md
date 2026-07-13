@@ -27,8 +27,11 @@ await agent.run('分析项目结构')
 
 ```ts
 interface TraceLoggerConfig {
-  /** 输出目录 (默认: ".kagent-traces/") */
+  /** 输出目录 (默认: ".kagent-traces/")，传入 store 时忽略 */
   outputDir?: string
+
+  /** 存储后端（传入后忽略 outputDir） */
+  store?: TraceStore
 
   /** Session 标识，用于生成文件名（默认: trace-<timestamp>-<random>） */
   sessionId?: string
@@ -42,6 +45,24 @@ interface TraceLoggerConfig {
   /** Token 计价，用于成本估算 */
   pricing?: { inputPricePer1K: number; outputPricePer1K: number }
 }
+```
+
+### 自定义存储后端
+
+```ts
+import { TraceLogger, FileSystemTraceStore } from 'kagent-ts'
+
+// 默认：本地 .kagent-traces/ 目录
+const trace = new TraceLogger({ sessionId: 'my-session' })
+
+// 自定义输出目录
+const trace2 = new TraceLogger({ outputDir: './custom-traces/' })
+
+// 注入自定义存储后端
+const trace3 = new TraceLogger({
+  sessionId: 'my-session',
+  store: new S3TraceStore('my-bucket'),
+})
 ```
 
 ## 追踪内容

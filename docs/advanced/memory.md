@@ -1,13 +1,36 @@
 # Memory 记忆
 
-kagent-ts 的 Memory 系统提供基于文件的**长期记忆**能力。Agent 可以在会话之间保存和检索重要信息。
+kagent-ts 的 Memory 系统提供**长期记忆**能力。Agent 可以在会话之间保存和检索重要信息。默认使用本地文件系统存储，支持通过 `MemoryStore` 接口注入自定义存储后端（Postgres、Redis 等）。
+
+## 可选存储后端
+
+```ts
+import { ReActAgent, FileSystemMemoryStore } from 'kagent-ts'
+
+// 默认：本地 .memory/ 目录
+const agent = new ReActAgent({ llm: provider })
+
+// 显式指定存储目录
+const agent2 = new ReActAgent({
+  llm: provider,
+  memoryDir: './custom-memory/',
+})
+
+// 注入自定义存储后端（生产环境）
+const agent3 = new ReActAgent({
+  llm: provider,
+  memoryStore: new PostgresMemoryStore(db),
+})
+```
+
+`memoryStore` 与 `memoryDir` 互斥：传入 `memoryStore` 时 `memoryDir` 被忽略。
 
 ## 工作原理
 
-Memory 系统使用 `MEMORY.md` 索引文件 + 独立 Markdown 记忆文件：
+Memory 系统使用索引 + 独立记忆条目：
 
 ```
-.memory/
+.memory/（默认 FileSystem 后端）
 ├── MEMORY.md              # 索引文件（名称 + 摘要，< 200 行 / 25 KB）
 ├── use-kebab-case.md      # 记忆 1
 ├── migrate-to-pg.md       # 记忆 2
@@ -60,7 +83,20 @@ type MemoryType = "rule" | "project" | "preference"
 ```ts
 import { MemoryManager } from 'kagent-ts'
 
-const memory = new MemoryManager('./.memory')
+// 默认存储目录
+const memory = new MemoryManager()
+
+// 自定义存储目录（向后兼容）
+const memory2 = new MemoryManager('./.memory')
+
+// 或使用配置对象
+const memory3 = new MemoryManager({ storageDir: './.memory' })
+
+// 或注入自定义存储后端
+const memory4 = new MemoryManager({ store: new PostgresMemoryStore(db) })
+
+// 获取底层存储后端
+const store = memory.getStore()  // MemoryStore
 
 // 写入记忆（同名自动覆盖）
 memory.add({

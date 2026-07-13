@@ -1,10 +1,9 @@
-import * as fs from "fs";
-import * as path from "path";
 import {
   wrapUntrusted,
   detectInjectionSignatures,
   buildInjectionWarning,
 } from "../security/boundaries";
+import { MemoryStore, FileSystemMemoryStore } from "./memory-store";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,12 +57,27 @@ interface IndexEntry {
 const MAX_INDEX_LINES = 200;
 const MAX_INDEX_BYTES = 25 * 1024; // 25 KB
 
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+export interface MemoryManagerOptions {
+  /**
+   * Storage backend. When provided, `storageDir` is ignored.
+   * Omit to use the default file-system store.
+   */
+  store?: MemoryStore;
+  /**
+   * Path to the memory storage directory (default: ".memory").
+   * Only used when `store` is not provided.
+   */
+  storageDir?: string;
+}
+
 // ─── MemoryManager ────────────────────────────────────────────────────────────
 
 /**
  * Long-term memory manager (index + individual files).
  *
- * Storage layout:
+ * Storage layout (default FileSystem store):
  * ```
  * .memory/
  *   MEMORY.md          ← index (200 lines + 25 KB dual limit)
@@ -72,7 +86,12 @@ const MAX_INDEX_BYTES = 25 * 1024; // 25 KB
  *
  * Usage:
  * ```ts
+ * // Default file-system storage
  * const mem = new MemoryManager({ storageDir: ".memory" });
+ *
+ * // Custom storage backend (e.g. Postgres)
+ * const mem = new MemoryManager({ store: new PostgresMemoryStore(db) });
+ *
  * mem.add({ name: "use-kebab-case", description: "File naming convention",
  *           type: "rule", content: "...why and when..." });
  * // Later: inject into system prompt
@@ -81,16 +100,33 @@ const MAX_INDEX_BYTES = 25 * 1024; // 25 KB
  */
 export class MemoryManager {
   private index: IndexEntry[] = [];
-  private storageDir: string;
-  private indexFile: string;
+  private store: MemoryStore;
   private lastLoadedMtime: number = 0;
 
-  constructor(storageDir?: string) {
-    this.storageDir = path.resolve(storageDir ?? ".memory");
-    this.indexFile = path.join(this.storageDir, "MEMORY.md");
-    // Lazy init: don't create .memory/ until something is actually written.
+  /**
+   * @param options  Either a storage directory path (string, backward-compat),
+   *                 or a MemoryManagerOptions object.
+   */
+  constructor(options?: string | MemoryManagerOptions) {
+    if (typeof options === "string") {
+      // Backward-compatible: `new MemoryManager(".memory")`
+      this.store = new FileSystemMemoryStore(options);
+    } else {
+      this.store =
+        options?.store ??
+        new FileSystemMemoryStore(options?.storageDir ?? ".memory");
+    }
+    // Lazy init: don't create storage dir until something is actually written.
     // loadIndex() is safe — it returns [] when the dir doesn't exist.
     this.loadIndex();
+  }
+
+  /**
+   * Get the underlying storage backend.
+   * Useful for host systems that need direct access (e.g. admin UIs).
+   */
+  getStore(): MemoryStore {
+    return this.store;
   }
 
   // ─── Write ──────────────────────────────────────────────────────────────
@@ -103,11 +139,10 @@ export class MemoryManager {
    * are silently removed to make room.
    */
   add(memory: Memory): void {
-    this.ensureDir();
+    this.store.ensureDir();
     // Write individual file
-    const filePath = this.memoryPath(memory.name);
     const fileContent = this.formatFile(memory);
-    fs.writeFileSync(filePath, fileContent, "utf-8");
+    this.store.write(memory.name, fileContent);
 
     // Update in-memory index (upsert)
     const existing = this.index.findIndex((e) => e.name === memory.name);
@@ -134,7 +169,7 @@ export class MemoryManager {
     const idx = this.index.findIndex((e) => e.name === name);
     if (idx === -1) return false;
 
-    try { fs.unlinkSync(this.memoryPath(name)); } catch { /* already gone */ }
+    this.store.delete(name);
 
     this.index.splice(idx, 1);
     this.persistIndex();
@@ -153,11 +188,10 @@ export class MemoryManager {
     const memory = this.loadFile(name);
     if (!memory) return false;
 
-    this.ensureDir();
+    this.store.ensureDir();
     memory.lastRecalledAt = new Date().toISOString();
-    const filePath = this.memoryPath(name);
     const fileContent = this.formatFile(memory);
-    fs.writeFileSync(filePath, fileContent, "utf-8");
+    this.store.write(name, fileContent);
     return true;
   }
 
@@ -246,9 +280,6 @@ export class MemoryManager {
       sections.join("\n");
 
     // Scan for prompt-injection signatures in LLM-generated content.
-    // Memory names and descriptions are authored by the LLM via the
-    // `remember` tool — they could contain injection text that would
-    // poison future runs when re-injected into the system prompt.
     const patterns = detectInjectionSignatures(body);
     const warning = buildInjectionWarning(patterns, "memory index");
 
@@ -267,10 +298,11 @@ export class MemoryManager {
    */
   reloadIfChanged(): boolean {
     try {
-      const stat = fs.statSync(this.indexFile);
-      if (stat.mtimeMs === this.lastLoadedMtime) return false;
-      this.lastLoadedMtime = stat.mtimeMs;
-      const raw = fs.readFileSync(this.indexFile, "utf-8");
+      // Use store-specific mtime logic
+      const mtime = this.getIndexMtime();
+      if (mtime === this.lastLoadedMtime) return false;
+      this.lastLoadedMtime = mtime;
+      const raw = this.store.readIndex();
       this.index = this.parseIndex(raw);
       return true;
     } catch {
@@ -281,16 +313,6 @@ export class MemoryManager {
   }
 
   // ─── Persistence ────────────────────────────────────────────────────────
-
-  private memoryPath(name: string): string {
-    return path.join(this.storageDir, `${name}.md`);
-  }
-
-  private ensureDir(): void {
-    if (!fs.existsSync(this.storageDir)) {
-      fs.mkdirSync(this.storageDir, { recursive: true });
-    }
-  }
 
   private formatFile(memory: Memory): string {
     const frontmatter: string[] = [
@@ -309,12 +331,9 @@ export class MemoryManager {
   }
 
   private loadFile(name: string): Memory | null {
-    try {
-      const raw = fs.readFileSync(this.memoryPath(name), "utf-8");
-      return this.parseFile(raw);
-    } catch {
-      return null;
-    }
+    const raw = this.store.read(name);
+    if (!raw) return null;
+    return this.parseFile(raw);
   }
 
   private parseFile(raw: string): Memory | null {
@@ -342,26 +361,40 @@ export class MemoryManager {
   // ─── Index Persistence ──────────────────────────────────────────────────
 
   private persistIndex(): void {
-    this.ensureDir();
+    this.store.ensureDir();
     const lines: string[] = [];
     for (const e of this.index) {
       const line = `- [${e.name}](${e.name}.md) — ${e.description}`;
       lines.push(line);
     }
     const content = lines.join("\n") + (lines.length > 0 ? "\n" : "");
-    fs.writeFileSync(this.indexFile, content, "utf-8");
+    this.store.writeIndex(content);
   }
 
   private loadIndex(): void {
     try {
-      const stat = fs.statSync(this.indexFile);
-      this.lastLoadedMtime = stat.mtimeMs;
-      const raw = fs.readFileSync(this.indexFile, "utf-8");
+      const mtime = this.getIndexMtime();
+      this.lastLoadedMtime = mtime;
+      const raw = this.store.readIndex();
       this.index = this.parseIndex(raw);
     } catch {
       this.lastLoadedMtime = 0;
       this.index = [];
     }
+  }
+
+  /**
+   * Get the index file's mtime for change detection.
+   * Delegates to FileSystemMemoryStore.getIndexMtimeMs() when available,
+   * otherwise falls back to checking the store.
+   */
+  private getIndexMtime(): number {
+    if (this.store instanceof FileSystemMemoryStore) {
+      return this.store.getIndexMtimeMs();
+    }
+    // For custom stores: return current timestamp to force reload
+    // (custom stores should implement their own change detection)
+    return Date.now();
   }
 
   private parseIndex(raw: string): IndexEntry[] {
@@ -403,7 +436,7 @@ export class MemoryManager {
       if (!toEvict) break;
 
       this.index = this.index.filter((e) => e.name !== toEvict.name);
-      try { fs.unlinkSync(this.memoryPath(toEvict.name)); } catch { /* ok */ }
+      this.store.delete(toEvict.name);
 
       raw = this.buildIndexContent();
       lines = raw.split("\n").length;
@@ -413,11 +446,6 @@ export class MemoryManager {
 
   /**
    * Pick the best eviction candidate: the entry least recently recalled.
-   *
-   * Priority (first evicted):
-   * 1. Never recalled (`lastRecalledAt` undefined)
-   * 2. Oldest `lastRecalledAt`
-   * 3. Ties broken by index position (lower = older in insertion order)
    */
   private pickEvictionCandidate(): IndexEntry | null {
     if (this.index.length === 0) return null;
@@ -431,10 +459,8 @@ export class MemoryManager {
 
       let score: number;
       if (!recalledAt) {
-        // Never recalled — highest eviction priority (lowest score)
         score = -1;
       } else {
-        // Lower score = older = evicted first
         score = new Date(recalledAt).getTime();
       }
 

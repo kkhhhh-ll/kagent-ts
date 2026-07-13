@@ -10,9 +10,17 @@ export { rrfFusion, chunkKey } from "./rrf";
 export type { RankedResult, RRFFusionResult } from "./rrf";
 export { LLMReRanker } from "./llm-reranker";
 export type { LLMReRankerConfig } from "./llm-reranker";
-export { loadDocuments } from "./document-loader";
+export {
+  loadDocuments,
+  DirectoryLoader,
+  UrlLoader,
+  TextLoader,
+  FileLoader,
+} from "./document-loader";
 export { splitText } from "./text-splitter";
 export type {
+  DocumentLoader,
+  DocumentSource,
   RAGDocument,
   RAGChunk,
   EmbeddingProvider,
@@ -24,4 +32,5 @@ export type {
 export {
   createSearchKnowledgeTool,
   createListKnowledgeDocumentsTool,
+  createIngestKnowledgeTool,
 } from "./search-knowledge";

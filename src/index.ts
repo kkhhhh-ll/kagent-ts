@@ -122,7 +122,9 @@ export {
   FileSkillLoader,
   parseFrontmatter,
 } from "./skills/index";
+export { FileSystemSkillStore } from "./skills/skill-store";
 export type { Skill, SkillStatus } from "./skills/types";
+export type { SkillStore, DirEntry } from "./skills/skill-store";
 
 // Messages
 export { Message } from "./messages/message";
@@ -173,11 +175,15 @@ export type { CompressionConfig } from "./compression/types";
 
 // User preferences
 export { PreferenceManager } from "./preferences/preference-manager";
+export { FileSystemPreferencesStore } from "./preferences/preferences-store";
 export type { Preferences, PreferenceManagerConfig } from "./preferences/types";
+export type { PreferencesStore, PreferencesReadResult } from "./preferences/preferences-store";
 
 // Session persistence & network resilience
 export { SessionManager } from "./session/session-manager";
+export { FileSystemSessionStore } from "./session/session-store";
 export type { SessionManagerConfig } from "./session/session-manager";
+export type { SessionStore } from "./session/session-store";
 export type {
   SessionState,
   SessionStatus,
@@ -191,7 +197,9 @@ export { countTokens, countMessageTokens } from "./utils/token-counter";
 
 // Trace — session execution trace logger
 export { TraceLogger } from "./trace/trace-logger";
+export { FileSystemTraceStore } from "./trace/trace-store";
 export type { TraceLoggerConfig } from "./trace/trace-logger";
+export type { TraceStore } from "./trace/trace-store";
 export type { AgentTraceEvent, AgentTraceEventType } from "./trace/types";
 
 // Sub-agents — async multi-agent dispatch
@@ -199,8 +207,24 @@ export { SubAgentManager, SubAgentLoader } from "./subagent/index";
 export type { SubAgentDefinition, SubAgentResult } from "./subagent/index";
 
 // RAG — retrieval-augmented generation
-export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore, InMemoryKeywordIndex, LLMReRanker, rrfFusion, chunkKey } from "./rag/index";
+export {
+  RAGManager,
+  OpenAIEmbeddingProvider,
+  InMemoryVectorStore,
+  ChromaVectorStore,
+  InMemoryKeywordIndex,
+  LLMReRanker,
+  rrfFusion,
+  chunkKey,
+  DirectoryLoader,
+  UrlLoader,
+  TextLoader,
+  FileLoader,
+  createIngestKnowledgeTool,
+} from "./rag/index";
 export type {
+  DocumentLoader,
+  DocumentSource,
   EmbeddingProvider,
   VectorStore,
   RAGDocument,
@@ -227,6 +251,9 @@ export type {
 
 // Project rules — user-authored, injected into system prompt
 export { ProjectRules } from "./rules/project-rules";
+export { FileSystemRulesStore } from "./rules/rules-store";
+export type { RulesStore, FileStat } from "./rules/rules-store";
+export type { ProjectRulesConfig } from "./rules/project-rules";
 
 // Security — prompt-injection defence helpers
 export {
@@ -242,16 +269,18 @@ export {
 export { Logger, ConsoleLogger, SilentLogger } from "./logging/index";
 
 // Memory — long-term facts, rules, and project context
-export { MemoryManager } from "./memory/index";
-export type { Memory, MemoryType } from "./memory/index";
+export { MemoryManager, FileSystemMemoryStore } from "./memory/index";
+export type { Memory, MemoryType, MemoryManagerOptions, MemoryStore } from "./memory/index";
 
 // Reflection — post-execution self-reflection with error notebook (错题本)
 export { ErrorNotebook } from "./reflection/error-notebook";
+export { FileSystemErrorNotebookStore } from "./reflection/error-notebook-store";
 export type {
   ErrorNotebookEntry,
   ErrorNotebookConfig,
   ReflectionErrorCategory,
 } from "./reflection/error-notebook";
+export type { ErrorNotebookStore } from "./reflection/error-notebook-store";
 export { ReflectionAgent } from "./reflection/reflection-agent";
 export type {
   ReflectionAgentConfig,

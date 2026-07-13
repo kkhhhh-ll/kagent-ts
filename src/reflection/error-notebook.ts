@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import {
   wrapUntrusted,
   detectInjectionSignatures,
@@ -8,6 +6,10 @@ import {
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { parseFrontmatter } from "../skills/file-skill-loader";
 import type { AgentScenario } from "../intent/signal-detector";
+import {
+  ErrorNotebookStore,
+  FileSystemErrorNotebookStore,
+} from "./error-notebook-store";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +55,11 @@ export interface ErrorNotebookConfig {
   maxEntries?: number;
   /** Logger instance (defaults to ConsoleLogger). */
   logger?: Logger;
+  /**
+   * Storage backend. When provided, `storageDir` is ignored.
+   * Omit to use the default file-system store.
+   */
+  store?: ErrorNotebookStore;
 }
 
 // ─── Index entry (metadata only, written to README.md) ───────────────────────
@@ -87,7 +94,6 @@ function formatFrontmatter(fm: Record<string, string>): string {
   const lines: string[] = ["---"];
   for (const [key, value] of Object.entries(fm)) {
     if (value === undefined || value === "") continue;
-    // Escape values that contain newlines or leading/trailing whitespace
     if (value.includes("\n") || value !== value.trim()) {
       lines.push(`${key}: |`);
       for (const line of value.split("\n")) {
@@ -125,10 +131,6 @@ const SCENARIO_EMOJI: Record<AgentScenario, string> = {
 
 /**
  * Parse a frontmatter `scenarios` value into a validated array.
- *
- * Handles both legacy single-value (`scenario: "debugging"`) and new
- * comma-separated (`scenarios: "debugging, code-write"`) formats.
- * Invalid scenario strings are silently dropped.
  */
 function parseScenarios(raw?: string): AgentScenario[] | undefined {
   if (!raw || raw.trim() === "") return undefined;
@@ -145,9 +147,6 @@ function parseScenarios(raw?: string): AgentScenario[] | undefined {
 
 /**
  * Parse scenario tags from an index-line suffix.
- *
- * Format: `🔍[file-search] 🐛[debugging]` — space-separated
- * `emoji[tag]` pairs. Returns validated scenarios.
  */
 function parseScenariosFromSuffix(suffix: string): AgentScenario[] {
   if (!suffix) return [];
@@ -171,7 +170,7 @@ function parseScenariosFromSuffix(suffix: string): AgentScenario[] {
  * Error Notebook (错题本) — persistent record of mistakes discovered
  * during post-execution reflection.
  *
- * Storage layout (consistent with the memory system):
+ * Storage layout (default FileSystem store):
  * ```
  * .error-notebook/
  *   README.md            ← lightweight index (markdown link list)
@@ -185,34 +184,41 @@ function parseScenariosFromSuffix(suffix: string): AgentScenario[] {
  */
 export class ErrorNotebook {
   private index: IndexEntry[] = [];
-  private storageDir: string;
-  private entriesDir: string;
-  private indexFile: string;
+  private store: ErrorNotebookStore;
   private maxEntries: number;
   private logger: Logger;
 
   constructor(config?: ErrorNotebookConfig) {
-    this.storageDir = path.resolve(config?.storageDir ?? ".error-notebook");
-    this.entriesDir = path.join(this.storageDir, "entries");
-    this.indexFile = path.join(this.storageDir, "README.md");
+    this.store =
+      config?.store ??
+      new FileSystemErrorNotebookStore(config?.storageDir ?? ".error-notebook");
     this.maxEntries = config?.maxEntries ?? 200;
     this.logger = config?.logger ?? new ConsoleLogger();
-    this.ensureDirs();
+    this.store.ensureDirs();
     this.loadIndex();
     this.cleanupOrphans();
+  }
+
+  /**
+   * Get the underlying storage backend.
+   * Useful for host systems that need direct access (e.g. admin UIs).
+   */
+  getStore(): ErrorNotebookStore {
+    return this.store;
+  }
+
+  /**
+   * Backward-compatible accessor for the storage directory.
+   * @deprecated Use `getStore().getDir()` instead.
+   */
+  get storageDir(): string {
+    return this.store.getDir();
   }
 
   // ─── Write ──────────────────────────────────────────────────────────────
 
   /**
    * Add an entry to the notebook.
-   *
-   * Each entry is persisted as a markdown file under `entries/nb_<id>.md`
-   * with YAML frontmatter for structured fields and a markdown body for
-   * narrative content (cause, suggestion, etc.).
-   *
-   * The in-memory index is updated immediately so {@link getAll} and
-   * friends reflect the new entry without re-reading from disk.
    */
   add(entry: Omit<ErrorNotebookEntry, "id" | "timestamp">): ErrorNotebookEntry {
     const full: ErrorNotebookEntry = {
@@ -223,15 +229,13 @@ export class ErrorNotebook {
 
     // Ensure dirs exist before writing (fire-and-forget reflection may run
     // after the original working directory has been cleaned up)
-    this.ensureDirs();
+    this.store.ensureDirs();
 
     // Write individual entry file as frontmatter + markdown
-    const filePath = this.entryPath(full.id);
     const fileContent = this.formatEntryFile(full);
-    fs.writeFileSync(filePath, fileContent, "utf-8");
+    this.store.writeEntry(full.id, fileContent);
 
-    // Log what was recorded so there's a human-readable trail of *why*
-    // each entry was created (category + description + triggering query).
+    // Log what was recorded
     const querySuffix = full.userQuery
       ? ` — query: "${full.userQuery.slice(0, 80)}${full.userQuery.length > 80 ? "…" : ""}"`
       : "";
@@ -273,8 +277,7 @@ export class ErrorNotebook {
     const idx = this.index.findIndex((e) => e.id === id);
     if (idx === -1) return false;
 
-    // Remove individual file
-    try { fs.unlinkSync(this.entryPath(id)); } catch { /* already gone */ }
+    this.store.deleteEntry(id);
 
     // Remove from index
     this.index.splice(idx, 1);
@@ -284,24 +287,15 @@ export class ErrorNotebook {
 
   // ─── Read ───────────────────────────────────────────────────────────────
 
-  /**
-   * Get all entries (loads full data from disk).
-   */
   getAll(): ErrorNotebookEntry[] {
     return this.loadFullEntries(this.index);
   }
 
-  /**
-   * Get entries for a specific session.
-   */
   getBySession(sessionId: string): ErrorNotebookEntry[] {
     const matches = this.index.filter((e) => e.sessionId === sessionId);
     return this.loadFullEntries(matches);
   }
 
-  /**
-   * Get recent entries (most recent first).
-   */
   getRecent(limit: number = 20): ErrorNotebookEntry[] {
     const recent = [...this.index]
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
@@ -309,17 +303,11 @@ export class ErrorNotebook {
     return this.loadFullEntries(recent);
   }
 
-  /**
-   * Get entries by category.
-   */
   getByCategory(category: ReflectionErrorCategory): ErrorNotebookEntry[] {
     const matches = this.index.filter((e) => e.category === category);
     return this.loadFullEntries(matches);
   }
 
-  /**
-   * Get entries by scenario (intent).
-   */
   getByScenario(scenario: AgentScenario): ErrorNotebookEntry[] {
     const matches = this.index.filter(
       (e) => e.scenarios?.includes(scenario),
@@ -327,16 +315,10 @@ export class ErrorNotebook {
     return this.loadFullEntries(matches);
   }
 
-  /**
-   * Total number of entries.
-   */
   get count(): number {
     return this.index.length;
   }
 
-  /**
-   * Category distribution.
-   */
   getCategoryStats(): Record<ReflectionErrorCategory, number> {
     const stats: Record<string, number> = {};
     for (const e of this.index) {
@@ -347,16 +329,7 @@ export class ErrorNotebook {
 
   // ─── Prompt Injection ───────────────────────────────────────────────────
 
-  /**
-   * Build a compact prompt section from recent entries.
-   *
-   * The content is LLM-generated (via ReflectionAgent), so it is wrapped
-   * with {@link wrapUntrusted} boundary markers and scanned for prompt-
-   * injection signatures before being returned. This prevents the LLM
-   * from accidentally poisoning its own system prompt via the notebook.
-   */
   buildRulesPrompt(maxEntries: number = 10, minRepetitions: number = 1): string {
-    // Group by (category, description) to count repetitions — uses index only
     const grouped = new Map<string, { entry: IndexEntry; count: number }>();
     for (const e of this.index) {
       const key = `${e.category}::${e.description}`;
@@ -382,7 +355,6 @@ export class ErrorNotebook {
     ];
 
     for (const { entry, count } of filtered) {
-      // Load full entry to get the suggestion
       const full = this.loadEntry(entry.id);
       const cat = formatCategory(entry.category);
       const rep = count > 1 ? ` (×${count})` : "";
@@ -391,42 +363,25 @@ export class ErrorNotebook {
 
     const body = lines.join("\n");
 
-    // Scan for prompt-injection signatures in LLM-generated content.
-    // The notebook is authored by the LLM itself — it could accidentally
-    // (or adversarially) produce injection text that poisons future runs.
     const patterns = detectInjectionSignatures(body);
     const warning = buildInjectionWarning(patterns, "error notebook");
 
-    // Wrap as untrusted data (LLM-authored, not user-authored)
     const wrapped = wrapUntrusted("error-notebook", body);
 
     return "\n\n" + warning + wrapped;
   }
 
-  /**
-   * Build a compact prompt section scoped to the given scenarios.
-   *
-   * Only entries matching ANY of the given scenarios are included.
-   * This keeps the prompt lean and contextually relevant — errors from
-   * file-search tasks won't clutter a code-write session.
-   *
-   * @param scenarios  The current task's scenarios (multi-label).
-   * @param maxEntries Max entries to include (default 5).
-   * @param minRepetitions  Min occurrences before an entry is shown (default 1).
-   */
   buildScenarioPrompt(
     scenarios: AgentScenario[],
     maxEntries: number = 5,
     minRepetitions: number = 1,
   ): string {
-    // Filter index to entries that match ANY of the given scenarios
     const scenarioSet = new Set(scenarios);
     const scenarioEntries = this.index.filter(
       (e) => e.scenarios?.some((s) => scenarioSet.has(s)),
     );
     if (scenarioEntries.length === 0) return "";
 
-    // Group by (category, description) to count repetitions
     const grouped = new Map<string, { entry: IndexEntry; count: number }>();
     for (const e of scenarioEntries) {
       const key = `${e.category}::${e.description}`;
@@ -468,28 +423,9 @@ export class ErrorNotebook {
     return "\n\n" + warning + wrapped;
   }
 
-  // ─── Persistence ────────────────────────────────────────────────────────
-
-  private entryPath(id: string): string {
-    return path.join(this.entriesDir, `${id}.md`);
-  }
-
-  private ensureDirs(): void {
-    if (!fs.existsSync(this.storageDir)) {
-      fs.mkdirSync(this.storageDir, { recursive: true });
-    }
-    if (!fs.existsSync(this.entriesDir)) {
-      fs.mkdirSync(this.entriesDir, { recursive: true });
-    }
-  }
-
   // ─── Entry file format (frontmatter + markdown body) ────────────────────
 
-  /**
-   * Serialize an entry to a markdown file with YAML frontmatter.
-   */
   private formatEntryFile(entry: ErrorNotebookEntry): string {
-    // Structured fields go into frontmatter
     const fm: Record<string, string> = {
       id: entry.id,
       sessionId: entry.sessionId,
@@ -504,7 +440,6 @@ export class ErrorNotebook {
       fm.userQuery = entry.userQuery;
     }
 
-    // Narrative fields go into the markdown body
     const bodyParts: string[] = [];
     bodyParts.push(`## Cause\n\n${entry.cause}`);
     bodyParts.push(`## Suggestion\n\n${entry.suggestion}`);
@@ -520,22 +455,12 @@ export class ErrorNotebook {
     return formatFrontmatter(fm) + "\n\n" + bodyParts.join("\n\n");
   }
 
-  /**
-   * Parse an entry markdown file back into an ErrorNotebookEntry.
-   * Returns null if the file is missing or malformed.
-   */
   private loadEntry(id: string): ErrorNotebookEntry | null {
-    try {
-      const raw = fs.readFileSync(this.entryPath(id), "utf-8");
-      return this.parseEntryFile(raw);
-    } catch {
-      return null;
-    }
+    const raw = this.store.readEntry(id);
+    if (!raw) return null;
+    return this.parseEntryFile(raw);
   }
 
-  /**
-   * Parse entry file content (frontmatter + markdown body).
-   */
   private parseEntryFile(raw: string): ErrorNotebookEntry | null {
     const { frontmatter, body } = parseFrontmatter(raw);
 
@@ -551,7 +476,6 @@ export class ErrorNotebook {
       return null;
     }
 
-    // Validate category
     const validCategories: ReflectionErrorCategory[] = [
       "reasoning_error", "tool_misuse", "missed_optimization",
       "incomplete_answer", "hallucination", "context_mismanagement",
@@ -559,11 +483,8 @@ export class ErrorNotebook {
     ];
     if (!validCategories.includes(category)) return null;
 
-    // Parse scenarios — supports both legacy single `scenario` and new
-    // comma-separated `scenarios` frontmatter field.
     const scenarios = parseScenarios(scenarioRaw);
 
-    // Parse body sections
     const cause = extractSection(body, "Cause");
     const suggestion = extractSection(body, "Suggestion");
     const finalAnswer = extractSection(body, "Final Answer (analyzed)") || undefined;
@@ -586,9 +507,6 @@ export class ErrorNotebook {
     };
   }
 
-  /**
-   * Load full entry data for a slice of the index.
-   */
   private loadFullEntries(subset: IndexEntry[]): ErrorNotebookEntry[] {
     const results: ErrorNotebookEntry[] = [];
     for (const idx of subset) {
@@ -598,13 +516,10 @@ export class ErrorNotebook {
     return results;
   }
 
-  // ─── Index persistence (markdown link list) ─────────────────────────────
+  // ─── Index persistence ─────────────────────────────────────────────────
 
-  /**
-   * Write the in-memory index to README.md as a markdown link list.
-   */
   private persistIndex(): void {
-    this.ensureDirs();
+    this.store.ensureDirs();
     const lines: string[] = [
       "# Error Notebook (错题本)",
       "",
@@ -620,36 +535,21 @@ export class ErrorNotebook {
       const line = `- [${emoji} ${label}] ${e.description} (\`${e.id}\` — ${e.sessionId})${scenarioTag}`;
       lines.push(line);
     }
-    fs.writeFileSync(this.indexFile, lines.join("\n") + "\n", "utf-8");
+    this.store.writeIndex(lines.join("\n") + "\n");
   }
 
-  /**
-   * Load the index from README.md.
-   */
   private loadIndex(): void {
     try {
-      const raw = fs.readFileSync(this.indexFile, "utf-8");
+      const raw = this.store.readIndex();
       this.index = this.parseIndex(raw);
     } catch {
       this.index = [];
     }
   }
 
-  /**
-   * Parse the README.md index into IndexEntry records.
-   *
-   * Expected format (one per line):
-   * ```
-   * - [🔧 Tool Misuse] Used wrong tool. (`nb_xxx` — sess-1) 🔍[file-search] 🐛[debugging]
-   * ```
-   * Supports both single and multiple scenario tags. The trailing
-   * scenario tags are optional.
-   */
   private parseIndex(raw: string): IndexEntry[] {
     const entries: IndexEntry[] = [];
     for (const line of raw.split("\n")) {
-      // Match: "- [🫀 Category] description (`id` — sessionId)"
-      // followed by optional " emoji[scenario]" repeated 0+ times.
       const match = line.match(
         /^- \[(.+?)\] (.+?) \(`(nb_\w+)` — (.+?)\)(.*)$/,
       );
@@ -661,20 +561,15 @@ export class ErrorNotebook {
       const sessionId = match[4];
       const scenarioSuffix = match[5].trim();
 
-      // Infer category from the emoji+label prefix
       const category = inferCategoryFromLabel(emojiAndLabel);
       if (!category) continue;
 
-      // Parse multiple scenario tags from the suffix
-      // Format: "🔍[file-search] 🐛[debugging]" (space-separated)
       const scenarios = parseScenariosFromSuffix(scenarioSuffix);
 
-      // We don't have timestamp in the index line, so we use a placeholder.
-      // Timestamp will be loaded from the full entry file when needed.
       entries.push({
         id,
         sessionId,
-        timestamp: "", // loaded from entry file on demand
+        timestamp: "",
         category,
         description,
         scenarios: scenarios.length > 0 ? scenarios : undefined,
@@ -685,47 +580,29 @@ export class ErrorNotebook {
 
   // ─── Pruning ─────────────────────────────────────────────────────────────
 
-  /**
-   * Prune the oldest entries if over maxEntries.
-   */
   private pruneIfNeeded(): void {
     const excess = this.index.length - this.maxEntries;
     if (excess <= 0) return;
 
-    // Index is append-only, so oldest entries are at the front
     const toRemove = this.index.splice(0, excess);
 
     for (const { id } of toRemove) {
-      try { fs.unlinkSync(this.entryPath(id)); } catch { /* ok */ }
+      this.store.deleteEntry(id);
     }
   }
 
-  /**
-   * Clean up orphaned entry files (files not referenced by the index).
-   * Call this during construction to recover from partial writes.
-   */
   private cleanupOrphans(): void {
-    let entryFiles: string[];
-    try {
-      entryFiles = fs.readdirSync(this.entriesDir);
-    } catch {
-      return;
-    }
-
-    const referenced = new Set(this.index.map((e) => `${e.id}.md`));
-    for (const file of entryFiles) {
-      if (!file.endsWith(".md")) continue;
-      if (!referenced.has(file)) {
-        try { fs.unlinkSync(path.join(this.entriesDir, file)); } catch { /* ok */ }
+    const entryIds = this.store.listEntries();
+    const referenced = new Set(this.index.map((e) => e.id));
+    for (const id of entryIds) {
+      if (!referenced.has(id)) {
+        this.store.deleteEntry(id);
       }
     }
   }
 
   // ─── Markdown Report ─────────────────────────────────────────────────────
 
-  /**
-   * Generate a human-readable markdown report.
-   */
   generateMarkdownReport(): string {
     const entries = this.getRecent(100);
     if (entries.length === 0) {
@@ -772,7 +649,6 @@ function formatCategory(cat: ReflectionErrorCategory): string {
   return `${emoji} ${label}`;
 }
 
-/** Short label used in prompt output and index links. */
 function formatCategoryLabel(cat: ReflectionErrorCategory): string {
   switch (cat) {
     case "reasoning_error":       return "Reasoning Error";
@@ -786,7 +662,6 @@ function formatCategoryLabel(cat: ReflectionErrorCategory): string {
   }
 }
 
-/** Human-readable label for a scenario. */
 function formatScenarioLabel(scenario: AgentScenario): string {
   switch (scenario) {
     case "file-search":    return "File Search";
@@ -800,10 +675,6 @@ function formatScenarioLabel(scenario: AgentScenario): string {
   }
 }
 
-/**
- * Infer the category from a combined emoji+label index token
- * (e.g. "🧠 Reasoning Error" → "reasoning_error").
- */
 function inferCategoryFromLabel(emojiAndLabel: string): ReflectionErrorCategory | null {
   const labelPart = emojiAndLabel.replace(/^[^\s]+\s*/, "").trim();
   switch (labelPart) {
@@ -819,16 +690,7 @@ function inferCategoryFromLabel(emojiAndLabel: string): ReflectionErrorCategory 
   }
 }
 
-// ─── Body Section Extraction ─────────────────────────────────────────────────
-
-/**
- * Extract a named `## Section` from a markdown body.
- *
- * Matches a level-2 heading, then captures everything up to the next
- * same-or-higher-level heading or EOF.
- */
 function extractSection(body: string, heading: string): string | null {
-  // Escape heading text for regex, then match ## HEADING followed by content
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`^## ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, "m");
   const match = body.match(pattern);

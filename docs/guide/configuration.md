@@ -80,10 +80,39 @@ interface AgentConfig {
 
   // ── Token 预算配置 ──
   tokenBudgetConfig?: TokenBudgetConfig
+
+  // ── 存储后端（可插拔，不传则使用默认文件系统存储）──
+  memoryStore?: MemoryStore              // 记忆存储后端（传入后忽略 memoryDir）
+  sessionStore?: SessionStore            // 会话存储后端（传入后忽略 sessionDir）
+  skillStore?: SkillStore                // 技能存储后端（传入后忽略 skillsDir）
+  preferencesStore?: PreferencesStore    // 偏好存储后端（传入后忽略 preferencesPath）
+  rulesStore?: RulesStore                // 规则存储后端（传入后忽略 rulesPath）
+  errorNotebookStore?: ErrorNotebookStore // 错题本存储后端（仅 auto-create 时生效）
 }
 ```
 
 > **注意**：`maxIterations` 和 `reflection`（错题本反思模式）不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中（如 `ReActAgentConfig`、`PlanSolveAgentConfig` 等）。不同 Agent 类型的默认 `maxIterations` 不同：ReAct=10, PlanSolve=15, Fusion=15。
+
+### 可插拔存储后端
+
+框架默认将所有数据存储在本地文件系统中（`.memory/`、`.kagent-sessions/`、`.kagent-traces/` 等）。对于需要嵌入 Web 系统（CRM、SaaS）的生产环境，可以通过 `xxxStore` 字段注入自定义存储后端：
+
+```ts
+import { ReActAgent, OpenAIProvider, FileSystemMemoryStore } from 'kagent-ts'
+
+// 默认本地文件（无需配置）
+const localAgent = new ReActAgent({ llm: provider })
+
+// 生产环境：注入自定义存储后端
+const prodAgent = new ReActAgent({
+  llm: provider,
+  memoryStore: new PostgresMemoryStore(connectionString),
+  sessionStore: new PostgresSessionStore(connectionString),
+  skillStore: new PostgresSkillStore(connectionString),
+})
+```
+
+所有 `*Store` 接口均可独立实现。框架内置 `FileSystem*Store` 系列实现作为默认后端。
 
 ### 子系统的 LLM 分配
 
@@ -174,7 +203,7 @@ const agent = new ReActAgent({
 
 ## RAG 知识库配置
 
-启用 RAG 后，Agent 启动时会自动索引 `documentsDir` 目录下的文档，并注册 `search_knowledge` 和 `list_knowledge_documents` 两个工具。
+启用 RAG 后，Agent 启动时会自动索引 `documentsDir` 目录下的文档，并注册 `search_knowledge`、`list_knowledge_documents`、`ingest_knowledge` 三个工具。
 
 ```ts
 import { OpenAIEmbeddingProvider } from 'kagent-ts'

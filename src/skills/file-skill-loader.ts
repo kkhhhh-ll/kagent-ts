@@ -1,6 +1,6 @@
-import * as fs from "fs";
 import * as path from "path";
 import { Skill } from "./types";
+import { SkillStore, FileSystemSkillStore } from "./skill-store";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
 // ─── Frontmatter Parsing ───────────────────────────────────────────────────
@@ -37,7 +37,6 @@ export function parseFrontmatter(raw: string): {
     if (colonIdx <= 0) continue;
     const key = trimmed.slice(0, colonIdx).trim();
     let value = trimmed.slice(colonIdx + 1).trim();
-    // Strip surrounding quotes if both ends match
     if ((value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1).trim();
@@ -60,7 +59,6 @@ function validateSkillName(name: string): void {
   if (!name) {
     throw new Error(`Skill name must not be empty.`);
   }
-  // Prevent path traversal: reject names with slashes, backslashes, "..", or null bytes
   if (/[/\\]|\.\.|\0/.test(name)) {
     throw new Error(
       `Invalid skill name "${name}": contains path traversal characters.`,
@@ -71,7 +69,7 @@ function validateSkillName(name: string): void {
 // ─── FileSkillLoader ───────────────────────────────────────────────────────
 
 /**
- * Loads skill definitions from a directory on disk.
+ * Loads skill definitions from a pluggable store.
  *
  * Expected directory structure:
  * ```
@@ -89,79 +87,85 @@ function validateSkillName(name: string): void {
  *    lazily on activation.
  */
 export class FileSkillLoader {
-  private directory: string;
+  private store: SkillStore;
   private logger: Logger;
   /**
    * Map from skill name (frontmatter `name`) to its directory basename.
-   * Directory names and frontmatter `name` may differ, so we record the
-   * mapping during `scan()` and use it in `loadSystemPrompt()`.
    */
   private skillDirs = new Map<string, string>();
 
   /**
-   * @param directory Path to the skills root directory (default: `./skills`).
-   * @param logger    Logger instance (defaults to ConsoleLogger).
+   * @param options  Either a directory path (string), a SkillStore instance, or a config object.
+   * @param logger   Logger instance (defaults to ConsoleLogger).
    */
-  constructor(directory?: string, logger?: Logger) {
-    this.directory = path.resolve(directory || "./skills");
+  constructor(
+    options?: string | SkillStore | { store?: SkillStore; directory?: string },
+    logger?: Logger,
+  ) {
     this.logger = logger ?? new ConsoleLogger();
+
+    if (typeof options === "string") {
+      // Legacy: directory path string
+      this.store = new FileSystemSkillStore(options);
+    } else if (this.isSkillStore(options)) {
+      // SkillStore instance (duck-typed via getDir)
+      this.store = options as SkillStore;
+    } else if (options && typeof options === "object") {
+      // Config object: { store?, directory? }
+      this.store = options.store ?? new FileSystemSkillStore(options.directory);
+    } else {
+      // No options — default
+      this.store = new FileSystemSkillStore();
+    }
+  }
+
+  private isSkillStore(v: unknown): v is SkillStore {
+    return typeof v === "object" && v !== null
+      && typeof (v as SkillStore).getDir === "function"
+      && typeof (v as SkillStore).listSkillDirs === "function";
+  }
+
+  /**
+   * Get the underlying storage backend.
+   */
+  getStore(): SkillStore {
+    return this.store;
   }
 
   /**
    * Get the root directory path.
    */
   getDirectory(): string {
-    return this.directory;
+    return this.store.getDir();
   }
 
   /**
    * Get the absolute path to a named skill's subdirectory.
-   * Throws if the skill name contains path traversal characters.
    */
   getSkillDir(name: string): string {
     validateSkillName(name);
-    // Use the mapped directory basename so frontmatter `name` mismatches
-    // don't break resolution.
     const dirName = this.skillDirs.get(name) ?? name;
-    return path.join(this.directory, dirName);
+    return path.join(this.store.getDir(), dirName);
   }
 
   /**
-   * Scan the skills directory and return metadata-only Skill objects.
-   *
-   * Reads only the frontmatter from each SKILL.md — the body (systemPrompt)
-   * is NOT loaded at this stage. It is loaded lazily when the skill is
-   * activated.
-   *
-   * Subdirectories without a valid SKILL.md (or without a `name` in
-   * frontmatter) are skipped with a warning.
+   * Scan the skills store and return metadata-only Skill objects.
    */
   scan(): Skill[] {
     const skills: Skill[] = [];
 
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(this.directory, { withFileTypes: true });
-    } catch {
-      // Directory doesn't exist or can't be read — return empty
-      return [];
-    }
+    const entries = this.store.listSkillDirs();
+    if (entries.length === 0) return skills;
 
     for (const entry of entries) {
-      // Skip non-directories, dotfiles, and symlinks
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith(".")) continue;
 
-      const skillPath = path.join(this.directory, entry.name);
-      const skillMdPath = path.join(skillPath, "SKILL.md");
-
-      let raw: string;
-      try {
-        raw = fs.readFileSync(skillMdPath, "utf-8");
-      } catch {
+      const raw = this.store.readSkillMd(entry.name);
+      if (!raw) {
         this.logger.warn(
           "Skills",
-          `Skipping "${entry.name}": no SKILL.md found in ${skillPath}`,
+          `Skipping "${entry.name}": no SKILL.md found in ${path.join(this.store.getDir(), entry.name)}`,
         );
         continue;
       }
@@ -185,18 +189,15 @@ export class FileSkillLoader {
         continue;
       }
 
-      // Parse keywords: comma-separated string or JSON array in frontmatter
       let keywords: string[] | undefined;
       const kwRaw = frontmatter.keywords?.trim();
       if (kwRaw) {
         try {
-          // Try JSON array first: ["review", "code"]
           const parsed = JSON.parse(kwRaw);
           if (Array.isArray(parsed)) {
             keywords = parsed.map((k: unknown) => String(k).trim()).filter(Boolean);
           }
         } catch {
-          // Fallback: comma-separated string: "review, code, audit"
           keywords = kwRaw
             .split(",")
             .map((k) => k.trim())
@@ -220,45 +221,35 @@ export class FileSkillLoader {
    * Fully load the system prompt for a skill:
    * 1. SKILL.md body (the content after frontmatter)
    * 2. All reference/*.md and reference/*.txt files (concatenated with headers)
-   *
-   * Throws if the skill directory does not exist.
    */
   loadSystemPrompt(name: string): string {
-    const skillDir = this.getSkillDir(name);
-    const skillMdPath = path.join(skillDir, "SKILL.md");
+    const skillDirName = this.skillDirs.get(name) ?? name;
+    const raw = this.store.readSkillMd(skillDirName);
+    if (!raw) {
+      throw new Error(`Failed to load skill "${name}": SKILL.md not found.`);
+    }
 
-    // Read SKILL.md body
-    const raw = fs.readFileSync(skillMdPath, "utf-8");
     const { body } = parseFrontmatter(raw);
     const parts: string[] = [body];
 
     // Append reference docs
-    const refDir = path.join(skillDir, "reference");
-    try {
-      const refFiles = fs
-        .readdirSync(refDir, { withFileTypes: true })
-        .filter(
-          (f) =>
-            f.isFile() &&
-            REFERENCE_EXTENSIONS.has(path.extname(f.name).toLowerCase()),
-        )
-        .sort((a, b) => a.name.localeCompare(b.name));
+    const refFiles = this.store.listReferenceFiles(skillDirName);
+    const filtered = refFiles.filter(
+      (f) =>
+        f.isFile() &&
+        REFERENCE_EXTENSIONS.has(path.extname(f.name).toLowerCase()),
+    ).sort((a, b) => a.name.localeCompare(b.name));
 
-      if (refFiles.length > 0) {
-        parts.push("\n\n---\n### Reference Documents\n");
-        for (const ref of refFiles) {
-          const refContent = fs.readFileSync(
-            path.join(refDir, ref.name),
-            "utf-8",
-          );
+    if (filtered.length > 0) {
+      parts.push("\n\n---\n### Reference Documents\n");
+      for (const ref of filtered) {
+        const refContent = this.store.readReferenceFile(skillDirName, ref.name);
+        if (refContent) {
           parts.push(`\n**${ref.name}**\n${refContent.trim()}\n`);
         }
       }
-    } catch {
-      // No reference/ directory — skip silently
     }
 
     return parts.join("").trim();
   }
-
 }

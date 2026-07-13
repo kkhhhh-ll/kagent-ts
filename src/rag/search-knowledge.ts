@@ -2,12 +2,14 @@
  * Built-in RAG tools registered into the main agent's ToolRegistry.
  *
  * These tools are callable by the LLM:
- * - `search_knowledge` — semantic search over the indexed knowledge base
+ * - `search_knowledge`      — semantic search over the indexed knowledge base
  * - `list_knowledge_documents` — list available document paths
+ * - `ingest_knowledge`      — add documents at runtime (URL, text, or file)
  */
 
 import type { Tool } from "../tools/types";
 import type { RAGManager } from "./rag-manager";
+import type { DocumentSource } from "./rag-types";
 
 /**
  * Create the `search_knowledge` tool.
@@ -88,6 +90,127 @@ export function createListKnowledgeDocumentsTool(manager: RAGManager): Tool {
       ];
 
       return lines.join("\n");
+    },
+  };
+}
+
+/**
+ * Create the `ingest_knowledge` tool.
+ *
+ * The LLM calls this to add new documents to the knowledge base at runtime.
+ * Supports three source types:
+ * - `url`  — fetch a web page, strip HTML, index the content
+ * - `text` — index inline text (e.g., user-provided content, LLM summary)
+ * - `file` — index a local file by path
+ *
+ * Documents added this way are immediately searchable via `search_knowledge`.
+ */
+export function createIngestKnowledgeTool(manager: RAGManager): Tool {
+  return {
+    name: "ingest_knowledge",
+    description:
+      "Add a document to the knowledge base so it becomes searchable. " +
+      "Use this when you encounter useful information that should be " +
+      "available in future searches — e.g., a fetched web page, a user " +
+      "provided document, or a summary you've generated.\n\n" +
+      "Supports three source types:\n" +
+      "- `url`: fetch a web page and index its text content\n" +
+      "- `text`: index inline text directly (provide a descriptive `title`)\n" +
+      "- `file`: index a local file (must be .md, .txt, or .json)\n\n" +
+      "Returns the document path and chunk count on success.",
+    parameters: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          enum: ["url", "text", "file"],
+          description: "Where the content comes from.",
+        },
+        url: {
+          type: "string",
+          description: "The URL to fetch (required when source is 'url').",
+        },
+        content: {
+          type: "string",
+          description: "The text content to index (required when source is 'text').",
+        },
+        title: {
+          type: "string",
+          description:
+            "A human-readable title for the document. " +
+            "Required for 'text' source; optional for 'url' (auto-detected from page title).",
+        },
+        filePath: {
+          type: "string",
+          description: "Path to the local file to index (required when source is 'file').",
+        },
+      },
+      required: ["source"],
+    },
+    execute: async (args: Record<string, unknown>): Promise<string> => {
+      const source = String(args.source ?? "").trim() as DocumentSource["type"];
+
+      if (!["url", "text", "file"].includes(source)) {
+        return `Error: \`source\` must be one of: "url", "text", "file". Got: "${source}".`;
+      }
+
+      let docSource: DocumentSource;
+
+      switch (source) {
+        case "url": {
+          const url = String(args.url ?? "").trim();
+          if (!url) {
+            return "Error: \`url\` is required when source is 'url'.";
+          }
+
+          // Basic URL validation
+          try {
+            new URL(url);
+          } catch {
+            return `Error: Invalid URL "${url}". Make sure it starts with http:// or https://.`;
+          }
+
+          docSource = { type: "url", url, title: args.title ? String(args.title) : undefined };
+          break;
+        }
+        case "text": {
+          const content = String(args.content ?? "").trim();
+          if (!content) {
+            return "Error: \`content\` is required when source is 'text'.";
+          }
+          const title = String(args.title ?? "").trim();
+          if (!title) {
+            return "Error: \`title\` is required when source is 'text'.";
+          }
+          docSource = { type: "text", content, title };
+          break;
+        }
+        case "file": {
+          const filePath = String(args.filePath ?? "").trim();
+          if (!filePath) {
+            return "Error: \`filePath\` is required when source is 'file'.";
+          }
+          docSource = { type: "file", path: filePath };
+          break;
+        }
+      }
+
+      try {
+        const doc = await manager.addFromSource(docSource);
+        if (!doc) {
+          return "No content was extracted from the source. The document is empty or unreadable.";
+        }
+
+        return (
+          `Document ingested successfully:\n` +
+          `- Path: ${doc.path}\n` +
+          `- Chunks: ${doc.chunks.length}\n` +
+          `- Total documents in knowledge base: ${manager.documentCount}`
+        );
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return `Error ingesting document: ${message}`;
+      }
     },
   };
 }

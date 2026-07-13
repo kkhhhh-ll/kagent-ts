@@ -66,6 +66,8 @@ const agent = new ReActAgent({
   reflection: "post-hoc",         // 开启错题本反思
   memoryReflection: "post-hoc",   // 开启记忆提取
   notebook: new ErrorNotebook(),  // 可选，不传自动创建
+  // 或指定错题本存储后端（不传 notebook 时自动创建会使用此后端）：
+  errorNotebookStore: new FileSystemErrorNotebookStore('.error-notebook'),
 })
 ```
 

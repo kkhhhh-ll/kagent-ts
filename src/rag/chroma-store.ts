@@ -145,6 +145,37 @@ export class ChromaVectorStore implements VectorStore {
     }
   }
 
+  /**
+   * Delete all chunks belonging to a given source document.
+   *
+   * Uses Chroma's `where` filter to match by `sourcePath` metadata.
+   *
+   * @returns Number of chunks deleted.
+   */
+  async deleteBySource(sourcePath: string): Promise<number> {
+    await this.ensureInitialized();
+    if (this._size === 0 || !this.collection) return 0;
+
+    try {
+      // Use get() with a where filter to count matching chunks.
+      // query() requires embeddings so cannot be used for metadata-only filtering.
+      const existing = await this.collection.get({
+        where: { sourcePath },
+        limit: this._size,
+        include: [],
+      });
+
+      const matchCount = existing.ids.length;
+      if (matchCount === 0) return 0;
+
+      await this.collection.delete({ where: { sourcePath } });
+      this._size = Math.max(0, this._size - matchCount);
+      return matchCount;
+    } catch {
+      return 0;
+    }
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────
 
   private async ensureInitialized(): Promise<void> {

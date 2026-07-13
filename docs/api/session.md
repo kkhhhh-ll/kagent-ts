@@ -11,7 +11,8 @@ new SessionManager(config?: SessionManagerConfig)
 ```ts
 interface SessionManagerConfig {
   sessionId?: string            // 会话 ID
-  sessionDir?: string           // 会话存储目录
+  sessionDir?: string           // 会话存储目录（传入 store 时忽略）
+  store?: SessionStore          // 自定义存储后端
 }
 ```
 

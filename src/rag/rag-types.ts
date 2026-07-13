@@ -5,6 +5,37 @@
  * exposed to the LLM as callable tools (`search_knowledge`, `list_knowledge_documents`).
  */
 
+// ─── Document Loader ─────────────────────────────────────────────────────────
+
+/**
+ * Interface for loading documents from any source.
+ *
+ * Implementations:
+ * - {@link DirectoryLoader} — local filesystem directory
+ * - {@link UrlLoader} — fetch a web page
+ * - {@link TextLoader} — inline text content
+ *
+ * Users can provide custom loaders for databases, APIs, cloud storage, etc.
+ */
+export interface DocumentLoader {
+  /** Load documents from the source. Returns an array of RAGDocuments. */
+  load(): Promise<RAGDocument[]>;
+}
+
+/**
+ * A source descriptor for runtime document ingestion.
+ *
+ * Used by the `ingest_knowledge` tool and `RAGManager.addFromSource()`.
+ * Each variant maps to a corresponding {@link DocumentLoader}:
+ * - `url` → {@link UrlLoader}
+ * - `text` → {@link TextLoader}
+ * - `file` → loads a single file, same format support as {@link DirectoryLoader}
+ */
+export type DocumentSource =
+  | { type: "url"; url: string; title?: string }
+  | { type: "text"; content: string; title: string }
+  | { type: "file"; path: string };
+
 // ─── Documents & Chunks ──────────────────────────────────────────────────────
 
 /** A loaded document with its original metadata. */
@@ -83,6 +114,17 @@ export interface VectorStore {
 
   /** Remove all chunks. */
   clear(): Promise<void>;
+
+  /**
+   * Delete all chunks belonging to a given source document.
+   *
+   * Optional — stores that don't support selective deletion should throw
+   * an error so the caller can fall back to a full rebuild.
+   *
+   * @param sourcePath The document path as stored in `RAGChunk.sourcePath`.
+   * @returns Number of chunks deleted (0 if none matched).
+   */
+  deleteBySource?(sourcePath: string): Promise<number>;
 }
 
 // ─── Re-ranker ────────────────────────────────────────────────────────────────

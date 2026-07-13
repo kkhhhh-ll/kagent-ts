@@ -12,9 +12,13 @@ import { ToolOutputTruncator } from "../tools/tool-output-truncator";
 import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { validateToolArgs } from "../tools/tool-validator";
 import { SkillManager } from "../skills/skill-manager";
+import type { SkillStore } from "../skills/skill-store";
 import { MemoryManager } from "../memory/memory-manager";
+import type { MemoryStore } from "../memory/memory-store";
 import { ProjectRules } from "../rules/project-rules";
+import type { RulesStore } from "../rules/rules-store";
 import { SessionManager } from "../session/session-manager";
+import type { SessionStore } from "../session/session-store";
 import {
   SessionState,
   SessionStatus,
@@ -22,6 +26,7 @@ import {
 } from "../session/session-types";
 import { countTokens } from "../utils/token-counter";
 import { PreferenceManager } from "../preferences/preference-manager";
+import type { PreferencesStore } from "../preferences/preferences-store";
 import { AgentHooks } from "./hooks";
 import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
@@ -32,6 +37,7 @@ import type { RAGConfig } from "../rag/rag-types";
 import {
   createSearchKnowledgeTool,
   createListKnowledgeDocumentsTool,
+  createIngestKnowledgeTool,
 } from "../rag/search-knowledge";
 import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
@@ -46,6 +52,7 @@ import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 import { detectSignals, matchSkills } from "../intent";
 import type { UserSignals, SkillMatch } from "../intent";
 import type { ErrorNotebook } from "../reflection/error-notebook";
+import type { ErrorNotebookStore } from "../reflection/error-notebook-store";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -126,20 +133,40 @@ export interface AgentConfig {
   /**
    * Path to a directory of file-based skills (each with a `SKILL.md`).
    * Skills are lazily loaded: metadata at startup, full content on activation.
+   * Ignored when `skillStore` is provided.
    */
   skillsDir?: string;
 
   /**
+   * Skill storage backend. When provided, `skillsDir` is ignored.
+   * Used for loading skills and persisting precipitated skills.
+   */
+  skillStore?: SkillStore;
+
+  /**
    * Path to long-term memory storage (default: `".memory"`). Persists facts,
    * rules, and decisions via `MEMORY.md` index + individual markdown files.
+   * Ignored when `memoryStore` is provided.
    */
   memoryDir?: string;
 
   /**
+   * Memory storage backend. When provided, `memoryDir` is ignored.
+   * Use a custom implementation (Postgres, Redis, etc.) for production.
+   */
+  memoryStore?: MemoryStore;
+
+  /**
    * Path to a project rules file (e.g. `"RULES.md"`) or directory
    * (e.g. `".rules/"`). User-authored, always injected, auto-reloaded.
+   * Ignored when `rulesStore` is provided.
    */
   rulesPath?: string;
+
+  /**
+   * Rules storage backend. When provided, `rulesPath` is ignored.
+   */
+  rulesStore?: RulesStore;
 
   /** Optional system prompt appended to the default system prompt. */
   systemPrompt?: string;
@@ -179,8 +206,14 @@ export interface AgentConfig {
    * Path to the preferences markdown file.
    * Default: ".kagent/preferences.md". Preferences are loaded
    * automatically and auto-reloaded before each run.
+   * Ignored when `preferencesStore` is provided.
    */
   preferencesPath?: string;
+
+  /**
+   * Preferences storage backend. When provided, `preferencesPath` is ignored.
+   */
+  preferencesStore?: PreferencesStore;
 
   // ─── Session Persistence ─────────────────────────────────────────────
 
@@ -192,8 +225,14 @@ export interface AgentConfig {
 
   /**
    * Directory for session checkpoint files (default: `.kagent-sessions/`).
+   * Ignored when `sessionStore` is provided.
    */
   sessionDir?: string;
+
+  /**
+   * Session storage backend. When provided, `sessionDir` is ignored.
+   */
+  sessionStore?: SessionStore;
 
   /** Auto-save checkpoints after each LLM+tools cycle for session resume. Default: false. */
   enableCheckpointing?: boolean;
@@ -325,6 +364,13 @@ export interface AgentConfig {
    * with defaults when reflection is enabled and no notebook is provided.
    */
   notebook?: ErrorNotebook;
+
+  /**
+   * Error notebook storage backend. When provided, used as the backend
+   * for any auto-created notebook. Ignored when `notebook` is explicitly
+   * provided.
+   */
+  errorNotebookStore?: ErrorNotebookStore;
 
   // ─── Answer Verification ──────────────────────────────────────────────
 
@@ -518,6 +564,9 @@ export abstract class Agent {
   /** Error notebook for scenario-bound mistake injection. */
   protected notebook?: ErrorNotebook;
 
+  /** Error notebook storage backend (used when auto-creating notebooks). */
+  protected errorNotebookStore?: ErrorNotebookStore;
+
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?:
     | AgentHooks
@@ -570,7 +619,7 @@ export abstract class Agent {
     if (cfg.skillManager) {
       this.skillManager = cfg.skillManager;
     } else {
-      this.skillManager = new SkillManager(this.logger);
+      this.skillManager = new SkillManager(this.logger, cfg.skillStore);
     }
 
     // Register file-based skills if a directory is configured
@@ -579,10 +628,17 @@ export abstract class Agent {
     }
 
     // Memory — long-term facts, rules, and project context
-    this.memoryManager = new MemoryManager(cfg.memoryDir);
+    this.memoryManager = new MemoryManager({
+      store: cfg.memoryStore,
+      storageDir: cfg.memoryDir,
+    });
 
     // Project rules — user-authored, always injected
-    this.projectRules = new ProjectRules(cfg.rulesPath, this.logger);
+    this.projectRules = new ProjectRules({
+      store: cfg.rulesStore,
+      rulesPath: cfg.rulesPath,
+      logger: this.logger,
+    });
 
     // Store core system prompt and set it
     this.coreSystemPrompt = cfg.systemPrompt ?? "";
@@ -591,10 +647,11 @@ export abstract class Agent {
     }
 
     // Session manager — only created when session ID or session dir is provided
-    if (cfg.sessionId || cfg.sessionDir) {
+    if (cfg.sessionId || cfg.sessionDir || cfg.sessionStore) {
       this.sessionManager = new SessionManager({
         sessionId: cfg.sessionId,
         sessionDir: cfg.sessionDir,
+        store: cfg.sessionStore,
       });
     }
     this.checkpointingEnabled = cfg.enableCheckpointing;
@@ -661,6 +718,7 @@ export abstract class Agent {
     }
 
     this.notebook = cfg.notebook;
+    this.errorNotebookStore = cfg.errorNotebookStore;
 
     // Resolve verification LLM:
     // 1. Explicit `verificationLLM` → use it directly
@@ -707,7 +765,10 @@ export abstract class Agent {
 
     // ── User Preferences ─────────────────────────────────────────────────
     this.preferenceManager = new PreferenceManager(
-      { filePath: cfg.preferencesPath ?? ".kagent/preferences.md" },
+      {
+        filePath: cfg.preferencesPath ?? ".kagent/preferences.md",
+        store: cfg.preferencesStore,
+      },
       this.logger,
     );
   }
@@ -1615,6 +1676,7 @@ export abstract class Agent {
       await this.ragManager.index();
       this.safeRegister(createSearchKnowledgeTool(this.ragManager));
       this.safeRegister(createListKnowledgeDocumentsTool(this.ragManager));
+      this.safeRegister(createIngestKnowledgeTool(this.ragManager));
     }
 
     // ── Skill tool (LLM-driven activation) ────────────────────────────

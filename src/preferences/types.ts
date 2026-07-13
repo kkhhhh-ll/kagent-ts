@@ -1,3 +1,5 @@
+import type { PreferencesStore } from "./preferences-store";
+
 /**
  * User preferences: key-value pairs of plain-text directives.
  *
@@ -24,4 +26,9 @@ export interface PreferenceManagerConfig {
    * Default: `.kagent/preferences.md` relative to cwd.
    */
   filePath?: string;
+  /**
+   * Storage backend. When provided, `filePath` is ignored.
+   * Omit to use the default file-system store.
+   */
+  store?: PreferencesStore;
 }

@@ -4,7 +4,8 @@
  * Lifecycle:
  *   1. `index()` — load documents from `documentsDir`, chunk, embed, store.
  *   2. `search(query, topK)` — embed query, search vector store, return results.
- *   3. `clear()` — wipe all indexed data.
+ *   3. `addDocument(doc)` / `removeDocument(path)` — runtime incremental updates.
+ *   4. `clear()` — wipe all indexed data.
  *
  * Owned by the main Agent; created during `Agent.init()` when `rag` config
  * is present.
@@ -13,14 +14,17 @@
 import type {
   RAGConfig,
   RAGDocument,
+  RAGChunk,
   RAGSearchResult,
   VectorStore,
   ReRanker,
+  DocumentSource,
+  DocumentLoader,
 } from "./rag-types";
-import { loadDocuments } from "./document-loader";
+import { loadDocuments, UrlLoader, TextLoader, FileLoader } from "./document-loader";
 import { InMemoryVectorStore } from "./vector-store";
 import { InMemoryKeywordIndex } from "./keyword-index";
-import { rrfFusion, chunkKey, type RankedResult } from "./rrf";
+import { rrfFusion, type RankedResult } from "./rrf";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
 export class RAGManager {
@@ -31,6 +35,8 @@ export class RAGManager {
   private logger: Logger;
   private documents: RAGDocument[] = [];
   private _indexed = false;
+  /** Map of document path → RAGDocument for dedup on runtime ingestion. */
+  private docMap = new Map<string, RAGDocument>();
 
   constructor(config: RAGConfig, logger?: Logger) {
     this.config = {
@@ -101,32 +107,11 @@ export class RAGManager {
       return;
     }
 
-    // Generate embeddings in batches
-    this.logger.info("RAG", `Generating embeddings (model: ${this.config.embeddingProvider.model})...`);
-    const texts = allChunks.map((c) => c.text);
-    const batchSize = 20;
-    const embeddings: number[][] = [];
-
-    for (let i = 0; i < texts.length; i += batchSize) {
-      const batch = texts.slice(i, i + batchSize);
-      const batchEmbeddings = await this.config.embeddingProvider.embed(batch);
-      embeddings.push(...batchEmbeddings);
-    }
-
-    // Attach embeddings to chunks
-    for (let i = 0; i < allChunks.length; i++) {
-      allChunks[i].embedding = embeddings[i];
-    }
-
-    await this.store.add(allChunks);
-
-    // Build keyword index for hybrid search (BM25)
-    if (this.keywordIndex) {
-      this.keywordIndex.add(allChunks);
-    }
+    await this.embedAndStore(allChunks);
 
     this.logger.info("RAG", `Indexing complete — ${this.store.size} chunk(s) in vector store${this.keywordIndex ? `, ${this.keywordIndex.size} in keyword index` : ""}.`);
     this._indexed = true;
+    this.rebuildDocMap();
   }
 
   /**
@@ -214,11 +199,175 @@ export class RAGManager {
     return lines.join("\n");
   }
 
+  // ─── Runtime Document Operations ────────────────────────────────────────
+
+  /**
+   * Add a single document to the knowledge base at runtime.
+   *
+   * Incremental — does NOT clear existing data. Generates embeddings and
+   * adds chunks to both the vector store and keyword index (if enabled).
+   *
+   * If a document with the same `path` already exists, it is replaced
+   * (old chunks removed first).
+   *
+   * @returns The number of chunks added.
+   */
+  async addDocument(document: RAGDocument): Promise<number> {
+    if (document.chunks.length === 0) return 0;
+
+    // Replace existing document with same path
+    if (this.docMap.has(document.path)) {
+      await this.removeDocument(document.path);
+    }
+
+    await this.embedAndStore(document.chunks);
+
+    this.documents.push(document);
+    this.docMap.set(document.path, document);
+    this._indexed = true;
+
+    this.logger.info("RAG", `Added document "${document.path}" (${document.chunks.length} chunk(s)). Total: ${this.store.size} chunk(s).`);
+
+    return document.chunks.length;
+  }
+
+  /**
+   * Add multiple documents at once.
+   *
+   * @returns Total number of chunks added across all documents.
+   */
+  async addDocuments(documents: RAGDocument[]): Promise<number> {
+    let total = 0;
+    for (const doc of documents) {
+      total += await this.addDocument(doc);
+    }
+    return total;
+  }
+
+  /**
+   * Add a document from a source descriptor (URL, text, or file path).
+   *
+   * Convenience method that resolves the source to a {@link DocumentLoader},
+   * loads the document, and adds it to the knowledge base.
+   *
+   * @returns The RAGDocument that was created and indexed.
+   */
+  async addFromSource(source: DocumentSource): Promise<RAGDocument | null> {
+    let loader: DocumentLoader;
+
+    switch (source.type) {
+      case "url":
+        loader = new UrlLoader(source.url, {
+          title: source.title,
+          chunkSize: this.config.chunkSize,
+          chunkOverlap: this.config.chunkOverlap,
+        });
+        break;
+      case "text":
+        loader = new TextLoader({
+          content: source.content,
+          title: source.title,
+          chunkSize: this.config.chunkSize,
+          chunkOverlap: this.config.chunkOverlap,
+        });
+        break;
+      case "file":
+        loader = new FileLoader(source.path, this.config.chunkSize, this.config.chunkOverlap);
+        break;
+    }
+
+    const docs = await loader.load();
+    if (docs.length === 0) return null;
+
+    const doc = docs[0];
+    await this.addDocument(doc);
+    return doc;
+  }
+
+  /**
+   * Remove a document by path from the knowledge base.
+   *
+   * Deletes chunks from the vector store and keyword index (if enabled).
+   * The document path must match exactly as returned by {@link documentPaths}.
+   *
+   * @returns `true` if the document was found and removed, `false` otherwise.
+   */
+  async removeDocument(path: string): Promise<boolean> {
+    const idx = this.documents.findIndex((d) => d.path === path);
+    if (idx === -1) return false;
+
+    this.documents.splice(idx, 1);
+    this.docMap.delete(path);
+
+    // Try to delete chunks from vector store
+    if (this.store.deleteBySource) {
+      try {
+        const deleted = await this.store.deleteBySource(path);
+        this.logger.info("RAG", `Removed ${deleted} chunk(s) for "${path}".`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn("RAG", `Failed to delete chunks for "${path}" from store: ${message}. Chunks may remain; full rebuild with index() will clean them up.`);
+      }
+    } else {
+      this.logger.warn("RAG", `VectorStore does not support deleteBySource — chunks for "${path}" remain in the store.`);
+    }
+
+    // Note: keyword index does not support selective deletion.
+    // This is acceptable because BM25 search will skip chunks whose source
+    // path no longer exists in our documents list (they won't be returned).
+    // A full `index()` rebuild will clean up both stores completely.
+
+    return true;
+  }
+
   /** Clear all indexed data. */
   async clear(): Promise<void> {
     await this.store.clear();
     this.keywordIndex?.clear();
     this.documents = [];
+    this.docMap.clear();
     this._indexed = false;
+  }
+
+  // ─── Internal Helpers ────────────────────────────────────────────────────
+
+  /**
+   * Generate embeddings for the given chunks and store them.
+   *
+   * Shared by `index()` (bulk) and `addDocument()` (incremental).
+   */
+  private async embedAndStore(chunks: RAGChunk[]): Promise<void> {
+    if (chunks.length === 0) return;
+
+    this.logger.info("RAG", `Generating embeddings for ${chunks.length} chunk(s) (model: ${this.config.embeddingProvider.model})...`);
+    const texts = chunks.map((c) => c.text);
+    const batchSize = 20;
+    const allEmbeddings: number[][] = [];
+
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      const batchEmbeddings = await this.config.embeddingProvider.embed(batch);
+      allEmbeddings.push(...batchEmbeddings);
+    }
+
+    // Attach embeddings to chunks
+    for (let i = 0; i < chunks.length; i++) {
+      chunks[i].embedding = allEmbeddings[i];
+    }
+
+    await this.store.add(chunks);
+
+    // Add to keyword index for hybrid search (BM25)
+    if (this.keywordIndex) {
+      this.keywordIndex.add(chunks);
+    }
+  }
+
+  /** Rebuild the doc map from the current documents array. */
+  private rebuildDocMap(): void {
+    this.docMap.clear();
+    for (const doc of this.documents) {
+      this.docMap.set(doc.path, doc);
+    }
   }
 }

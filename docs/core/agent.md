@@ -154,7 +154,7 @@ const agent = new ReActAgent({
 
 ## RAG 知识检索
 
-配置 `rag` 选项后，Agent 启动时会自动索引本地文档并注册 `search_knowledge` 工具：
+配置 `rag` 选项后，Agent 启动时会自动索引本地文档并注册 `search_knowledge`、`list_knowledge_documents`、`ingest_knowledge` 三个工具：
 
 ```ts
 import { OpenAIEmbeddingProvider } from 'kagent-ts'

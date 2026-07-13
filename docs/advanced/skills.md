@@ -104,6 +104,8 @@ import { ReActAgent, OpenAIProvider } from 'kagent-ts'
 const agent = new ReActAgent({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
   skillsDir: './skills',   // Skill 目录，Agent 启动时自动扫描
+  // 或注入自定义存储后端（传入后 skillsDir 被忽略）：
+  // skillStore: new PostgresSkillStore(db),
   tools: [
     // ... 其他工具
   ],

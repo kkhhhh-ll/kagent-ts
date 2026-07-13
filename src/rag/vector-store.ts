@@ -29,6 +29,17 @@ export class InMemoryVectorStore implements VectorStore {
   }
 
   /**
+   * Delete all chunks belonging to a given source document.
+   *
+   * @returns Number of chunks deleted.
+   */
+  async deleteBySource(sourcePath: string): Promise<number> {
+    const before = this.chunks.length;
+    this.chunks = this.chunks.filter((c) => c.sourcePath !== sourcePath);
+    return before - this.chunks.length;
+  }
+
+  /**
    * Search for the top-K most similar chunks via cosine similarity.
    *
    * Returns results sorted by similarity score descending (best match first).

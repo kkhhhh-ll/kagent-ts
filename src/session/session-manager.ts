@@ -1,6 +1,5 @@
-import * as fs from "fs";
-import * as path from "path";
 import { SessionState, SessionStatus } from "./session-types";
+import { SessionStore, FileSystemSessionStore } from "./session-store";
 
 /**
  * Configuration for the SessionManager.
@@ -10,12 +9,19 @@ export interface SessionManagerConfig {
   sessionId?: string;
   /** Storage directory for session files (default: .kagent-sessions/). */
   sessionDir?: string;
+  /**
+   * Storage backend. When provided, `sessionDir` is ignored.
+   * Omit to use the default file-system store.
+   */
+  store?: SessionStore;
 }
 
 /**
- * Manages session state persistence to disk.
+ * Manages session state persistence.
  *
- * Each session is stored as a single JSON file in the configured directory.
+ * Each session is stored via a pluggable {@link SessionStore}. The default
+ * file-system store writes one JSON file per session under `sessionDir/`.
+ *
  * Sessions are self-contained (messages are inline) so they survive any
  * memory/component lifecycle and can be resumed after process restarts.
  */
@@ -33,14 +39,16 @@ function validateSessionId(id: string): void {
 
 export class SessionManager {
   private sessionId: string;
-  private sessionDir: string;
+  private store: SessionStore;
 
   constructor(config?: SessionManagerConfig) {
     this.sessionId =
       config?.sessionId ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     validateSessionId(this.sessionId);
-    this.sessionDir = path.resolve(config?.sessionDir ?? ".kagent-sessions");
-    fs.mkdirSync(this.sessionDir, { recursive: true });
+    this.store =
+      config?.store ??
+      new FileSystemSessionStore(config?.sessionDir ?? ".kagent-sessions");
+    this.store.ensureDir();
   }
 
   // ─── Identity ──────────────────────────────────────────────────────────
@@ -49,8 +57,20 @@ export class SessionManager {
     return this.sessionId;
   }
 
+  /**
+   * Get the underlying storage backend.
+   * Useful for host systems that need direct access (e.g. session management UIs).
+   */
+  getStore(): SessionStore {
+    return this.store;
+  }
+
+  /**
+   * Get the session directory path.
+   * Delegates to the store when it exposes a directory path.
+   */
   getSessionDir(): string {
-    return this.sessionDir;
+    return this.store.getDir();
   }
 
   /**
@@ -64,14 +84,7 @@ export class SessionManager {
   // ─── Persistence ───────────────────────────────────────────────────────
 
   /**
-   * Get the file path for the current session.
-   */
-  private filePath(): string {
-    return path.join(this.sessionDir, `${this.sessionId}.json`);
-  }
-
-  /**
-   * Save a session checkpoint to disk.
+   * Save a session checkpoint via the store.
    *
    * Preserves the original `createdAt` timestamp so resuming a session
    * retains the original creation time. Updates `updatedAt` to now.
@@ -85,7 +98,7 @@ export class SessionManager {
       updatedAt: new Date().toISOString(),
     };
 
-    fs.writeFileSync(this.filePath(), JSON.stringify(stateToSave, null, 2), "utf-8");
+    this.store.save(this.sessionId, stateToSave);
   }
 
   /**
@@ -93,20 +106,7 @@ export class SessionManager {
    */
   loadSession(sessionId: string): SessionState | null {
     validateSessionId(sessionId);
-    const filePath = path.join(this.sessionDir, `${sessionId}.json`);
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = JSON.parse(raw) as SessionState;
-
-      // Basic structural validation
-      if (!parsed.sessionId || !parsed.agentType || !parsed.messages) {
-        return null;
-      }
-
-      return parsed;
-    } catch {
-      return null;
-    }
+    return this.store.load(sessionId);
   }
 
   /**
@@ -114,17 +114,11 @@ export class SessionManager {
    */
   listSessions(): SessionState[] {
     const sessions: SessionState[] = [];
+    const ids = this.store.list();
 
-    try {
-      const files = fs.readdirSync(this.sessionDir);
-      for (const file of files) {
-        if (!file.endsWith(".json")) continue;
-        const sessionId = file.slice(0, -".json".length);
-        const state = this.loadSession(sessionId);
-        if (state) sessions.push(state);
-      }
-    } catch {
-      // Directory doesn't exist or can't be read
+    for (const id of ids) {
+      const state = this.store.load(id);
+      if (state) sessions.push(state);
     }
 
     sessions.sort(
@@ -134,16 +128,11 @@ export class SessionManager {
   }
 
   /**
-   * Delete a session file from disk.
+   * Delete a session from the store.
    */
   deleteSession(sessionId: string): void {
     validateSessionId(sessionId);
-    const filePath = path.join(this.sessionDir, `${sessionId}.json`);
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      // File doesn't exist — that's fine
-    }
+    this.store.delete(sessionId);
   }
 
   /**

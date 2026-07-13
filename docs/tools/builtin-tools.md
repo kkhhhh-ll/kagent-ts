@@ -1,6 +1,6 @@
 # 内置工具
 
-kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、知识检索、记忆管理等场景。
+kagent-ts 提供了 16 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、知识检索、记忆管理等场景。
 
 ## 工具列表总览
 
@@ -16,6 +16,7 @@ kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执
 | `SkillTool` | 激活渐进式 Skill | |
 | `SearchKnowledgeTool` | 语义搜索 RAG 知识库 | |
 | `ListKnowledgeDocumentsTool` | 列出已索引的文档 | |
+| `IngestKnowledgeTool` | 运行时向知识库添加文档（URL/文本/文件） | |
 | `RememberTool` | 写入长期记忆 | |
 | `RecallTool` | 检索长期记忆 | |
 | `ListSubagentsTool` | 列出可用子代理 | |
@@ -154,6 +155,46 @@ console.log(BUILTIN_TOOL_NAMES)
 列出知识库中已索引的所有文档。
 
 仅当配置了 `rag` 时可用。
+
+### IngestKnowledgeTool
+
+运行时向 RAG 知识库添加文档，支持三种来源：
+
+| 来源类型 | `source` 值 | 必填参数 | 说明 |
+| -------- | ----------- | -------- | ---- |
+| URL 网页 | `"url"` | `url` | 抓取网页、去除 HTML 标签、自动检测标题 |
+| 内联文本 | `"text"` | `content`, `title` | 将任意文本直接索引入库 |
+| 本地文件 | `"file"` | `filePath` | 加载 .md/.txt/.json 文件 |
+
+```json
+// 从 URL 摄入
+{
+  "source": "url",
+  "url": "https://react.dev/blog/2024/12/05/react-19",
+  "title": "React 19 Release"
+}
+```
+
+```json
+// 从内联文本摄入
+{
+  "source": "text",
+  "content": "Kubernetes Pod 是 K8s 中最小的部署单元...",
+  "title": "K8s Pod 概念"
+}
+```
+
+```json
+// 从本地文件摄入
+{
+  "source": "file",
+  "filePath": "/home/user/docs/api-reference.md"
+}
+```
+
+文档添加后**立即可搜索**，`search_knowledge` 可立即命中新内容。相同路径的文档会自动替换（旧 chunks 删除，新 chunks 追加）。
+
+仅当配置了 `rag` 时可用。详见 [RAG 知识库](/advanced/rag)。
 
 ## 知识与记忆
 

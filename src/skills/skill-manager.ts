@@ -1,5 +1,6 @@
 import { Skill, SkillStatus } from "./types";
 import { FileSkillLoader } from "./file-skill-loader";
+import { SkillStore } from "./skill-store";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import {
   wrapUserAuthored,
@@ -23,9 +24,18 @@ import {
  */
 export class SkillManager {
   private logger: Logger;
+  private _store?: SkillStore;
 
-  constructor(logger?: Logger) {
+  constructor(logger?: Logger, store?: SkillStore) {
     this.logger = logger ?? new ConsoleLogger();
+    this._store = store;
+  }
+
+  /**
+   * Get the skill store, if one was set.
+   */
+  getStore(): SkillStore | undefined {
+    return this._store;
   }
 
   /** All registered skills (active or not), keyed by name. */
@@ -77,8 +87,9 @@ export class SkillManager {
    * @param dir Path to the skills directory.
    * @returns Number of skills successfully registered.
    */
-  registerFromDirectory(dir: string): number {
-    const loader = new FileSkillLoader(dir, this.logger);
+  registerFromDirectory(dir: string, store?: SkillStore): number {
+    const effectiveStore = store ?? this._store;
+    const loader = new FileSkillLoader(effectiveStore ?? dir);
     const scanned = loader.scan();
     let count = 0;
 

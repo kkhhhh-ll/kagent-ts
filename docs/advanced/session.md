@@ -44,10 +44,10 @@ console.log(answer)
 
 ## 会话文件
 
-会话保存在 `.kagent-sessions/` 目录下，每个会话一个 JSON 文件：
+会话默认保存在 `.kagent-sessions/` 目录下，每个会话一个 JSON 文件。可以通过 `sessionStore` 注入自定义存储后端（Postgres、Redis 等）：
 
 ```
-.kagent-sessions/
+.kagent-sessions/（默认 FileSystem 后端）
 ├── my-task-001.json
 ├── code-review-2024.json
 └── ...
@@ -80,7 +80,14 @@ type SessionStatus = "active" | "interrupted" | "completed" | "cancelled"
 ```ts
 import { SessionManager } from 'kagent-ts'
 
-const manager = new SessionManager({ sessionDir: './.kagent-sessions' })
+// 默认存储目录
+const manager = new SessionManager()
+
+// 自定义存储目录
+const manager2 = new SessionManager({ sessionDir: './.kagent-sessions' })
+
+// 注入自定义存储后端（生产环境）
+const manager3 = new SessionManager({ store: new PostgresSessionStore(db) })
 
 // 列出所有会话
 const sessions = manager.listSessions()
