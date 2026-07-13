@@ -8,6 +8,18 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 import type { AgentHooks } from "./hooks";
 
 /**
+ * Whitelist of tool names allowed in fork agents.
+ *
+ * Forks are read-only reviewers — they verify existing information, not
+ * modify the world. Any tool NOT in this set passed via `options.tools`
+ * is silently dropped with a warning log.
+ */
+const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ReadFileTool.name,
+  GrepSearchTool.name,
+]);
+
+/**
  * Options for {@link forkAgent}.
  */
 export interface ForkOptions {
@@ -15,7 +27,13 @@ export interface ForkOptions {
   systemPrompt: string;
   /** LLM provider (defaults to the parent agent's LLM when called via {@link Agent.fork}). */
   llm: LLMProvider;
-  /** Tools available to the fork. Defaults to read_file + grep_search. */
+  /**
+   * Tools available to the fork. Defaults to read_file + grep_search.
+   *
+   * **Only read-only tools are permitted.** Any tool whose name is not in
+   * the {@link READ_ONLY_TOOL_NAMES} whitelist is silently dropped with a
+   * warning log — fork agents are reviewers, not executors.
+   */
   tools?: Tool[];
   /** Maximum ReAct iterations (default: 5). */
   maxIterations?: number;
@@ -65,7 +83,33 @@ export async function forkAgent(
 
   const tools = new ToolRegistry();
   if (options.tools && options.tools.length > 0) {
-    tools.registerMany(options.tools);
+    const allowed: Tool[] = [];
+    const rejected: string[] = [];
+    for (const t of options.tools) {
+      if (READ_ONLY_TOOL_NAMES.has(t.name)) {
+        allowed.push(t);
+      } else {
+        rejected.push(t.name);
+      }
+    }
+    if (rejected.length > 0) {
+      logger.warn(
+        "ForkAgent",
+        `Rejected ${rejected.length} non-read-only tool(s): ${rejected.join(", ")}. ` +
+          `Only ${Array.from(READ_ONLY_TOOL_NAMES).join(", ")} are permitted in fork agents.`,
+      );
+    }
+    if (allowed.length > 0) {
+      tools.registerMany(allowed);
+    } else {
+      // All passed tools were rejected — fall back to safe defaults.
+      logger.warn(
+        "ForkAgent",
+        "All provided tools were rejected; falling back to default read-only tools.",
+      );
+      tools.register(ReadFileTool);
+      tools.register(GrepSearchTool);
+    }
   } else {
     tools.register(ReadFileTool);
     tools.register(GrepSearchTool);

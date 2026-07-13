@@ -111,6 +111,9 @@ interface FusionAgentConfig extends AgentConfig {
   /** 路由策略 (默认: "auto") */
   routing?: "auto" | "force-plan" | "force-react"
 
+  /** 复杂度分类专用 LLM Provider（不设置时自动走 ModelRouter.forLightweight()） */
+  routeLLM?: LLMProvider
+
   /** 计划确认模式 (默认: "always") */
   planConfirmation?: "always" | "auto" | "never"
 
@@ -261,6 +264,12 @@ interface AgentConfig {
    * 不设置时：如果 llm 是 ModelRouter，则走 forSubAgent()；否则复用主 llm。
    */
   subAgentLLM?: LLMProvider
+
+  /**
+   * 任务复杂度分类专用 LLM Provider（FusionAgent routing: "auto" 时使用）。
+   * 不设置时：如果 llm 是 ModelRouter，则走 forLightweight()；否则复用主 llm。
+   */
+  routeLLM?: LLMProvider
 
   // ── 技能 ──
   skillManager?: SkillManager                       // SkillManager 实例

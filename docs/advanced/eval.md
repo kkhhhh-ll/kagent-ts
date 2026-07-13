@@ -76,12 +76,21 @@ interface ToolCallStats {
 端到端评估：定义测试用例，创建 Agent 并自动校验结果。
 
 ```ts
-import { EvalRunner, ReActAgent } from 'kagent-ts'
+import { EvalRunner, ReActAgent, ModelRouter } from 'kagent-ts'
 
+// 方式 1: 传入 llm（ModelRouter）→ 自动走 forReflection() 做 unbiased review
 const runner = new EvalRunner({
-  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+  llm: router,  // ModelRouter 实例
   defaultTimeoutMs: 120_000,
 })
+
+// 方式 2: 显式指定 judgeLLM（完全控制评判模型）
+const runner2 = new EvalRunner({
+  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
+})
+
+// 方式 3: 都不传 → 跳过 LLM 评判（仅做工具调用 / 输出匹配检查）
+const runner3 = new EvalRunner()
 
 const results = await runner.run(
   // Agent 工厂 — 每个用例创建一个全新 Agent
@@ -245,7 +254,8 @@ await agent.run('分析项目结构')
 console.log('成功率:', (evaluator.getScorecard().overallSuccessRate * 100).toFixed(1) + '%')
 
 // ── 端到端评估 ──
-const runner = new EvalRunner({ judgeLLM: provider })
+// 传入 ModelRouter → judgeLLM 自动走 forReflection() 路由
+const runner = new EvalRunner({ llm: router })
 const results = await runner.run(
   (evaluator) => new ReActAgent({
     systemPrompt: '你是一个有用的 AI 助手。',

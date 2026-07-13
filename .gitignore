@@ -17,6 +17,7 @@ skills/
 subagents/
 .claude/
 mcp.json
+i.md
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 analysis/

@@ -104,10 +104,10 @@ const lightProvider = router.forLightweight()
 
 ## 与 Agent 集成
 
-Agent 会自动检测 `ModelRouter` 并为子代理、沉淀选择合适的 Provider：
+Agent 会自动检测 `ModelRouter` 并为子代理、沉淀等选择合适的 Provider：
 
 ```ts
-import { ReActAgent, ModelRouter, OpenAIProvider, AnthropicProvider } from 'kagent-ts'
+import { FusionAgent, ModelRouter, OpenAIProvider, AnthropicProvider } from 'kagent-ts'
 
 const router = new ModelRouter({
   main: new AnthropicProvider({
@@ -118,21 +118,38 @@ const router = new ModelRouter({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
   }),
+  lightweight: new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: 'gpt-4o-mini',
+  }),
   precipitation: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
   }),
 })
 
-const agent = new ReActAgent({
+const agent = new FusionAgent({
   llm: router,
   precipitation: "post-hoc",
   // Agent 会自动:
   // - 使用 main 路由执行主循环
+  // - 使用 lightweight 路由进行任务复杂度分类（routeLLM）
   // - 使用 subAgent 路由运行子代理
   // - 使用 precipitation 路由进行 Skill 沉淀
 })
 ```
+
+所有自动解析的路由：
+
+| 场景 | 自动解析路由 | 显式覆盖配置项 |
+|------|-------------|--------------|
+| 主执行循环 | `main` | — |
+| 任务复杂度分类 | `lightweight` | `routeLLM` |
+| 子代理 | `subAgent` | `subAgentLLM` |
+| 错题本反思 | `reflection` | `reflectionLLM` |
+| 答案验证 | `verification` | `verificationLLM` |
+| 记忆提取 | `memory` | `memoryReflectorLLM` |
+| Skill 沉淀 | `precipitation` | `precipitationLLM` |
 
 ## 与 Reflection / Memory 集成
 

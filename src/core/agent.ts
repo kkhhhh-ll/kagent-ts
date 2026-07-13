@@ -228,6 +228,15 @@ export interface AgentConfig {
   subAgentLLM?: LLMProvider;
 
   /**
+   * LLM provider for task-complexity routing / lightweight classification.
+   *
+   * Used by FusionAgent to decide whether a task is "simple" or "complex".
+   * When omitted, resolves via `ModelRouter.forLightweight()` or falls back
+   * to `llm`. Use a cheaper model — routing is a single lightweight call.
+   */
+  routeLLM?: LLMProvider;
+
+  /**
    * LLM provider for skill precipitation. When omitted, resolves via
    * `ModelRouter.forPrecipitation()` or falls back to `llm`. Use a cheaper
    * model — precipitation is background work.
@@ -492,6 +501,9 @@ export abstract class Agent {
   /** Max concurrent sub-agent runs (default: 3). */
   protected maxPending?: number;
 
+  /** LLM provider for task-complexity routing (defaults to main llm if not set). */
+  protected routeLLM?: LLMProvider;
+
   /** LLM provider for skill precipitation (defaults to main llm if not set). */
   protected precipitationLLM?: LLMProvider;
 
@@ -637,6 +649,16 @@ export abstract class Agent {
       this.subAgentLLM = cfg.llm.forSubAgent();
     }
     this.maxPending = cfg.maxPending;
+
+    // Resolve routing LLM (task-complexity classification):
+    // 1. Explicit `routeLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forLightweight()
+    // 3. Fallback → routing shares the main `llm`
+    if (cfg.routeLLM) {
+      this.routeLLM = cfg.routeLLM;
+    } else if (cfg.llm instanceof ModelRouter) {
+      this.routeLLM = cfg.llm.forLightweight();
+    }
 
     // Resolve precipitation LLM:
     // 1. Explicit `precipitationLLM` → use it directly

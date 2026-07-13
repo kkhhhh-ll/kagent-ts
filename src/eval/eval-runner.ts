@@ -1,4 +1,5 @@
 import type { LLMProvider, LLMResponse } from "../llm/interface";
+import { ModelRouter } from "../llm/model-router";
 import type { MessageData } from "../messages/types";
 import { Role } from "../messages/types";
 import { ToolCallEvaluator } from "./tool-call-evaluator";
@@ -29,12 +30,25 @@ export interface EvalRunnerConfig {
   defaultTimeoutMs?: number;
 
   /**
+   * The main LLM provider used by the agents under test.
+   *
+   * When set and `judgeLLM` is not explicitly provided, the runner
+   * auto-resolves `judgeLLM` via `ModelRouter.forReflection()` if this
+   * is a ModelRouter — providing an unbiased quality assessment with
+   * a different model.
+   */
+  llm?: LLMProvider;
+
+  /**
    * Optional LLM provider for answer quality judging.
    * When set, each case's final answer is independently evaluated.
    *
+   * When omitted:
+   * 1. If `llm` is a ModelRouter → uses `router.forReflection()`
+   * 2. Otherwise → LLM judging is skipped
+   *
    * Using a different model than the agent's own LLM provides an
-   * unbiased quality assessment. Pass `router.forReflection()` from
-   * a ModelRouter for this purpose.
+   * unbiased quality assessment.
    */
   judgeLLM?: LLMProvider;
 }
@@ -85,7 +99,16 @@ export class EvalRunner {
 
   constructor(config?: EvalRunnerConfig) {
     this.defaultTimeoutMs = config?.defaultTimeoutMs ?? 120_000;
-    this.judgeLLM = config?.judgeLLM;
+
+    // Resolve judge LLM:
+    // 1. Explicit `judgeLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forReflection() (unbiased review)
+    // 3. Neither → skip LLM judging
+    if (config?.judgeLLM) {
+      this.judgeLLM = config.judgeLLM;
+    } else if (config?.llm instanceof ModelRouter) {
+      this.judgeLLM = config.llm.forReflection();
+    }
   }
 
   /**

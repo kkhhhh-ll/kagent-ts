@@ -382,7 +382,7 @@ export class FusionAgent extends Agent {
     ];
 
     try {
-      const response = await this.llm.chat(messages, [], this._abortController?.signal);
+      const response = await (this.routeLLM ?? this.llm).chat(messages, [], this._abortController?.signal);
       const parsed = parseFusionRouteResponse(response.content);
 
       // Record token usage

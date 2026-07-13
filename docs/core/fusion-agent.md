@@ -94,6 +94,10 @@ interface FusionAgentConfig extends AgentConfig {
   // "force-plan":  始终走 Plan → Execute 流程
   // "force-react": 始终走 ReAct 直接执行
 
+  // ── 路由 LLM ──
+  routeLLM?: LLMProvider
+  // 复杂度分类专用 LLM。不设置时自动走 ModelRouter.forLightweight() 或复用 llm
+
   // ── 计划确认 ──
   planConfirmation?: 'always' | 'auto' | 'never'  // (默认: "always")
   onPlanConfirm?: PlanConfirmCallback
@@ -136,6 +140,21 @@ LLM: {"complexity": "complex", "reason": "涉及多文件修改和架构决策"}
 
 用户: "当前目录下有哪些 .ts 文件？"
 LLM: {"complexity": "simple", "reason": "单步工具调用即可完成"}
+```
+
+复杂度分类是一次轻量级 LLM 调用。当使用 `ModelRouter` 时，框架会自动使用 `lightweight` 路由（可通过 `routeLLM` 显式覆盖），避免用昂贵的主模型做简单分类：
+
+```ts
+const router = new ModelRouter({
+  main: new AnthropicProvider({ model: 'claude-sonnet-4-6' }),
+  lightweight: new OpenAIProvider({ model: 'gpt-4o-mini' }),  // 复杂度分类走这里
+})
+
+const agent = new FusionAgent({
+  llm: router,
+  routing: 'auto',
+  // routeLLM 自动解析为 router.forLightweight()，无需手动设置
+})
 ```
 
 ## Post-hoc 子系统

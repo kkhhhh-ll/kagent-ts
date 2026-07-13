@@ -9,7 +9,7 @@
 | 触发方式 | 代码直接调用 | LLM 通过 `Task` 工具动态 spawn |
 | 定义位置 | 代码内 | `./subagents/` 目录 |
 | 上下文 | 调用方显式传入（prompt 字符串） | 继承主 Agent 上下文 |
-| 工具 | 默认只读（`read_file` + `grep_search`），可自定义 | 完整工具集 |
+| 工具 | 强制只读白名单（`read_file` + `grep_search`），写工具被拒绝 | 完整工具集 |
 | 隔离 | 无（共享进程） | 可选 worktree 隔离 |
 | 开销 | 极低（一个函数调用） | 较高（spawn + 管理） |
 
@@ -64,7 +64,11 @@ interface ForkOptions {
   systemPrompt: string
   /** LLM provider（必填）。 */
   llm: LLMProvider
-  /** 可用工具。默认 read_file + grep_search。 */
+  /**
+   * 可用工具。**强制只读白名单**——只允许 `read_file` 和 `grep_search`。
+   * 传入写工具（如 `write_file`、`edit_file`、`bash`）会被静默拒绝并写入 warn 日志，
+   * 全部被拒时自动 fallback 到默认只读工具。
+   */
   tools?: Tool[]
   /** 最大 ReAct 迭代次数（默认 5）。 */
   maxIterations?: number
@@ -84,6 +88,54 @@ interface ForkOptions {
   hooks?: AgentHooks | AgentHooks[]
 }
 ```
+
+## 只读白名单安全机制
+
+`forkAgent` 强制实施只读工具白名单。只有 `read_file` 和 `grep_search` 被允许——任何其他工具名都会被拒绝。这不是一个可选的默认值，而是**运行时强制**的安全策略。
+
+**为什么这么严格？**
+
+Fork Agent 的角色是"审查者"而非"执行者"——它验证已有信息，不改变世界：
+
+- **Verification**：检查 Agent 声称的文件路径是否存在
+- **Reflection**：验证会话中的错误是否是真实 bug
+- **MemoryReflection**：提取关键信息形成记忆条目
+- **Precipitation**：分析成功经验，生成 SKILL.md 候选
+
+写入操作（`write_file`、`edit_file`、`bash`）在 fork 中不必要且危险——这是防御 prompt injection 的核心措施：即使攻击载荷成功注入 fork 子 Agent 的 prompt，攻击者也只能读到文件，无法写入或执行命令。
+
+**白名单是如何执行的？**
+
+```ts
+const READ_ONLY_TOOL_NAMES = new Set(["read_file", "grep_search"]);
+
+// 当调用方传入自定义 tools 时，按白名单过滤
+if (options.tools && options.tools.length > 0) {
+  const allowed = [];  // 通过白名单的
+  const rejected = []; // 被拒绝的
+  for (const t of options.tools) {
+    if (READ_ONLY_TOOL_NAMES.has(t.name)) {
+      allowed.push(t);
+    } else {
+      rejected.push(t.name);
+    }
+  }
+  // 被拒绝的 → warn 日志（可观测但不中断）
+  // 全部被拒 → fallback 到默认只读工具（不裸奔）
+}
+```
+
+**三道防线**：
+
+| 防线 | 机制 | 说明 |
+|------|------|------|
+| ① 白名单过滤 | `READ_ONLY_TOOL_NAMES` | 运行时检查，非白名单工具直接拒绝 |
+| ② `skipAutoTools` | `ReActAgent` 初始化参数 | 禁止自动注册 `remember`、`recall`、`skill` 等副作用工具 |
+| ③ `disableSubAgents` | `ReActAgent` 初始化参数 | 禁止 fork 内再 spawn 子 Agent |
+
+即使白名单被绕过（如有人伪造了名为 `read_file` 的写工具），防线 ② 和 ③ 仍提供额外保护层。
+
+**可观测性**：被拒绝的工具会写入 `logger.warn` 日志，包含被拒工具名和允许列表。如果所有传入工具均被拒绝，另外输出一条 warn 日志说明已 fallback 到默认只读工具。
 
 ## Agent 基类的 fork() 方法
 
