@@ -10,7 +10,7 @@ import { wrapAndScan } from "../security/boundaries";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { SessionState, SessionStatus } from "../session/session-types";
-import type { ErrorNotebook } from "../reflection/error-notebook";
+
 
 /**
  * Default system prompt for the Plan-and-Solve paradigm.
@@ -69,11 +69,6 @@ export interface PlanSolveAgentConfig extends AgentConfig {
   /** Max iterations for the reflection sub-agent. Default: 6. */
   reflectionMaxIterations?: number;
 
-  /**
-   * ErrorNotebook for persisting error reflection findings.
-   * Auto-created with defaults when `reflection` is "post-hoc" and not provided.
-   */
-  notebook?: ErrorNotebook;
 }
 
 /**
@@ -103,7 +98,7 @@ export class PlanSolveAgent extends Agent {
   private memoryReflectionMaxIterations: number;
   private reflectionMode: "off" | "post-hoc";
   private reflectionMaxIterations: number;
-  private notebook?: ErrorNotebook;
+
 
   /** The current plan steps (empty until the plan is created). */
   private currentPlan: string[] = [];
@@ -142,7 +137,6 @@ export class PlanSolveAgent extends Agent {
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
     this.reflectionMode = config.reflection ?? "off";
     this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
-    this.notebook = config.notebook;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -1185,6 +1179,7 @@ export class PlanSolveAgent extends Agent {
         finalAnswer: answer,
         conversation: this.contextManager.getContextMessages(),
         sessionId: this.getSessionId(),
+        scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
       });
 
       if (entries.length > 0) {

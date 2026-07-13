@@ -17,7 +17,7 @@ import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
-import { ErrorNotebook } from "../reflection/error-notebook";
+
 
 // ─── System Prompt ────────────────────────────────────────────────────────
 
@@ -101,12 +101,6 @@ export interface FusionAgentConfig extends AgentConfig {
    */
   reflection?: "off" | "post-hoc";
 
-  /**
-   * ErrorNotebook instance for persisting reflection findings.
-   * Auto-created with defaults when `reflection` is "post-hoc" and not provided.
-   */
-  notebook?: ErrorNotebook;
-
   /** Max iterations for the reflection sub-agent. Default: 6. */
   reflectionMaxIterations?: number;
 
@@ -180,7 +174,7 @@ export class FusionAgent extends Agent {
   private maxPlanSteps: number;
   private reflectionMode: "off" | "post-hoc";
   private reflectionMaxIterations: number;
-  private notebook?: ErrorNotebook;
+
   private maxIterations: number;
   private replanThreshold: number;
   private precipitationMode: "off" | "post-hoc";
@@ -216,12 +210,11 @@ export class FusionAgent extends Agent {
     super(mergedConfig);
 
     this.routing = config.routing ?? "auto";
-    this.planConfirmation = config.planConfirmation ?? "auto";
+    this.planConfirmation = config.planConfirmation ?? "always";
     this.onPlanConfirm = config.onPlanConfirm;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.reflectionMode = config.reflection ?? "off";
     this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
-    this.notebook = config.notebook;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
@@ -557,8 +550,10 @@ export class FusionAgent extends Agent {
       case "never":
         return false;
       case "auto":
-        // Auto: check if plan contains risky operations
-        return planHasRiskyOps(_plan);
+        // Auto: only confirm for genuinely destructive operations.
+        // Low-risk ops (deploy, migrate, reset) are routine and
+        // shouldn't interrupt the user every time.
+        return planHasRiskyOps(_plan) === "high";
       default:
         return false;
     }
@@ -1011,6 +1006,7 @@ export class FusionAgent extends Agent {
         finalAnswer: answer,
         conversation: contextMessages,
         sessionId: this.getSessionId(),
+        scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
       });
 
       if (entries.length > 0) {

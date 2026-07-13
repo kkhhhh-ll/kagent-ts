@@ -2,6 +2,7 @@ import { LLMProvider } from "../llm/interface";
 import { MessageData, Role } from "../messages/types";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS } from "../core/response-schema";
 import { ErrorNotebook, ErrorNotebookEntry, ReflectionErrorCategory } from "./error-notebook";
+import type { AgentScenario } from "../intent/signal-detector";
 import type { ToolErrorTrace } from "../tools/types";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { forkAgent } from "../core/fork.js";
@@ -24,6 +25,8 @@ export interface ReflectionInput {
   errorTraces?: ToolErrorTrace[];
   /** Session identifier for notebook entries. */
   sessionId: string;
+  /** The task scenarios detected from the user's input (multi-label, for error-notebook binding). */
+  scenarios?: AgentScenario[];
 }
 
 /**
@@ -343,6 +346,7 @@ export class ReflectionAgent {
           description: f.description,
           cause: f.cause,
           suggestion: f.suggestion,
+          scenarios: input.scenarios,
           userQuery: input.userQuery,
           finalAnswer: input.finalAnswer,
           relatedTraceIds: f.relatedTraceIds,

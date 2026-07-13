@@ -45,6 +45,7 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 import { detectSignals, matchSkills } from "../intent";
 import type { UserSignals, SkillMatch } from "../intent";
+import type { ErrorNotebook } from "../reflection/error-notebook";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -318,6 +319,13 @@ export interface AgentConfig {
    */
   reflectionLLM?: LLMProvider;
 
+  /**
+   * ErrorNotebook for persisting error reflection findings and injecting
+   * past mistakes into the system prompt (scenario-bound). Auto-created
+   * with defaults when reflection is enabled and no notebook is provided.
+   */
+  notebook?: ErrorNotebook;
+
   // ─── Answer Verification ──────────────────────────────────────────────
 
   /**
@@ -502,10 +510,13 @@ export abstract class Agent {
   protected verificationThreshold: number = 70;
 
   /** Signals detected from the current run's user input. */
-  protected inputSignals: UserSignals = { wantsRemember: false, hasRiskyOps: false };
+  protected inputSignals: UserSignals = { wantsRemember: false, riskLevel: "none", scenarios: [], complexity: "simple" };
 
   /** Skills auto-activated by keyword/name matching (before LLM involvement). */
   protected autoActivatedSkills: SkillMatch[] = [];
+
+  /** Error notebook for scenario-bound mistake injection. */
+  protected notebook?: ErrorNotebook;
 
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?:
@@ -648,6 +659,8 @@ export abstract class Agent {
     } else if (cfg.llm instanceof ModelRouter) {
       this.reflectionLLM = cfg.llm.forReflection();
     }
+
+    this.notebook = cfg.notebook;
 
     // Resolve verification LLM:
     // 1. Explicit `verificationLLM` → use it directly
@@ -814,6 +827,13 @@ export abstract class Agent {
    * calling this and concatenating, rather than duplicating the assembly.
    */
   protected buildSystemPrompt(): string {
+    // Scenario-bound error notebook prompt — only shows past mistakes
+    // relevant to the current task type (zero-injection when no scenario matched)
+    const scenarioPrompt =
+      this.notebook && this.inputSignals.scenarios.length > 0
+        ? this.notebook.buildScenarioPrompt(this.inputSignals.scenarios, 5, 1)
+        : "";
+
     const sections = [
       this.coreSystemPrompt,
       SECURITY_GUIDANCE,
@@ -823,6 +843,7 @@ export abstract class Agent {
       this.memoryManager.buildPromptHint(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
+      scenarioPrompt,
     ].filter(Boolean);
 
     return sections.join("");
@@ -1716,9 +1737,10 @@ export abstract class Agent {
     if (this.inputSignals.wantsRemember) {
       this.logger.info("Intent", "User intent to remember detected.");
     }
-    if (this.inputSignals.hasRiskyOps) {
-      this.logger.info("Intent", "Risky operation keywords detected in user input.");
-    }
+    this.logger.info(
+      "Intent",
+      `Signals detected — risk: ${this.inputSignals.riskLevel}, scenarios: [${this.inputSignals.scenarios.join(", ") || "none"}], complexity: ${this.inputSignals.complexity}`,
+    );
   }
 
   /**

@@ -9,7 +9,9 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   ↓
 [Intent] 信号检测 + Skill 关键词匹配（零 LLM 开销）
   ├── wantsRemember → 强制触发沉淀/记忆
-  ├── hasRiskyOps → planConfirmation 安全检测
+  ├── riskLevel    → "none" / "low" / "high"（否定感知）
+  ├── scenarios[]  → 多标签任务场景
+  ├── complexity   → 复杂度预估
   └── 匹配到 Skill → 自动激活注入 System Prompt
   ↓
 [ROUTE] 复杂度分类:
@@ -65,7 +67,7 @@ const agent = new FusionAgent({
   routing: 'auto',            // "auto" | "force-plan" | "force-react"
 
   // ── 计划确认 ──
-  planConfirmation: 'auto',   // "never" | "always" | "auto"
+  planConfirmation: 'always',  // "always" | "auto" | "never" (默认: "always")
   // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── Post-hoc 子系统 ──
@@ -93,11 +95,11 @@ interface FusionAgentConfig extends AgentConfig {
   // "force-react": 始终走 ReAct 直接执行
 
   // ── 计划确认 ──
-  planConfirmation?: 'never' | 'always' | 'auto'
+  planConfirmation?: 'always' | 'auto' | 'never'  // (默认: "always")
   onPlanConfirm?: PlanConfirmCallback
+  // "always": 始终先让用户确认计划（默认）
+  // "auto":   仅当检测到高风险操作（delete, drop, force push 等）时请求确认
   // "never":  直接执行，不确认
-  // "always": 始终先让用户确认计划
-  // "auto":   仅当检测到高风险工具时请求确认
 
   // ── 答案验证 ──
   verification?: 'off' | 'post-hoc'     // (默认: "off") — 阻塞式
@@ -179,7 +181,7 @@ precipitation: 'post-hoc'  // 开启
 ```ts
 const agent = new FusionAgent({
   // ...
-  planConfirmation: 'auto',
+  planConfirmation: 'always',
   onPlanConfirm: async (plan, reason) => {
     console.log('计划:', plan)
     console.log('原因:', reason)
@@ -189,7 +191,15 @@ const agent = new FusionAgent({
 })
 ```
 
-在 `"auto"` 模式下，当计划中包含高风险关键词（如 `delete`, `rm`, `drop`, `format`）时，自动请求用户确认。
+在 `"auto"` 模式下，当计划中包含**高风险操作**（`delete`, `drop`, `force push`, `rm -rf` 等）时，自动请求用户确认。**低风险操作**（`deploy`, `release`, `migrate`, `reset`）不会触发确认——这些被视为常规操作。
+
+| 风险等级 | 关键词示例 | auto 行为 |
+|----------|-----------|----------|
+| `"high"` | `delete`, `drop`, `destroy`, `purge`, `format`, `truncate`, `rm -rf`, `force push`, `hard reset` | **触发确认** |
+| `"low"` | `deploy`, `release`, `publish`, `ship`, `migrate`, `reset` | **不触发确认** |
+| `"none"` | 无风险关键词或全部被否定（如 `"不要删除"`） | 不触发确认 |
+
+如果用户说 `"deploy the app but don't delete old files"`，`"delete"` 所在的句子含否定标记 `"don't"`，被排除。`"deploy"` 属于低风险，不触发确认。最终 `riskLevel = "low"` → 不确认。
 
 计划确认同样受 `approvalTimeoutMs` 超时保护——超时后将计划以文本形式返回给用户，等待手动恢复。详见 [HITL 审批](/tools/approval)。
 
@@ -207,7 +217,7 @@ const agent = new FusionAgent({
   tools: BUILTIN_TOOLS,
 
   routing: 'auto',
-  planConfirmation: 'auto',
+  planConfirmation: 'always',
   reflection: 'post-hoc',
   memoryReflection: 'post-hoc',
   maxIterations: 20,

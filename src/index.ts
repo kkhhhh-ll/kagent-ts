@@ -266,7 +266,7 @@ export type {
 } from "./reflection/memory-reflector";
 // Intent — user signal detection + skill keyword matching
 export { detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt } from "./intent";
-export type { UserSignals, SkillMatch } from "./intent";
+export type { UserSignals, SkillMatch, AgentScenario, RiskLevel, TaskComplexity } from "./intent";
 
 // Verification — answer correctness & completeness check
 export { VerifyAgent } from "./verification/verify-agent";

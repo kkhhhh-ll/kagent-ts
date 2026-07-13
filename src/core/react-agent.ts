@@ -9,7 +9,7 @@ import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
-import type { ErrorNotebook } from "../reflection/error-notebook";
+
 
 /**
  * Default system prompt for ReAct-style reasoning.
@@ -54,12 +54,6 @@ export interface ReActAgentConfig extends AgentConfig {
 
   /** Max iterations for the reflection sub-agent. Default: 6. */
   reflectionMaxIterations?: number;
-
-  /**
-   * ErrorNotebook for persisting error reflection findings.
-   * Auto-created with defaults when `reflection` is "post-hoc" and not provided.
-   */
-  notebook?: ErrorNotebook;
 }
 
 /**
@@ -85,7 +79,6 @@ export class ReActAgent extends Agent {
   private memoryReflectionMaxIterations: number;
   private reflectionMode: "off" | "post-hoc";
   private reflectionMaxIterations: number;
-  private notebook?: ErrorNotebook;
 
   constructor(config: ReActAgentConfig) {
     const mergedConfig: ReActAgentConfig = {
@@ -101,7 +94,6 @@ export class ReActAgent extends Agent {
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
     this.reflectionMode = config.reflection ?? "off";
     this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
-    this.notebook = config.notebook;
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -855,6 +847,7 @@ export class ReActAgent extends Agent {
         finalAnswer: answer,
         conversation: this.contextManager.getContextMessages(),
         sessionId: this.getSessionId(),
+        scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
       });
 
       if (entries.length > 0) {

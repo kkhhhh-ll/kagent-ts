@@ -21,7 +21,7 @@ interface ReActAgentConfig extends AgentConfig {
   /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
-  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  /** 反思子 Agent 最大迭代次数 (默认: 6) */
   reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
@@ -35,6 +35,9 @@ interface ReActAgentConfig extends AgentConfig {
 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
+
+  /** ErrorNotebook 实例（可选，不传自动创建） */
+  notebook?: ErrorNotebook
 }
 ```
 
@@ -71,7 +74,7 @@ interface PlanSolveAgentConfig extends AgentConfig {
   /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
-  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  /** 反思子 Agent 最大迭代次数 (默认: 6) */
   reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
@@ -85,6 +88,9 @@ interface PlanSolveAgentConfig extends AgentConfig {
 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
+
+  /** ErrorNotebook 实例（可选，不传自动创建） */
+  notebook?: ErrorNotebook
 }
 ```
 
@@ -105,8 +111,8 @@ interface FusionAgentConfig extends AgentConfig {
   /** 路由策略 (默认: "auto") */
   routing?: "auto" | "force-plan" | "force-react"
 
-  /** 计划确认模式 (默认: "auto") */
-  planConfirmation?: "never" | "always" | "auto"
+  /** 计划确认模式 (默认: "always") */
+  planConfirmation?: "always" | "auto" | "never"
 
   /** 计划确认回调 */
   onPlanConfirm?: PlanConfirmCallback
@@ -117,7 +123,7 @@ interface FusionAgentConfig extends AgentConfig {
   /** 错题本反思模式 (默认: "off") — fire-and-forget */
   reflection?: "off" | "post-hoc"
 
-  /** 反思子 Agent 最大迭代次数 (默认: 4) */
+  /** 反思子 Agent 最大迭代次数 (默认: 6) */
   reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */

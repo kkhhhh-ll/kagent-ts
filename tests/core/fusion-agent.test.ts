@@ -95,6 +95,7 @@ function createSimpleAgent(config: Partial<FusionAgentConfig> = {}) {
     toolRegistry: new ToolRegistry(),
     logger: new SilentLogger(),
     maxIterations: 5,
+    planConfirmation: "auto",  // tests that need "always" or "never" override via ...config
     ...config,
   });
 }
@@ -133,6 +134,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "force-plan",
+        planConfirmation: "never",
         maxIterations: 5,
       });
 
@@ -175,6 +177,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 5,
       });
 
@@ -210,6 +213,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 5,
       });
 
@@ -237,6 +241,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "force-plan",
+        planConfirmation: "never",
         maxPlanSteps: 5,
         maxIterations: 5,
       });
@@ -367,6 +372,7 @@ describe("FusionAgent", () => {
         toolRegistry,
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 5,
       });
 
@@ -414,6 +420,7 @@ describe("FusionAgent", () => {
         toolRegistry,
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 10,
       });
 
@@ -440,6 +447,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 10,
       });
 
@@ -489,6 +497,7 @@ describe("FusionAgent", () => {
         toolRegistry,
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 10,
         replanThreshold: 2,
       });
@@ -735,6 +744,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 5,
         hooks: [
           {
@@ -764,6 +774,7 @@ describe("FusionAgent", () => {
         toolRegistry: new ToolRegistry(),
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 5,
         hooks: [
           {
@@ -883,6 +894,7 @@ describe("FusionAgent", () => {
         enableCheckpointing: true,
         logger: new SilentLogger(),
         routing: "auto",
+        planConfirmation: "never",
         maxIterations: 10,
       });
 
@@ -931,9 +943,9 @@ describe("FusionAgent", () => {
       expect(result).toContain("Report written.");
     });
 
-    it("triggers confirmation for plans with risky keywords", async () => {
+    it("triggers confirmation for plans with high-risk keywords (delete / drop / force push etc.)", async () => {
       const llm = mockSequenceLLM([
-        [planJSON(["Step 1: deploy to production", "Step 2: verify deployment"])],
+        [planJSON(["Step 1: delete all records", "Step 2: drop the table"])],
       ]);
 
       const agent = new FusionAgent({
@@ -942,13 +954,33 @@ describe("FusionAgent", () => {
         logger: new SilentLogger(),
         routing: "force-plan",
         planConfirmation: "auto",
-        // No onPlanConfirm → when auto detects risky keywords, plan is returned
+        // No onPlanConfirm → when auto detects HIGH-risk keywords, plan is returned
         maxIterations: 5,
       });
 
-      const result = await agent.run("deploy the app");
+      const result = await agent.run("delete all user data");
       // Should contain the plan text (confirmation required, no callback)
-      expect(result).toContain("deploy to production");
+      expect(result).toContain("delete all records");
+    });
+
+    it("auto-confirms plans with only low-risk keywords (deploy / release / migrate)", async () => {
+      const llm = mockSequenceLLM([
+        [planJSON(["Step 1: deploy to production", "Step 2: verify deployment"])],
+        [answerJSON("Deployment complete.")],
+      ]);
+
+      const agent = new FusionAgent({
+        llm,
+        toolRegistry: new ToolRegistry(),
+        logger: new SilentLogger(),
+        routing: "force-plan",
+        planConfirmation: "auto",
+        maxIterations: 5,
+      });
+
+      // Low-risk ops (deploy, release, etc.) should NOT trigger confirmation
+      const result = await agent.run("deploy the app");
+      expect(result).toContain("Deployment complete.");
     });
   });
 

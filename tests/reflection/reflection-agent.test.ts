@@ -728,8 +728,8 @@ describe("ErrorNotebook", () => {
     });
 
     it("handles empty/corrupt index gracefully (starts fresh)", () => {
-      const indexFile = path.join(notebookDir, "index.json");
-      fs.writeFileSync(indexFile, "garbage{{{not json", "utf-8");
+      const indexFile = path.join(notebookDir, "README.md");
+      fs.writeFileSync(indexFile, "garbage{{{not markdown links", "utf-8");
 
       const fresh = new ErrorNotebook({ storageDir: notebookDir });
       expect(fresh.count).toBe(0);
@@ -744,7 +744,7 @@ describe("ErrorNotebook", () => {
         suggestion: "?",
       });
 
-      const entryFile = path.join(notebookDir, "entries", `${entry.id}.json`);
+      const entryFile = path.join(notebookDir, "entries", `${entry.id}.md`);
       fs.unlinkSync(entryFile);
 
       const results = notebook.getBySession("ghost");
