@@ -248,6 +248,7 @@ interface AgentConfig {
   subAgentsDir?: string                             // 子 Agent 定义目录
   disableSubAgents?: boolean                        // 禁用子 Agent
   skipAutoTools?: boolean                           // 跳过子 Agent 工具自动注册
+  maxPending?: number                               // 最大并行子 Agent 数 (默认: 3)
 
   /**
    * 子 Agent 的生命周期钩子。

@@ -48,6 +48,9 @@ interface AgentConfig {
   // ── 子代理生命周期钩子（支持静态/数组/工厂函数）──
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
+  // ── 最大并行子 Agent 数 (默认: 3) ──
+  maxPending?: number
+
   // ── 子 Agent 专用 LLM Provider（默认复用 llm）──
   subAgentLLM?: LLMProvider
 

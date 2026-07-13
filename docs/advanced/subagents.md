@@ -129,6 +129,18 @@ const agent = new ReActAgent({
 })
 ```
 
+### 控制并行度
+
+`maxPending` 控制最多同时运行的子 Agent 数量（默认 `3`）。当并行子 Agent 数达到上限时，`spawn_subagent` 工具会返回 "wait" 错误，LLM 会自动等待已完成的结果再继续：
+
+```ts
+const agent = new ReActAgent({
+  llm: provider,
+  subAgentsDir: './subagents',
+  maxPending: 5,   // 最多同时运行 5 个子 Agent
+})
+```
+
 ## 异步生命周期
 
 ```
