@@ -25,7 +25,7 @@ const DEFAULT_FUSION_SYSTEM_PROMPT = `You are a helpful AI assistant powered by 
 You dynamically adapt your strategy to the task's complexity.
 
 For SIMPLE tasks: direct ReAct (Reasoning + Acting) loop.
-For COMPLEX tasks: Plan → Execute → Reflect.
+For COMPLEX tasks: Plan → ReAct loop with plan tracking & dynamic replanning.
 
 You have access to a set of tools you can use to answer the user's question.
 ${SECURITY_GUIDANCE}
@@ -245,12 +245,12 @@ export class FusionAgent extends Agent {
     // ── Reload dynamic resources ─────────────────────────────────────
     await this.reloadDynamicResources();
 
+    // ── Recover orphaned sub-agent results ───────────────────────────
+    this.recoverOrphanedSubAgentResults();
+
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
     this.matchInputSkills(input);
-
-    // ── Recover orphaned sub-agent results ───────────────────────────
-    this.recoverOrphanedSubAgentResults();
 
     // ── Create user message ──────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -1191,12 +1191,12 @@ export class FusionAgent extends Agent {
       planState: undefined, // Clear PlanSolve state — fusion uses its own
       fusionState: {
         complexity: this.complexity,
+        routeReason: this.routeReason,
         routed: this.routed,
         currentPlan: this.currentPlan,
         hasPlan: this.hasPlan,
         completedSteps: this.completedSteps,
         consecutiveFailures: this.consecutiveFailures,
-        reflectionEnabled: this.reflectionMode !== "off",
       },
     };
   }
@@ -1210,6 +1210,7 @@ export class FusionAgent extends Agent {
     if (state.fusionState) {
       const fs = state.fusionState as FusionSessionState;
       this.complexity = fs.complexity;
+      this.routeReason = fs.routeReason ?? "";
       this.routed = fs.routed;
       this.currentPlan = fs.currentPlan;
       this.hasPlan = fs.hasPlan;
@@ -1238,10 +1239,11 @@ export class FusionAgent extends Agent {
     await this.init();
     await this.reloadDynamicResources();
 
+    this.recoverOrphanedSubAgentResults();
+
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
     this.matchInputSkills(input);
-    this.recoverOrphanedSubAgentResults();
 
     // Reset state
     this.currentPlan = [];

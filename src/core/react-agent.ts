@@ -114,13 +114,13 @@ export class ReActAgent extends Agent {
     // Skip for fork / minimal agents that have no side-effect tools
     // (remember, recall, skill) — intents are only actionable by the
     // main agent which can trigger precipitation & memory reflection.
+    // ── Recover orphaned sub-agent results from a cancelled session ──
+    this.recoverOrphanedSubAgentResults();
+
     if (!this.skipAutoTools) {
       this.detectInputSignals(input);
       this.matchInputSkills(input);
     }
-
-    // ── Recover orphaned sub-agent results from a cancelled session ──
-    this.recoverOrphanedSubAgentResults();
 
     // ── Create user message ──────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -423,12 +423,12 @@ export class ReActAgent extends Agent {
 
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     // Skip for fork / minimal agents — same rationale as run().
+    this.recoverOrphanedSubAgentResults();
+
     if (!this.skipAutoTools) {
       this.detectInputSignals(input);
       this.matchInputSkills(input);
     }
-
-    this.recoverOrphanedSubAgentResults();
 
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());

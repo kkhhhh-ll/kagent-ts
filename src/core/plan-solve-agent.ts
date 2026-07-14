@@ -158,12 +158,12 @@ export class PlanSolveAgent extends Agent {
     // ── Reload dynamic resources (preferences, skills, MCP) ─────────
     await this.reloadDynamicResources();
 
+    // ── Recover orphaned sub-agent results from a cancelled session ──
+    this.recoverOrphanedSubAgentResults();
+
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
     this.matchInputSkills(input);
-
-    // ── Recover orphaned sub-agent results from a cancelled session ──
-    this.recoverOrphanedSubAgentResults();
 
     // ── Create user message ─────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -637,10 +637,11 @@ export class PlanSolveAgent extends Agent {
     await this.init();
     await this.reloadDynamicResources();
 
+    this.recoverOrphanedSubAgentResults();
+
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
     this.matchInputSkills(input);
-    this.recoverOrphanedSubAgentResults();
 
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());
