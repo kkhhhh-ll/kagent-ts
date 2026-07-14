@@ -27,6 +27,10 @@ export interface ReflectionInput {
   sessionId: string;
   /** The task scenarios detected from the user's input (multi-label, for error-notebook binding). */
   scenarios?: AgentScenario[];
+  /** Estimated task complexity from input heuristics or LLM routing. */
+  complexity?: string;
+  /** Rationale behind the complexity / routing decision (if available). */
+  routeReason?: string;
 }
 
 /**
@@ -166,11 +170,19 @@ function formatErrorTraces(traces?: ToolErrorTrace[]): string[] {
  * Build the task prompt for the fork sub-agent from the reflection input.
  */
 function buildTaskPrompt(input: ReflectionInput): string {
-  return [
+  const sections: string[] = [
     "Please review this agent session and identify any issues.",
     "",
     "=== User Query ===",
     input.userQuery,
+    "",
+    "=== Complexity ===",
+    input.complexity ?? "unknown",
+  ];
+  if (input.routeReason) {
+    sections.push("", "=== Routing Rationale ===", input.routeReason);
+  }
+  sections.push(
     "",
     "=== Final Answer ===",
     input.finalAnswer,
@@ -182,7 +194,8 @@ function buildTaskPrompt(input: ReflectionInput): string {
     ...formatErrorTraces(input.errorTraces),
     "",
     "Analyze the session and output your findings as JSON in your final answer.",
-  ].join("\n");
+  );
+  return sections.join("\n");
 }
 
 /** Pattern matching the ReActAgent iteration-exhaustion message. */

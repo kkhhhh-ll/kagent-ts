@@ -1815,13 +1815,17 @@ export abstract class Agent {
   // ─── Answer Verification ────────────────────────────────────────────────
 
   /**
-   * Run answer verification and, if needed, one correction cycle.
+   * Run answer verification and, if needed, one correction cycle with
+   * re-verification.
    *
    * Flow:
-   * 1. Fork a VerifyAgent to check the answer.
-   * 2. If it passes (score >= threshold) → return the original answer.
-   * 3. If it fails → inject issues as feedback, make one LLM call to
-   *    correct, then return the corrected answer.
+   * 1. Skip trivial answers (short length or simple task).
+   * 2. Fork a VerifyAgent to check the answer.
+   * 3. If it passes (score >= threshold) → return the original answer.
+   * 4. If it fails → mini ReAct correction with tools (up to 2 LLM calls)
+   *    → re-verify the corrected answer.
+   * 5. If re-verify passes → return the corrected answer.
+   * 6. Otherwise → return the original answer (clean, no inline note).
    *
    * Failures (timeout, parse error) are non-fatal — the original answer
    * is returned so the user is never blocked.
@@ -1830,6 +1834,19 @@ export abstract class Agent {
     input: string,
     answer: string,
   ): Promise<string> {
+    // ── Skip heuristic: don't fork for trivial answers ─────────────
+    const MIN_ANSWER_LENGTH = 200;
+    if (
+      answer.length < MIN_ANSWER_LENGTH ||
+      this.inputSignals.complexity === "simple"
+    ) {
+      this.logger.info(
+        "Verification",
+        `Skipping — answer length ${answer.length} < ${MIN_ANSWER_LENGTH} or task is simple.`,
+      );
+      return answer;
+    }
+
     const { VerifyAgent } = await import("../verification/verify-agent.js");
 
     const verifier = new VerifyAgent({
@@ -1840,10 +1857,8 @@ export abstract class Agent {
       hooks: this.hooks,
     });
 
-    const result = await verifier.verify({
-      userQuery: input,
-      answer,
-    });
+    // ── Phase 1: Verify ───────────────────────────────────────────
+    const result = await verifier.verify({ userQuery: input, answer });
 
     if (result.valid) {
       this.logger.info(
@@ -1856,52 +1871,206 @@ export abstract class Agent {
     this.logger.info(
       "Verification",
       `Answer failed verification (score: ${result.score}, threshold: ${this.verificationThreshold}). ` +
-        `Issues: ${result.issues.length}. Attempting one correction cycle...`,
+        `Issues: ${result.issues.length}. Attempting correction...`,
     );
 
-    // Inject verification feedback and make one LLM call to correct
+    // ── Phase 2: Correct (mini ReAct, up to 2 LLM calls with tools)
+    const corrected = await this.correctWithTools(result);
+
+    if (!corrected) {
+      this.logger.warn(
+        "Verification",
+        "Correction failed — returning original answer.",
+      );
+      return answer;
+    }
+
+    // ── Phase 3: Re-verify ────────────────────────────────────────
+    try {
+      const reResult = await verifier.verify({
+        userQuery: input,
+        answer: corrected,
+      });
+
+      if (reResult.valid) {
+        this.logger.info(
+          "Verification",
+          `Corrected answer passed re-verification (score: ${reResult.score}).`,
+        );
+        return corrected;
+      }
+
+      this.logger.warn(
+        "Verification",
+        `Corrected answer still failed (score: ${reResult.score}). Returning original answer.`,
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        "Verification",
+        `Re-verification failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Returning original answer.`,
+      );
+    }
+
+    return answer;
+  }
+
+  // ── Read-only tools for the correction loop (mirrors fork.ts) ──────
+  private static readonly CORRECTION_TOOL_NAMES: ReadonlySet<string> = new Set([
+    "read_file",
+    "grep_search",
+  ]);
+
+  /**
+   * Run a lightweight correction loop for a failed verification.
+   *
+   * Injects the verification issues as feedback, then makes up to 2 LLM
+   * calls.  The first call has access to **read-only** tools (read_file,
+   * grep_search) so the LLM can verify facts before correcting; if it
+   * makes tool calls they are executed and a second (tool-free) call
+   * produces the final corrected answer.
+   *
+   * Write tools are deliberately excluded — the correction loop fixes
+   * the *answer*, not the codebase.
+   *
+   * @returns The corrected answer, or `null` if correction could not
+   *          produce a usable result or the agent was cancelled.
+   */
+  private async correctWithTools(result: {
+    score: number;
+    issues: string[];
+    assessment: string;
+  }): Promise<string | null> {
+    // Respect cancellation — bail early if the user aborted
+    if (this.isCancelled) {
+      this.logger.info("Verification", "Correction skipped — agent cancelled.");
+      return this.closeCorrection("cancelled");
+    }
+
     const issuesText = result.issues
       .map((issue, i) => `${i + 1}. ${issue}`)
       .join("\n");
 
     const feedbackMsg = Message.user(
-      `⚠️ [VERIFICATION FAILED] The previous answer did not pass quality review ` +
-        `(score: ${result.score}/100). Please fix the following issues:\n\n` +
+      `⚠️ [VERIFICATION FAILED] The previous answer scored ${result.score}/100. ` +
+        `Please fix the following issues:\n\n` +
         `${issuesText}\n\n` +
         `Assessment: ${result.assessment}\n\n` +
-        `Please provide a corrected answer addressing each issue. Do NOT repeat the original answer — only output the corrected version.`,
+        `Provide a corrected answer that addresses each issue. ` +
+        `Use tools if you need to verify facts before correcting. ` +
+        `Do NOT repeat the original answer — output ONLY the corrected version.`,
     );
     this.contextManager.addMessage(feedbackMsg.toDict());
 
-    // Make one LLM call (no tools) to get a corrected answer
+    // Read-only tools only — same policy as fork agents
+    const readOnlyTools = this.toolRegistry
+      .getTools()
+      .filter((t) => Agent.CORRECTION_TOOL_NAMES.has(t.name));
+
     try {
+      // Step 1: LLM with read-only tools — may verify facts
       this._abortController = new AbortController();
-      const messages = this.contextManager.getContextMessages();
-      const llmResponse = await this.llm.chat(
-        messages,
+      const messages1 = this.contextManager.getContextMessages();
+      const response1 = await this.llm.chat(
+        messages1,
+        readOnlyTools,
+        this._abortController.signal,
+      );
+
+      // Respect cancellation after Step 1
+      if (this.isCancelled) {
+        this.logger.info("Verification", "Correction cancelled after Step 1.");
+        return this.closeCorrection("cancelled");
+      }
+
+      // No tool calls and has content → that's the corrected answer
+      if (
+        !response1.tool_calls ||
+        response1.tool_calls.length === 0
+      ) {
+        if (response1.content && response1.content.trim().length > 5) {
+          const assistantMsg = Message.assistant(response1.content);
+          this.contextManager.addMessage(assistantMsg.toDict());
+          this.logger.info("Verification", "Correction applied (single-pass).");
+          return response1.content;
+        }
+        return this.closeCorrection("empty response");
+      }
+
+      // LLM requested tools — execute them and inject results
+      const assistantMsg1 = Message.assistant(
+        response1.content || "",
+        response1.tool_calls,
+      );
+      this.contextManager.addMessage(assistantMsg1.toDict());
+
+      for (const tc of response1.tool_calls) {
+        const name = tc.function.name;
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(tc.function.arguments);
+        } catch {
+          args = {};
+        }
+        // Only execute read-only tools; non-read-only tool calls
+        // from the LLM are silently dropped (shouldn't happen with
+        // the filtered tool set, but defensive).
+        if (!Agent.CORRECTION_TOOL_NAMES.has(name)) {
+          this.logger.warn(
+            "Verification",
+            `Correction LLM tried to call non-read-only tool "${name}" — skipped.`,
+          );
+          continue;
+        }
+        const execResult = await this.toolRegistry.execute(name, args);
+        const toolMsg = Message.tool(
+          wrapAndScan(`tool:${name}`, execResult.content),
+          tc.id,
+          name,
+        );
+        this.contextManager.addMessage(toolMsg.toDict());
+      }
+
+      // Respect cancellation before final call
+      if (this.isCancelled) {
+        this.logger.info("Verification", "Correction cancelled before final call.");
+        return this.closeCorrection("cancelled");
+      }
+
+      // Step 2: Final call without tools — must produce the answer
+      this._abortController = new AbortController();
+      const messages2 = this.contextManager.getContextMessages();
+      const response2 = await this.llm.chat(
+        messages2,
         undefined,
         this._abortController.signal,
       );
 
-      if (llmResponse.content && llmResponse.content.trim().length > 5) {
-        const assistantMsg = Message.assistant(llmResponse.content);
-        this.contextManager.addMessage(assistantMsg.toDict());
-        this.logger.info("Verification", "Correction applied.");
-        return llmResponse.content;
+      if (response2.content && response2.content.trim().length > 5) {
+        const assistantMsg2 = Message.assistant(response2.content);
+        this.contextManager.addMessage(assistantMsg2.toDict());
+        this.logger.info("Verification", "Correction applied (two-pass).");
+        return response2.content;
       }
+
+      return this.closeCorrection("empty response after tool use");
     } catch (err: unknown) {
       this.logger.warn(
         "Verification",
-        `Correction LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Correction failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return this.closeCorrection("exception");
     }
+  }
 
-    // Fallback: return original answer with verification note
-    return (
-      answer +
-      `\n\n[Note: This answer scored ${result.score}/100 on quality verification. Issues found:\n` +
-      issuesText +
-      `\nAssessment: ${result.assessment}]`
+  /** Close the correction attempt cleanly so context doesn't look truncated. */
+  private closeCorrection(reason: string): null {
+    this.contextManager.addMessage(
+      Message.user(
+        `[System] Correction attempt ended (${reason}). ` +
+          `The original answer has been preserved.`,
+      ),
     );
+    return null;
   }
 }

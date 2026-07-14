@@ -1007,6 +1007,9 @@ export class FusionAgent extends Agent {
         conversation: contextMessages,
         sessionId: this.getSessionId(),
         scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
+        errorTraces: this.errorTracker?.getAllTraces(),
+        complexity: this.complexity,
+        routeReason: this.routeReason || undefined,
       });
 
       if (entries.length > 0) {

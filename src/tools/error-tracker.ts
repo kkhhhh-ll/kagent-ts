@@ -296,6 +296,13 @@ export class ToolErrorTracker {
   }
 
   /**
+   * Get all traces recorded in this session, resolved and unresolved.
+   */
+  getAllTraces(): ToolErrorTrace[] {
+    return Array.from(this.traces.values());
+  }
+
+  /**
    * Get all currently active (unresolved) traces.
    */
   getActiveTraces(): Array<{ toolName: string; traceId: string }> {

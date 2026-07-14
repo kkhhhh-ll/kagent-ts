@@ -31,8 +31,8 @@ export interface PlanSolveSessionState {
 export interface FusionSessionState {
   /** Task complexity determined during routing. */
   complexity: "simple" | "complex";
-  /** Short explanation of why this complexity was chosen. */
-  routeReason: string;
+  /** Short explanation of why this complexity was chosen. Optional — absent in checkpoints saved before v1.1. */
+  routeReason?: string;
   /** Whether routing has been completed. */
   routed: boolean;
   currentPlan: string[];

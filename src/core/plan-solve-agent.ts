@@ -1181,6 +1181,8 @@ export class PlanSolveAgent extends Agent {
         conversation: this.contextManager.getContextMessages(),
         sessionId: this.getSessionId(),
         scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
+        errorTraces: this.errorTracker?.getAllTraces(),
+        complexity: this.inputSignals.complexity,
       });
 
       if (entries.length > 0) {
