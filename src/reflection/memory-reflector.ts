@@ -282,7 +282,7 @@ export interface MemoryReflectorConfig {
  *
  * Usage:
  * ```ts
- * const memManager = new MemoryManager({ storageDir: ".memory" });
+ * const memManager = new MemoryManager({ storageDir: ".k-memory" });
  * const reflector = new MemoryReflector({ llm, memoryManager: memManager });
  * const memories = await reflector.reflect({
  *   userQuery: input,

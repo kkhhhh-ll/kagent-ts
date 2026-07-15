@@ -78,7 +78,7 @@ interface AgentConfig {
   // ── 答案验证及格线 0-100（默认: 70）──
   verificationThreshold?: number
 
-  // ── 记忆存储目录 (默认: ".memory") ──
+  // ── 记忆存储目录 (默认: ".k-memory") ──
   memoryDir?: string
 
   // ── Token 预算配置 ──

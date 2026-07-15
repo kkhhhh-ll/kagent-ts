@@ -40,7 +40,7 @@ Final Answer
   ↓
 [MEMORY] (可选，post-hoc):
   ├── MemoryReflector 提取长期记忆
-  └── 写入 MemoryManager (.memory/)
+  └── 写入 MemoryManager (.k-memory/)
   ↓
 [PRECIPITATE] (可选，post-hoc):
   ├── PrecipitateAgent 提取可复用技能
@@ -178,7 +178,7 @@ reflection: 'post-hoc'  // 开启
 memoryReflection: 'post-hoc'  // 开启
 ```
 
-Fork 一个 `MemoryReflector` 从会话中提取长期记忆（规则、项目事实、用户偏好），写入 `.memory/` 目录。
+Fork 一个 `MemoryReflector` 从会话中提取长期记忆（规则、项目事实、用户偏好），写入 `.k-memory/` 目录。
 
 ### 技能沉淀
 

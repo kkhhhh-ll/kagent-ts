@@ -35,7 +35,7 @@ Observation (观察): 解析工具返回的结果
   ↓
 [MEMORY] (可选, post-hoc):
   ├── MemoryReflector Fork — 记忆提取
-  └── 持久化 → MemoryManager (.memory/)
+  └── 持久化 → MemoryManager (.k-memory/)
   ↓
 [PRECIPITATE] (可选, post-hoc):
   └── PrecipitateAgent Fork — 技能沉淀

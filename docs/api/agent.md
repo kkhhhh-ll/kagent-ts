@@ -233,7 +233,7 @@ interface AgentConfig {
   rulesPath?: string                                // 规则文件/目录路径 (默认: ".kagent/rules/")
 
   // ── 记忆 ──
-  memoryDir?: string                                // 记忆存储目录 (默认: ".memory")
+  memoryDir?: string                                // 记忆存储目录 (默认: ".k-memory")
 
   // ── 会话 ──
   sessionId?: string                                // 会话 ID

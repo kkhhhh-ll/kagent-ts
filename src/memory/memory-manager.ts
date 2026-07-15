@@ -65,14 +65,14 @@ const MAX_INDEX_BYTES = 25 * 1024; // 25 KB
  *
  * Storage layout:
  * ```
- * .memory/
+ * .k-memory/
  *   MEMORY.md          ← index (200 lines + 25 KB dual limit)
  *   <name>.md          ← individual memory files with frontmatter
  * ```
  *
  * Usage:
  * ```ts
- * const mem = new MemoryManager({ storageDir: ".memory" });
+ * const mem = new MemoryManager({ storageDir: ".k-memory" });
  * mem.add({ name: "use-kebab-case", description: "File naming convention",
  *           type: "rule", content: "...why and when..." });
  * // Later: inject into system prompt
@@ -86,9 +86,9 @@ export class MemoryManager {
   private lastLoadedMtime: number = 0;
 
   constructor(storageDir?: string) {
-    this.storageDir = path.resolve(storageDir ?? ".memory");
+    this.storageDir = path.resolve(storageDir ?? ".k-memory");
     this.indexFile = path.join(this.storageDir, "MEMORY.md");
-    // Lazy init: don't create .memory/ until something is actually written.
+    // Lazy init: don't create .k-memory/ until something is actually written.
     // loadIndex() is safe — it returns [] when the dir doesn't exist.
     this.loadIndex();
   }

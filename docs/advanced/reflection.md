@@ -26,7 +26,7 @@ fireOnFinish(verifiedAnswer)
   ├── memoryReflection (触发条件见下方) → MemoryReflector Fork（fire-and-forget）
   │     ├── 审查完整对话历史
   │     ├── 提取规则 / 项目事实 / 用户偏好
-  │     └── 持久化 → MemoryManager (.memory/)
+  │     └── 持久化 → MemoryManager (.k-memory/)
   │
   └── reflection (如果开启) → ReflectionAgent Fork（fire-and-forget）
         ├── 审查完整对话历史

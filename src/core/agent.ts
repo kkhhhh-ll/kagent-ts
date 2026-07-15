@@ -130,7 +130,7 @@ export interface AgentConfig {
   skillsDir?: string;
 
   /**
-   * Path to long-term memory storage (default: `".memory"`). Persists facts,
+   * Path to long-term memory storage (default: `".k-memory"`). Persists facts,
    * rules, and decisions via `MEMORY.md` index + individual markdown files.
    */
   memoryDir?: string;
