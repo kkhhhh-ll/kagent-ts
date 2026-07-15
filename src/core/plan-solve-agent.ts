@@ -57,6 +57,9 @@ export interface PlanSolveAgentConfig extends AgentConfig {
   /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 
+  /** Max iterations for each skill-verification fork. Default: 8. */
+  skillVerificationMaxIterations?: number;
+
   /** Memory reflection mode. Default: "off". */
   memoryReflection?: "off" | "post-hoc";
 
@@ -94,6 +97,7 @@ export class PlanSolveAgent extends Agent {
   private maxPlanSteps: number;
   private precipitationMode: "off" | "post-hoc";
   private precipitationMaxIterations: number;
+  private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
   private reflectionMode: "off" | "post-hoc";
@@ -133,6 +137,7 @@ export class PlanSolveAgent extends Agent {
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
     this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
+    this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
     this.reflectionMode = config.reflection ?? "off";
@@ -447,6 +452,11 @@ export class PlanSolveAgent extends Agent {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        // ── Hold the answer while sub-agents are still running ──────
+        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+          continue;
+        }
+
         this.logger.info("Plan-Solve", "Task complete — returning final answer.");
         // Save final checkpoint as completed
         if (this.checkpointingEnabled) {
@@ -466,21 +476,21 @@ export class PlanSolveAgent extends Agent {
 
         // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
         if (shouldPrecipitate) {
-          this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Error reflection (fire-and-forget, post-hoc) ───────────────
         if (shouldReflect) {
-          this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runReflection(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
@@ -889,6 +899,12 @@ export class PlanSolveAgent extends Agent {
 
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        // ── Hold the answer while sub-agents are still running ──────
+        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+          yield "\n\n[Waiting for sub-agent results...]\n\n";
+          continue;
+        }
+
         this.logger.info("Plan-Solve", "Task complete.");
 
         // ── Answer verification (blocking, runs before returning) ──
@@ -905,21 +921,21 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
         if (shouldPrecipitate) {
-          this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Error reflection (fire-and-forget, post-hoc) ───────────────
         if (shouldReflect) {
-          this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
+          this.trackBackground(this.runReflection(input, verifiedAnswer)).catch((err: unknown) =>
             this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
@@ -1084,6 +1100,7 @@ export class PlanSolveAgent extends Agent {
         llm: this.precipitationLLM ?? this.llm,
         sessionId: this.getSessionId(),
         maxIterations: this.precipitationMaxIterations,
+        skillVerificationMaxIterations: this.skillVerificationMaxIterations,
         verifySkills: this.verifySkills,
         skillVerificationLLM: this.skillVerificationLLM,
         logger: this.logger,

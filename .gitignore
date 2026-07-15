@@ -1,7 +1,6 @@
 node_modules/
 dist/
 test/
-temp/
 .kagent/
 .kagent-sessions/
 .error-traces/
@@ -12,11 +11,11 @@ temp/
 .k-memory/
 .error-notebook/
 resume-agent-harness.md
-skills/
-subagents/
+/skills/
+/subagents/
+/knowledge/
 .claude/
 mcp.json
-knowledge/
 i.md
 docs/.vitepress/dist/
 docs/.vitepress/cache/

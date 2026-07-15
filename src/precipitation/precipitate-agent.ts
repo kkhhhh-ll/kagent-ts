@@ -8,10 +8,7 @@ import * as path from "path";
 import { forkAgent } from "../core/fork.js";
 import type { AgentHooks } from "../core/hooks";
 import { TraceLogger } from "../trace/trace-logger.js";
-import {
-  validateSkillName,
-  buildSkillMarkdown,
-} from "../skills/skill-utils";
+import { validateSkillName, buildSkillMarkdown } from "../skills/skill-utils";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +46,17 @@ export interface SkillCandidate {
   keywords: string[];
   /** Full system prompt body (markdown, goes after the frontmatter). */
   content: string;
+  /**
+   * Extractor's self-assessed confidence (0.0-1.0).
+   * 0.9+ = verified with tools, 0.5 = plausible but unverified, <0.3 = speculative.
+   */
+  confidence?: number;
+  /** Files/docs that ground this skill (paths relative to project root). */
+  references?: string[];
+  /** Reusable command sequences (markdown code block). */
+  scripts?: string;
+  /** Boilerplate code/config (markdown code block). */
+  templates?: string;
 }
 
 /**
@@ -78,6 +86,8 @@ export interface RunFromAgentOptions {
   contextMessages: MessageData[];
   /** Hooks (e.g. TraceLogger) forwarded to the fork sub-agent. */
   hooks?: AgentHooks | AgentHooks[];
+  /** Max iterations per skill-verification fork (default: 8). */
+  skillVerificationMaxIterations?: number;
   /** Verify skills before persisting (default: true). */
   verifySkills?: boolean;
   /** LLM for skill verification (default: reuse llm). */
@@ -91,64 +101,91 @@ export interface RunFromAgentOptions {
  */
 interface PrecipitationResponse {
   analysis: string;
-  skills: SkillCandidate[];
+  /** Preferred key — matches the system prompt's OUTPUT FORMAT. */
+  candidate_skills?: SkillCandidate[];
+  /** Legacy key — accepted for backward compatibility with older prompts. */
+  skills?: SkillCandidate[];
 }
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
-const PRECIPITATION_SYSTEM_PROMPT = `You are a skill-extraction agent. Your job is to review a completed
-agent session and extract reusable patterns as structured skill definitions.
+const PRECIPITATION_SYSTEM_PROMPT = `You are a skill-extraction agent. Your job is to review a completed agent session and extract **candidate** reusable patterns as structured skill definitions.
 
 You have access to read_file and grep_search tools to verify your findings against the actual codebase.
 
-Skills are reusable workflow templates that capture "how to do X in this project."
-They are loaded as system prompt instructions in future sessions — think of them
-as growing institutional knowledge.
+**Your role is to be exploratory and generative** — cast a wide net. A separate VerifyAgent will later evaluate quality and decide what gets persisted. Don't over-filter; it's better to propose a candidate that gets rejected than to miss something valuable.
 
-Analyze the session across these dimensions:
-- **Reusable patterns**: Workflows, strategies, or tool-combinations that worked well
-  and would apply to similar future tasks. Example: "deploying to production",
-  "setting up a new database migration", "debugging CI failures".
-- **Domain knowledge**: Project-specific facts, conventions, or constraints
-  discovered during the session. Example: "API rate limits", "required config files",
-  "naming conventions for this codebase".
-- **Tool usage insight**: Effective ways of using specific tools for specific goals.
-  Example: "use grep_search before read_file to locate the right file first".
-- **Error recovery patterns**: When a failure occurred and the agent discovered
-  a reliable fix. These are the most valuable — they prevent others from
-  repeating the same mistake.
+Skills are reusable workflow templates that capture "how to do X in this project." They are loaded as system prompt instructions in future sessions.
 
-IMPORTANT — before proposing a skill, check the list of existing skills provided
-in the prompt. Do NOT propose skills that duplicate or substantially overlap
-existing ones. If an existing skill covers the same domain, only propose a new
-one if it adds genuinely new information.
+---
 
-In your final answer, output a JSON object with this structure:
+**EXTRACTION DIMENSIONS — Look for these in the session:**
+
+1. **Reusable patterns** — Workflows, strategies, or tool-combinations that worked well
+   - Examples: deployment pipeline, database migration setup, CI debugging
+
+2. **Domain knowledge** — Project-specific facts, conventions, or constraints
+   - Examples: API rate limits, required config files, naming conventions
+
+3. **Tool usage insight** — Effective ways of using specific tools
+   - Examples: "grep_search before read_file to locate the right file"
+
+4. **Error recovery patterns** — Failures with reliable fixes
+   - Examples: "When migration fails with lock timeout, run VACUUM first"
+
+---
+
+**SKILL STRUCTURE:**
+
+| Field | Required | Description |
+|:---|:---|:---|
+| \`name\` | ✅ | kebab-case, unique, descriptive |
+| \`description\` | ✅ | "When you need to [scenario], use this skill. It covers [what]." |
+| \`keywords\` | ✅ | 3-8 lowercase words/phrases for semantic matching |
+| \`content\` | ✅ | Markdown instructions. Structure: ## Prerequisites, ## Step-by-step, ## Verification, ## Common pitfalls |
+| \`confidence\` | ✅ | 0.0-1.0 — how confident are you this skill is accurate and useful? Base this on: (a) did you verify with tools? (b) is the pattern repeated or one-off? (c) is it specific or vague? |
+| \`references\` | ⚠️ | Files/docs that ground this skill. Include when useful. |
+| \`scripts\` | ⚠️ | Reusable command sequences as a string with code block (e.g., "\`\`\`bash\\ncommand\\n\`\`\`"). Include when non-trivial. |
+| \`templates\` | ⚠️ | Boilerplate code/config as a string with code block (e.g., "\`\`\`python\\ntemplate\\n\`\`\`"). Include when scaffolding is needed. |
+
+---
+
+**GUIDING PRINCIPLES:**
+
+- **Be generous** — propose a skill if you see *any* reusable pattern. The VerifyAgent will reject false positives.
+- **Be honest about uncertainty** — use \`confidence\` to reflect how well you could verify claims. 0.9+ = verified with tools, 0.5 = plausible but unverified, <0.3 = speculative.
+- **Avoid obvious duplicates** — check the provided existing skills list. If a skill covers the same domain, don't propose a duplicate unless your skill adds genuinely new information.
+- **Maximum 3 candidate skills per session** — still keep quality over quantity, but err on the side of inclusion.
+
+---
+
+**OUTPUT FORMAT:**
+
 {
-  "analysis": "overall assessment — what was learned, what's reusable (2-4 sentences)",
-  "skills": [
+  "analysis": "brief assessment — what was learned, what patterns emerged (2-3 sentences)",
+  "candidate_skills": [
     {
       "name": "kebab-case-unique-name",
-      "description": "One-line summary of what this skill covers.",
-      "keywords": ["3-8", "lowercase", "words", "that", "match", "user", "intent"],
-      "content": "Full system prompt body in markdown. Include concrete steps, examples, warnings, and references to relevant files or conventions."
+      "description": "When you need to [X], use this skill. It covers [Y].",
+      "keywords": ["word1", "word2", "word3", "word4", "word5"],
+      "content": "## Prerequisites\\n- ...\\n\\n## Step-by-step\\n1. ...\\n\\n## Verification\\n- ...\\n\\n## Common pitfalls\\n- ...",
+      "confidence": 0.85,
+      "references": ["path/to/file.py"],
+      "scripts": "string containing bash commands with code block markers",
+      "templates": "string containing python template with code block markers"
     }
   ]
 }
 
-Rules:
-- Only propose skills when there is genuinely reusable knowledge.
-- If nothing is worth saving long-term, return an empty skills array.
-- Each skill's name must be kebab-case, unique, and descriptive.
-- Each skill's keywords array must contain 3-8 lowercase words or short phrases that
-  future users might type when they need this skill. Think: "what would someone say
-  to trigger this?" — e.g. ["deploy", "release", "production", "ship"]. Keywords
-  enable automatic skill activation without the LLM calling the skill tool.
-- Each skill's content must be concrete and actionable — vague generalities are NOT skills.
-- The content should be written as instructions to a future LLM agent.
-- Use your tools to verify claims against the actual codebase.
-- Maximum 3 skills per session — quality over quantity.
-- You MUST output the JSON object in your final answer — do NOT write natural language instead.`;
+---
+
+**RULES:**
+
+- Use your tools (read_file, grep_search) to verify claims. If unverifiable, lower confidence.
+- Each skill's description MUST use: "When you need to [X], use this skill. It covers [Y]."
+- Output ONLY the JSON object — no natural language, no markdown code fences.
+- Only include optional fields (references, scripts, templates) when they add value.
+- Maximum 3 skills. If nothing worth saving, return {"analysis": "...", "candidate_skills": []}.`;
 
 // ─── Pure Helpers ────────────────────────────────────────────────────────────
 
@@ -263,7 +300,10 @@ function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
   // This is not an error; it means the LLM decided nothing was worth
   // extracting. Return empty rather than throwing.
   if (!json) {
-    logger.info("Precipitation", "LLM output contained no JSON — no skills extracted.");
+    logger.info(
+      "Precipitation",
+      "LLM output contained no JSON — no skills extracted.",
+    );
     return [];
   }
 
@@ -283,10 +323,13 @@ function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
     logger.info("Precipitation", `Analysis: ${parsed.analysis}`);
   }
 
-  if (!Array.isArray(parsed.skills)) return [];
+  // The system prompt asks for `candidate_skills`; accept the legacy
+  // `skills` key too so older prompt variants keep working.
+  const rawSkills = parsed.candidate_skills ?? parsed.skills;
+  if (!Array.isArray(rawSkills)) return [];
 
   const candidates: SkillCandidate[] = [];
-  for (const s of parsed.skills) {
+  for (const s of rawSkills) {
     if (
       typeof s.name !== "string" ||
       !s.name ||
@@ -315,11 +358,29 @@ function parseCandidates(answer: string, logger: Logger): SkillCandidate[] {
         .filter(Boolean);
     }
 
+    // Optional enrichment fields — validate loosely and drop when malformed
+    // (a bad optional field should not reject the whole candidate).
+    const confidence =
+      typeof s.confidence === "number" && s.confidence >= 0 && s.confidence <= 1
+        ? s.confidence
+        : undefined;
+    const references = Array.isArray(s.references)
+      ? s.references.map((r: unknown) => String(r).trim()).filter(Boolean)
+      : undefined;
+    const scripts =
+      typeof s.scripts === "string" && s.scripts.trim() ? s.scripts : undefined;
+    const templates =
+      typeof s.templates === "string" && s.templates.trim() ? s.templates : undefined;
+
     candidates.push({
       name: s.name,
       description: s.description,
       keywords,
       content: s.content,
+      confidence,
+      references: references && references.length > 0 ? references : undefined,
+      scripts,
+      templates,
     });
   }
 
@@ -335,35 +396,113 @@ interface SkillVerifyResult {
   issues: string[];
 }
 
-const SKILL_VERIFY_SYSTEM_PROMPT = `You are a skill-quality reviewer. Your job is to check whether a newly
-extracted skill candidate is worth saving permanently.
+const SKILL_VERIFY_SYSTEM_PROMPT = `You are a skill-quality reviewer. Your job is to evaluate a **candidate** skill extracted from an agent session and decide whether it's worth persisting to the knowledge base.
 
-You have access to read_file and grep_search tools to verify claims against
-the actual codebase when applicable.
+You have access to read_file and grep_search tools to verify claims against the actual codebase.
 
-Review the skill across these dimensions:
-- **Actionable**: Is the content concrete and step-by-step? Can a future LLM
-  actually follow these instructions?
-- **Self-consistent**: Are the steps logical and non-contradictory?
-- **Evidence**: Do the claims match what actually happened in the session?
-  Check the original conversation for contradictions.
-- **Non-duplicate**: Does this skill add genuinely new information vs. what
-  existing skills already cover?
-- **Worth keeping**: Is this a genuinely reusable pattern, or just a one-off
-  task log?
+---
 
-In your final answer, output a JSON object:
+**INPUT YOU WILL RECEIVE:**
+- \`candidate\`: The skill proposed by ExtractionAgent (includes \`name\`, \`description\`, \`keywords\`, \`content\`, \`confidence\`, \`references\`, \`scripts\`, \`templates\`)
+- \`existing_skills\`: List of already-persisted skills (names + summaries)
+- \`session_transcript\`: The original conversation (for fact-checking)
+
+---
+
+**EVALUATION DIMENSIONS (Score 0-100):**
+
+| Dimension | Weight | What to Check |
+|:---|:---|:---|
+| **Factual Accuracy** | 30% | Do claims match the codebase? Check \`references\` files exist and content matches. Check commands actually work. Cross-check against \`session_transcript\` — did this pattern actually emerge or is the agent hallucinating? |
+| **Actionability** | 25% | Can a future LLM follow this without additional research? Are steps numbered? Are commands copy-pasteable? Are file paths absolute or relative to project root? |
+| **Novelty vs Existing** | 20% | Does this add NEW knowledge? Compare against \`existing_skills\`. If 80%+ overlap → reject or suggest merge. Also check for **contradictions** — does this skill conflict with any existing skill? |
+| **Completeness** | 15% | Are optional fields (\`references\`, \`scripts\`, \`templates\`) used appropriately? If a script is mentioned in \`content\`, is it also included in \`scripts\`? If files are referenced, are they listed in \`references\`? |
+| **Confidence Calibration** | 10% | Does the candidate's \`confidence\` match your assessment? If ExtractionAgent gave 0.9 but you found errors → flag overconfidence. If 0.3 but content is solid → flag underconfidence (signals ExtractionAgent needs tuning). |
+
+---
+
+**DECISION RULES:**
+
+| Score Range | Decision | Action |
+|:---|:---|:---|
+| 80-100 | ✅ **Pass** | Persist as-is (or with minor suggestions) |
+| 60-79 | ⚠️ **Conditional Pass** | Persist but flag \`warnings\` — future users should be cautious |
+| 40-59 | 🔄 **Suggest Merge** | If overlapping with existing skill, recommend merging. If novel but incomplete, recommend revision. |
+| 0-39 | ❌ **Reject** | Not worth keeping. Provide specific reasons. |
+
+---
+
+**OUTPUT FORMAT:**
+
 {
+  "decision": "conditional",
   "valid": true,
-  "score": 85,
-  "issues": ["Step 2 references a file that was never created in the session"]
+  "score": 72,
+  "verification_summary": "2-3 sentences summarizing what you verified and found",
+  "issues": [
+    "Step 2 references \`scripts/deploy.sh\` but this file does not exist in the codebase",
+    "Command in step 4 uses \`--force\` flag without warning — this is dangerous"
+  ],
+  "warnings": [
+    "This skill overlaps 70% with \`deployment-pipeline\` skill. Consider merging rather than adding separately."
+  ],
+  "suggestions": [
+    "Add \`--dry-run\` as first step to prevent accidental deploys",
+    "Reference the actual path: \`./scripts/deploy.sh\` instead of \`deploy.sh\`"
+  ],
+  "merge_target": null,
+  "confidence_gap": {
+    "candidate_confidence": 0.85,
+    "reviewer_assessment": 0.65,
+    "note": "Candidate overestimated verifiability — 2 of 3 file references were incorrect"
+  }
 }
 
-Rules:
-- Score 0-100; "valid" should be false when score < 60 or critical issues exist.
-- Only flag real problems — don't fabricate issues.
-- Be specific: cite exact claims that are wrong or unsupported.
-- Use your tools to verify claims.`;
+---
+
+**SPECIFIC CHECKS TO RUN:**
+
+1. **References validation** — For each path in \`references\`:
+   - Does the file exist? (\`read_file\` or \`grep_search\`)
+   - Does the content match what the skill claims?
+   - If a line range is specified (e.g., \`file.py#L10-L25\`), verify the claim matches that range.
+
+2. **Scripts validation** — For each script in \`scripts\`:
+   - Is it syntactically valid? (check shebang, basic syntax)
+   - Do the commands match patterns used in the codebase?
+   - Are there any dangerous flags (e.g., \`rm -rf\`, \`DROP TABLE\`) without warnings?
+
+3. **Templates validation** — For each template in \`templates\`:
+   - Does it match the structure of existing files of that type?
+   - Are placeholders clearly marked (e.g., \`{{PROJECT_NAME}}\` vs hardcoded values)?
+
+4. **Session fact-checking** — For key claims in \`content\`:
+   - Did this pattern actually emerge in \`session_transcript\`?
+   - Was the problem solved this way, or did the agent propose it but never execute it?
+   - If the skill describes "what went wrong" — did that error actually occur in the session?
+
+5. **Conflict detection** — For each \`existing_skill\`:
+   - Does this candidate contradict any existing skill? (e.g., one says "use pip", another says "use poetry")
+   - If contradiction exists, flag it in \`issues\` with \`[CONFLICT]\` prefix.
+
+---
+
+**RULES:**
+- Score 0-100. \`decision\` must be one of: \`"pass"\`, \`"conditional"\`, \`"merge"\`, \`"reject"\`.
+- \`valid\` must be \`true\` only for \`"pass"\` / \`"conditional"\` decisions, and \`false\` for \`"merge"\` / \`"reject"\`.
+- \`merge_target\` is the name of the existing skill to merge into (string) for \`"merge"\` decisions, otherwise \`null\`.
+- Be **specific** in \`issues\` — cite exact claims that are wrong. Don't say "step 3 is vague", say "step 3 says 'adjust the config' but doesn't specify which config or what to adjust".
+- Use your tools to verify claims. If you can't verify something (e.g., external API behavior), note it as \`[unverifiable]\` in \`warnings\`.
+- Don't fabricate issues. If the skill is solid, pass it with high score and minimal issues.
+- For \`merge\` decisions, specify \`merge_target\` — which existing skill should absorb this candidate.
+- Output ONLY the JSON object — no natural language, no markdown code fences.
+
+**SELF-CHECK:**
+[ ] Did I verify every file path in \`references\`?
+[ ] Did I compare against \`existing_skills\` for duplication AND contradiction?
+[ ] Did I check the session transcript for factual grounding?
+[ ] Did I provide actionable \`suggestions\` if score < 80?
+[ ] Is the output valid JSON?`;
 
 /**
  * Build the verification prompt for a single skill candidate.
@@ -379,6 +518,12 @@ function buildVerifyPrompt(
     `Name: ${candidate.name}`,
     `Description: ${candidate.description}`,
     `Keywords: ${candidate.keywords.join(", ")}`,
+    `Confidence (extractor's self-assessment): ${candidate.confidence ?? "(not provided)"}`,
+    ...(candidate.references && candidate.references.length > 0
+      ? [`References:`, ...candidate.references.map((r) => `- ${r}`)]
+      : [`References: (none provided)`]),
+    ...(candidate.scripts ? [`Scripts:`, candidate.scripts] : []),
+    ...(candidate.templates ? [`Templates:`, candidate.templates] : []),
     `Content:`,
     candidate.content,
     "",
@@ -387,7 +532,8 @@ function buildVerifyPrompt(
     "",
     "=== Existing Skills (check for duplication) ===",
     ...input.existingSkillNames.map(
-      (n) => `- ${n}: ${input.existingSkillDescriptions[n] || "(no description)"}`,
+      (n) =>
+        `- ${n}: ${input.existingSkillDescriptions[n] || "(no description)"}`,
     ),
     "",
     "Review the candidate and output your verdict as JSON.",
@@ -415,14 +561,34 @@ function parseVerifyResult(answer: string, logger: Logger): SkillVerifyResult {
   // output contract.  Treat as a soft failure: the skill is NOT
   // verified, but we log prominently so operators can tune the prompt.
   if (!json) {
-    logger.warn(
-      "Precipitation",
-      "Skill verify: no JSON in response — verify agent may not be following the output format. Rejecting candidate.",
+    // Distinguish "hit the ReAct iteration limit" (the loop's canned
+    // apology message) from "model ignored the output format" — the
+    // former is fixed by raising `skillVerificationMaxIterations`, the
+    // latter by tuning the prompt/model.
+    const hitIterationLimit = answer.includes(
+      "unable to complete the task within",
     );
+    if (hitIterationLimit) {
+      logger.warn(
+        "Precipitation",
+        "Skill verify: fork hit its iteration limit before producing a verdict — " +
+          "consider raising skillVerificationMaxIterations. Rejecting candidate.",
+      );
+    } else {
+      logger.warn(
+        "Precipitation",
+        "Skill verify: no JSON in response — verify agent may not be following the output format. " +
+          `Rejecting candidate. Raw answer (first 300 chars): ${answer.slice(0, 300)}`,
+      );
+    }
     return {
       valid: false,
       score: 0,
-      issues: ["Verification agent did not produce structured JSON output."],
+      issues: [
+        hitIterationLimit
+          ? "Verification fork hit its iteration limit before producing a verdict."
+          : "Verification agent did not produce structured JSON output.",
+      ],
     };
   }
 
@@ -459,7 +625,10 @@ function parseVerifyResult(answer: string, logger: Logger): SkillVerifyResult {
     // Genuine parse error — `extractJSON` found something that looks like
     // JSON but `JSON.parse` rejected it.  Fail-open to avoid blocking
     // skill extraction on an infra / model glitch.
-    logger.warn("Precipitation", "Skill verify: parse error — treating as pass (fail-open).");
+    logger.warn(
+      "Precipitation",
+      "Skill verify: parse error — treating as pass (fail-open).",
+    );
     return { valid: true, score: 70, issues: [] };
   }
 }
@@ -480,6 +649,15 @@ export interface PrecipitateAgentConfig {
    * Maximum ReAct iterations for the sub-agent (default: 15).
    */
   maxIterations?: number;
+  /**
+   * Maximum ReAct iterations for each skill-verification fork (default: 8).
+   *
+   * Verification agents call read_file / grep_search to check claims before
+   * producing a JSON verdict.  3 iterations (the previous default) is too
+   * tight — a single tool call plus the final answer already burns 2 rounds,
+   * and any follow-up read or correction hits the limit immediately.
+   */
+  skillVerificationMaxIterations?: number;
   /**
    * Verify skill candidates before persisting. Forks an independent agent
    * to check each skill for actionability, self-consistency, and evidence
@@ -531,6 +709,7 @@ export class PrecipitateAgent {
   private skillsDir: string;
   private skillManager: SkillManager;
   private maxIterations: number;
+  private skillVerificationMaxIterations: number;
   private verifySkills: boolean;
   private skillVerificationLLM?: LLMProvider;
   private logger: Logger;
@@ -547,6 +726,8 @@ export class PrecipitateAgent {
     this.skillsDir = config.skillsDir;
     this.skillManager = config.skillManager;
     this.maxIterations = config.maxIterations ?? 15;
+    this.skillVerificationMaxIterations =
+      config.skillVerificationMaxIterations ?? 8;
     this.verifySkills = config.verifySkills ?? true;
     this.skillVerificationLLM = config.skillVerificationLLM;
     this.logger = config.logger ?? new ConsoleLogger();
@@ -636,6 +817,7 @@ export class PrecipitateAgent {
       skillsDir: opts.skillsDir,
       skillManager: opts.skillManager,
       maxIterations: opts.maxIterations,
+      skillVerificationMaxIterations: opts.skillVerificationMaxIterations,
       verifySkills: opts.verifySkills,
       skillVerificationLLM: opts.skillVerificationLLM,
       logger: opts.logger,
@@ -679,7 +861,10 @@ export class PrecipitateAgent {
    * @param signal — forwarded to the fork so the timeout in {@link precipitate}
    *                 can cancel in-flight LLM requests.
    */
-  private forkAndRun(userPrompt: string, signal?: AbortSignal): Promise<string> {
+  private forkAndRun(
+    userPrompt: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: PRECIPITATION_SYSTEM_PROMPT,
@@ -768,10 +953,13 @@ export class PrecipitateAgent {
       const answer = await forkAgent(taskPrompt, {
         llm: verifyLLM,
         systemPrompt: SKILL_VERIFY_SYSTEM_PROMPT,
-        maxIterations: 3,
+        maxIterations: this.skillVerificationMaxIterations,
         logger: this.logger,
         signal: abortController.signal,
-        hooks: TraceLogger.wrapHooksForFork(this.hooks, `skill-verify:${candidate.name}`),
+        hooks: TraceLogger.wrapHooksForFork(
+          this.hooks,
+          `skill-verify:${candidate.name}`,
+        ),
       });
 
       const result = parseVerifyResult(answer, this.logger);
@@ -858,7 +1046,18 @@ export class PrecipitateAgent {
         const skillDir = path.join(this.skillsDir, c.name);
         await mkdir(skillDir, { recursive: true });
 
-        const fileContent = buildSkillMarkdown(c.name, c.description, c.content, c.keywords);
+        const fileContent = buildSkillMarkdown(
+          c.name,
+          c.description,
+          c.content,
+          c.keywords,
+          {
+            confidence: c.confidence,
+            references: c.references,
+            scripts: c.scripts,
+            templates: c.templates,
+          },
+        );
         const filePath = path.join(skillDir, "SKILL.md");
         await writeFile(filePath, fileContent, "utf-8");
 

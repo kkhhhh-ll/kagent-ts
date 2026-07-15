@@ -2,7 +2,7 @@ import { LLMProvider, ToolCall } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
-import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION } from "./system-prompts";
+import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION, RAG_KNOWLEDGE_BASE_HINT } from "./system-prompts";
 import { wrapAndScan } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
@@ -305,6 +305,9 @@ export interface AgentConfig {
 
   /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
+
+  /** Max iterations for each skill-verification fork. Default: 8. */
+  skillVerificationMaxIterations?: number;
 
   // ─── Memory Reflection ──────────────────────────────────────────────
 
@@ -876,6 +879,7 @@ export abstract class Agent {
       this.memoryManager.buildPromptHint(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
+      this.ragConfig ? RAG_KNOWLEDGE_BASE_HINT : "",
       scenarioPrompt,
     ].filter(Boolean);
 
@@ -1719,6 +1723,62 @@ export abstract class Agent {
     return this.subAgentManager.pollCompleted();
   }
 
+  /**
+   * Guard for final-answer branches: when the LLM proposes a final answer
+   * while spawned sub-agents are still running, inject a wait notice into
+   * the context and return true. The loop should `continue` so the next
+   * `pollSubAgentResults()` delivers the pending results instead of
+   * orphaning them (orphaned results only resurface via session resume).
+   *
+   * Callers must still bound this with the iteration budget — on the last
+   * iteration, finish anyway rather than loop forever.
+   */
+  protected holdAnswerForPendingSubAgents(): boolean {
+    if (!this.subAgentManager || !this.subAgentManager.hasRunning()) return false;
+    const pending = this.subAgentManager.getActiveCount();
+    this.logger.info(
+      "SubAgent",
+      `Final answer proposed while ${pending} sub-agent(s) still running — waiting for their results before finalizing.`,
+    );
+    const msg = Message.user(
+      `[System] ${pending} sub-agent(s) you spawned are still running — do NOT finalize yet. ` +
+        `Their results will arrive in the next message; incorporate them before giving your final answer.`,
+    );
+    this.contextManager.addMessage(msg.toDict());
+    return true;
+  }
+
+  // ─── Background Tasks ─────────────────────────────────────────────────
+
+  /** In-flight fire-and-forget tasks (precipitation, reflection, memory). */
+  private backgroundTasks: Set<Promise<unknown>> = new Set();
+
+  /**
+   * Track a fire-and-forget background task so callers can await settlement
+   * via {@link awaitBackgroundTasks}. Returns the original promise so call
+   * sites can keep their own `.catch()` chains.
+   */
+  protected trackBackground<T>(p: Promise<T>): Promise<T> {
+    const settled: Promise<unknown> = p.catch(() => {});
+    this.backgroundTasks.add(settled);
+    void settled.finally(() => this.backgroundTasks.delete(settled));
+    return p;
+  }
+
+  /**
+   * Wait for all in-flight background tasks (skill precipitation, memory
+   * reflection, error reflection) to settle.
+   *
+   * Call this before exiting the process — the post-hoc tasks are
+   * fire-and-forget, so `run()` resolves before they finish and an
+   * immediate `process.exit()` would truncate them mid-flight.
+   */
+  async awaitBackgroundTasks(): Promise<void> {
+    while (this.backgroundTasks.size > 0) {
+      await Promise.allSettled([...this.backgroundTasks]);
+    }
+  }
+
   // ─── Error Trace & Analysis ──────────────────────────────────────────
 
   /**
@@ -1840,10 +1900,11 @@ export abstract class Agent {
       answer.length < MIN_ANSWER_LENGTH ||
       this.inputSignals.complexity === "simple"
     ) {
-      this.logger.info(
-        "Verification",
-        `Skipping — answer length ${answer.length} < ${MIN_ANSWER_LENGTH} or task is simple.`,
-      );
+      const reason =
+        answer.length < MIN_ANSWER_LENGTH
+          ? `answer length ${answer.length} < ${MIN_ANSWER_LENGTH}`
+          : `task complexity is "simple"`;
+      this.logger.info("Verification", `Skipping — ${reason}.`);
       return answer;
     }
 

@@ -43,6 +43,9 @@ export interface ReActAgentConfig extends AgentConfig {
   /** Max iterations for the precipitation sub-agent. Default: 15. */
   precipitationMaxIterations?: number;
 
+  /** Max iterations for each skill-verification fork. Default: 8. */
+  skillVerificationMaxIterations?: number;
+
   /** Memory reflection mode. Default: "off". */
   memoryReflection?: "off" | "post-hoc";
 
@@ -75,6 +78,7 @@ export class ReActAgent extends Agent {
   private maxIterations: number;
   private precipitationMode: "off" | "post-hoc";
   private precipitationMaxIterations: number;
+  private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
   private reflectionMode: "off" | "post-hoc";
@@ -90,6 +94,7 @@ export class ReActAgent extends Agent {
     this.maxIterations = config.maxIterations ?? 10;
     this.precipitationMode = config.precipitation ?? "off";
     this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
+    this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
     this.reflectionMode = config.reflection ?? "off";
@@ -359,6 +364,13 @@ export class ReActAgent extends Agent {
         continue;
       }
 
+      // ── Hold the answer while sub-agents are still running ──────────
+      // Returning now would orphan their results. Loop once more: the
+      // next pollSubAgentResults() blocks until a pending one completes.
+      if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        continue;
+      }
+
       // Normal answer — return content
       this.logger.info("Answer", answer);
 
@@ -380,21 +392,21 @@ export class ReActAgent extends Agent {
 
       // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
       if (shouldPrecipitate) {
-        this.runPrecipitation(input, verifiedAnswer).catch((err: unknown) =>
+        this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
           this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
 
       // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
-        this.runMemoryReflection(input, verifiedAnswer).catch((err: unknown) =>
+        this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
           this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
 
       // ── Error reflection (fire-and-forget, post-hoc) ───────────────
       if (shouldReflect) {
-        this.runReflection(input, verifiedAnswer).catch((err: unknown) =>
+        this.trackBackground(this.runReflection(input, verifiedAnswer)).catch((err: unknown) =>
           this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
@@ -677,26 +689,32 @@ export class ReActAgent extends Agent {
         continue;
       }
 
+      // ── Hold the answer while sub-agents are still running ──────────
+      if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        yield "\n\n[Waiting for sub-agent results...]\n\n";
+        continue;
+      }
+
       this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
       // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
       if (shouldPrecipitate) {
-        this.runPrecipitation(input, answer).catch((err: unknown) =>
+        this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
           this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
 
       // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
-        this.runMemoryReflection(input, answer).catch((err: unknown) =>
+        this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
           this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
 
       // ── Error reflection (fire-and-forget, post-hoc) ───────────────
       if (shouldReflect) {
-        this.runReflection(input, answer).catch((err: unknown) =>
+        this.trackBackground(this.runReflection(input, answer)).catch((err: unknown) =>
           this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
@@ -751,6 +769,7 @@ export class ReActAgent extends Agent {
         llm: this.precipitationLLM ?? this.llm,
         sessionId: this.getSessionId(),
         maxIterations: this.precipitationMaxIterations,
+        skillVerificationMaxIterations: this.skillVerificationMaxIterations,
         verifySkills: this.verifySkills,
         skillVerificationLLM: this.skillVerificationLLM,
         logger: this.logger,

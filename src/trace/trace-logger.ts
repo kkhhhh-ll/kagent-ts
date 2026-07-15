@@ -90,9 +90,6 @@ export class TraceLogger implements AgentHooks {
   private totalPromptTokens = 0;
   private totalCompletionTokens = 0;
 
-  // ── Sub-agent spawn counter (links spawn events to child traces) ──
-  private spawnSeq = 0;
-
   // ── Sub-agent trace embedding ──
   private parent?: TraceLogger;
   private subTraceId: string = ""; // set on child traces to link with parent events
@@ -324,13 +321,13 @@ export class TraceLogger implements AgentHooks {
 
     // For spawn_subagent, emit a dedicated subagent_spawn event so the
     // timeline clearly delineates where work is delegated to a sub-agent.
+    // The run ID is back-filled in onToolEnd once the spawn result is known.
     if (toolName === "spawn_subagent" && args.name) {
-      const seq = ++this.spawnSeq;
       const subInput = (args.input ?? args.task ?? "") as string;
       this.addEvent("subagent_spawn", `Sub-Agent: ${args.name}`, {
         subAgentName: args.name,
         input: subInput,
-        spawnSeq: seq,
+        toolCallId,
       });
     }
   }
@@ -346,13 +343,45 @@ export class TraceLogger implements AgentHooks {
     // For spawn_subagent results, emit a subagent_result event with the
     // wrapped output so the timeline shows sub-agent completion clearly.
     if (toolName === "spawn_subagent") {
+      // Extract the run ID so spawn/result cards can deep-link to the
+      // matching child trace. Children are appended in *completion* order
+      // (they run concurrently), so linking by array index would mismatch.
+      const runId = TraceLogger.extractRunId(result) ?? toolCallId;
+      if (runId) {
+        // Back-fill the runId onto the matching subagent_spawn event.
+        for (let i = this.events.length - 1; i >= 0; i--) {
+          const e = this.events[i];
+          if (e.type !== "subagent_spawn" || e.data.runId !== undefined) continue;
+          if (toolCallId === undefined || e.data.toolCallId === toolCallId) {
+            e.data.runId = runId;
+            break;
+          }
+        }
+      }
       this.addEvent("subagent_result", `Sub-Agent Result`, {
         toolName,
         toolCallId,
+        runId,
         result: result.length > 4000 ? result.slice(0, 4000) + "\n... (truncated)" : result,
         resultLength: result.length,
       });
     }
+  }
+
+  /**
+   * Extract a sub-agent run ID from a spawn_subagent tool result.
+   *
+   * Handles both emitters of spawn_subagent events:
+   * - ReAct tool path — spawn confirmation text: `... Run ID: <id>. ...`
+   * - Orchestrator dispatch — wrapped output envelope:
+   *   `<subagent-result ... id="<id>" ...>`
+   */
+  private static extractRunId(result: string): string | undefined {
+    const confirmation = result.match(/Run ID:\s*(\S+?)\.?(?:\s|$)/);
+    if (confirmation) return confirmation[1];
+    const envelope = result.match(/<subagent-result[^>]*\bid="([^"]+)"/);
+    if (envelope) return envelope[1];
+    return undefined;
   }
 
   onToolError(toolName: string, error: string, toolCallId?: string): void {
@@ -661,13 +690,14 @@ ${this.childrenTraces.length > 0 ? this.renderChildTraces() : ""}
     const forks = this.childrenTraces.filter((c) => c.kind === "fork");
     const subAgents = this.childrenTraces.filter((c) => c.kind !== "fork");
 
-    const renderOne = (child: typeof this.childrenTraces[number], i: number, prefix: string): string => {
+    const renderOne = (child: typeof this.childrenTraces[number]): string => {
       const duration = ((child.endTime - child.startTime) / 1000).toFixed(1);
       const totalTokens = child.sessionCounters.promptTokens + child.sessionCounters.completionTokens;
       const eventCards = child.events.map((e) => this.renderEventCard(e)).join("\n");
+      const domId = this.childDomId(child.traceId);
       return `
-  <div class="child-trace" id="child-trace-${prefix}-${i}">
-    <div class="child-trace-header" onclick="document.getElementById('child-trace-${prefix}-${i}').classList.toggle('open')">
+  <div class="child-trace" id="${domId}">
+    <div class="child-trace-header" onclick="document.getElementById('${domId}').classList.toggle('open')">
       <span class="icon">${child.kind === "fork" ? "🔀" : "🤖"}</span>
       <span class="label">${this.escapeHtml(child.agentLabel)}</span>
       <span class="badge">${child.events.length} events</span>
@@ -695,7 +725,7 @@ ${eventCards}
       parts.push(
         `<div class="children-section">
   <div class="children-section-header">🔀 Fork Agents (${forks.length})</div>
-  ${forks.map((f, i) => renderOne(f, i, "fork")).join("\n")}
+  ${forks.map((f) => renderOne(f)).join("\n")}
 </div>`,
       );
     }
@@ -704,7 +734,7 @@ ${eventCards}
       parts.push(
         `<div class="children-section">
   <div class="children-section-header">🤖 Sub-Agents (${subAgents.length})</div>
-  ${subAgents.map((s, i) => renderOne(s, i, "sub")).join("\n")}
+  ${subAgents.map((s) => renderOne(s)).join("\n")}
 </div>`,
       );
     }
@@ -829,12 +859,11 @@ ${eventCards}
       case "subagent_spawn": {
         const subName = event.data.subAgentName as string | undefined;
         const subInput = event.data.input as string | undefined;
-        // Link by spawn order: childrenTraces are added in spawn order,
-        // so spawnSeq-1 = childrenTraces index.
-        const spawnSeq = event.data.spawnSeq as number | undefined;
-        const childIdx = (spawnSeq !== undefined && spawnSeq > 0 && spawnSeq <= this.childrenTraces.length)
-          ? spawnSeq - 1
-          : (this.childrenTraces.length > 0 ? this.childrenTraces.length - 1 : null);
+        // Link via run ID (back-filled by onToolEnd). Children are appended
+        // in completion order, not spawn order, so index-based linking
+        // would point at the wrong card — only link when the run ID
+        // resolves to an actual child trace.
+        const child = this.findChildTrace(event.data.runId);
         detail = `<div class="detail-section">
           <h4>Sub-Agent: ${this.escapeHtml(subName ?? "unknown")}</h4>
         </div>`;
@@ -844,22 +873,22 @@ ${eventCards}
             <pre>${this.escapeHtml(subInput)}</pre>
           </div>`;
         }
-        if (childIdx !== null && childIdx < this.childrenTraces.length) {
+        if (child) {
           detail += `<div class="detail-section">
-            <a href="#child-trace-${childIdx}" style="color:#58a6ff">📋 View sub-agent trace ↓</a>
+            <a href="#${this.childDomId(child.traceId)}" style="color:#58a6ff">📋 View sub-agent trace ↓</a>
           </div>`;
         }
         break;
       }
       case "subagent_result": {
-        const childIdx = this.childrenTraces.length > 0 ? this.childrenTraces.length - 1 : null;
+        const child = this.findChildTrace(event.data.runId);
         detail = `<div class="detail-section">
           <h4>Sub-Agent Output (${event.data.resultLength ?? 0} chars)</h4>
           <pre>${this.escapeHtml(String(event.data.result ?? ""))}</pre>
         </div>`;
-        if (childIdx !== null) {
+        if (child) {
           detail += `<div class="detail-section">
-            <a href="#child-trace-${childIdx}" style="color:#58a6ff">📋 View full sub-agent trace ↓</a>
+            <a href="#${this.childDomId(child.traceId)}" style="color:#58a6ff">📋 View full sub-agent trace ↓</a>
           </div>`;
         }
         break;
@@ -879,6 +908,17 @@ ${eventCards}
         <div class="event-detail">${detail}</div>
       </div>
     </div>`;
+  }
+
+  /** Resolve a child trace by its run ID (undefined when not found / still running). */
+  private findChildTrace(runId: unknown): TraceLogger["childrenTraces"][number] | undefined {
+    if (typeof runId !== "string" || runId.length === 0) return undefined;
+    return this.childrenTraces.find((c) => c.traceId === runId);
+  }
+
+  /** Stable DOM id for a child-trace card, derived from its trace ID. */
+  private childDomId(traceId: string): string {
+    return `child-trace-${traceId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   }
 
   /** Format large numbers with K/M suffix. */

@@ -89,6 +89,32 @@ When a tool returns [FATAL:*]:
 - The tool is gone. Do NOT retry it. Use available alternatives or a completely
   different method to accomplish the task.`;
 
+// ─── RAG (Knowledge Base) Guidance ──────────────────────────────────────────
+
+/**
+ * Injected into the system prompt when `ragConfig` is set.
+ *
+ * Tells the LLM that a local knowledge base is available and that it should
+ * search it before relying on training data alone.
+ */
+export const RAG_KNOWLEDGE_BASE_HINT = `
+=== Knowledge Base (RAG) ===
+You have access to a local knowledge base containing indexed documents.
+Use these tools to retrieve relevant context:
+
+- \`list_knowledge_documents\` — list all available documents in the knowledge base.
+- \`search_knowledge\` — search the knowledge base for chunks relevant to a query.
+  Returns the top matching text chunks with source paths and similarity scores.
+
+RULES for using the knowledge base:
+1. When the user asks about a topic that may be covered by indexed documents
+   (company info, project docs, domain-specific knowledge), search the knowledge
+   base FIRST before answering from your training data.
+2. The knowledge base may contain more accurate, up-to-date, or private
+   information that your training data lacks.
+3. If you don't know what's available, call \`list_knowledge_documents\` first.
+4. Always cite which document(s) you used when answering from the knowledge base.`;
+
 // ─── Sub-Agent Delegation ────────────────────────────────────────────────────
 
 /**

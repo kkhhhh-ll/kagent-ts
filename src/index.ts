@@ -178,6 +178,8 @@ export type { Preferences, PreferenceManagerConfig } from "./preferences/types";
 // Session persistence & network resilience
 export { SessionManager } from "./session/session-manager";
 export type { SessionManagerConfig } from "./session/session-manager";
+export { SessionViewer } from "./session/session-viewer";
+export type { SessionViewerConfig } from "./session/session-viewer";
 export type {
   SessionState,
   SessionStatus,
