@@ -181,7 +181,7 @@ class MyVectorStore implements VectorStore {
 
 | 格式 | 说明 |
 | ---- | ---- |
-| `.md` | Markdown 文件，优先按标题结构切分 |
+| `.md` | Markdown 文件 |
 | `.txt` | 纯文本文件 |
 | `.json` | JSON 文件（按纯文本处理） |
 
@@ -196,11 +196,10 @@ class MyVectorStore implements VectorStore {
 
 | 优先级 | 分隔符 | 示例 |
 | ------ | ------ | ---- |
-| 1 | Markdown 标题 | `## `, `### ` |
-| 2 | 段落边界 | `\n\n`（空行） |
-| 3 | 句子结束 | `。！？. ! ?` |
-| 4 | 子句停顿 | `，；、, ; :` |
-| 5 | 兜底硬切 | 按 chunkSize 截断 |
+| 1 | 段落边界 | `\n\n`（空行） |
+| 2 | 句子结束 | `。！？. ! ?` |
+| 3 | 子句停顿 | `，；、, ; :` |
+| 4 | 兜底硬切 | 按 chunkSize 截断 |
 
 ### Chunk 重叠
 

@@ -144,8 +144,11 @@ export class RAGManager {
     }
 
     const k = topK ?? this.config.topK ?? 5;
-    // Fetch extra candidates when re-ranking so the re-ranker has more to work with
-    const fetchFactor = this.reRanker ? (this.config.hybridRetrievalFactor ?? 3) : 1;
+    // Fetch extra candidates when using hybrid search or re-ranking,
+    // so the downstream step (RRF fusion / LLM re-ranker) has more to work with.
+    const fetchFactor = (this.keywordIndex || this.reRanker)
+      ? (this.config.hybridRetrievalFactor ?? 3)
+      : 1;
 
     let results: RAGSearchResult[];
 
@@ -185,6 +188,13 @@ export class RAGManager {
     }
 
     // ── Re-rank (optional) ────────────────────────────────────────────
+    //
+    // When both hybrid search AND re-rank are enabled, RRF fusion acts as a
+    // candidate-pool selector (merging + deduplicating the two retrieval
+    // paths with a ranking bias toward chunks that appear in both).  The LLM
+    // re-ranker then re-scores this pool from scratch.  The RRF scores are
+    // intentionally discarded here — the LLM's semantic relevance judgment
+    // is more accurate than the RRF formula for the final ordering.
     if (this.reRanker && results.length > 0) {
       results = await this.reRanker.rerank(query, results);
     }

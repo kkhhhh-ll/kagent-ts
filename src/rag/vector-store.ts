@@ -3,6 +3,11 @@
  *
  * Zero external dependencies — pure TypeScript implementation suitable
  * for knowledge bases with up to ~10K chunks.
+ *
+ * NOTE: Search is brute-force O(N) over all stored vectors.  For larger
+ * corpora (>10K chunks), replace this with an approximate-nearest-neighbor
+ * (ANN) store — e.g. ChromaVectorStore (HNSW), a hnswlib-node wrapper, or
+ * any external vector database that implements the VectorStore interface.
  */
 
 import type { VectorStore, RAGChunk, RAGSearchResult } from "./rag-types";

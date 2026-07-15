@@ -11,26 +11,6 @@ describe("TextSplitter", () => {
     expect(chunks[0]).toBe("短文本。");
   });
 
-  // ── Markdown heading boundaries ────────────────────────────────────────
-
-  it("splits at markdown heading boundaries (priority 1)", () => {
-    const text =
-      "## 第一章\n\n这是第一章的内容。" +
-      "这里有一些补充说明文字，确保内容足够形成两个独立块。" +
-      "继续填充内容以超过chunk大小限制。".repeat(3) +
-      "\n\n## 第二章\n\n这是第二章的内容。" +
-      "第二章也有很多需要说明的地方。".repeat(3);
-
-    const chunks = splitText(text, 100, 0);
-
-    expect(chunks.length).toBeGreaterThanOrEqual(2);
-    // Each chunk should start with or contain its heading
-    const hasChapter1 = chunks.some((c) => c.includes("第一章"));
-    const hasChapter2 = chunks.some((c) => c.includes("第二章"));
-    expect(hasChapter1).toBe(true);
-    expect(hasChapter2).toBe(true);
-  });
-
   // ── Paragraph boundaries ───────────────────────────────────────────────
 
   it("splits at paragraph boundaries (priority 2)", () => {

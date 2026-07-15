@@ -1,12 +1,11 @@
 /**
- * Recursive priority-based text splitter.
+ * Priority-based text splitter.
  *
  * Splits text into chunks by trying separators in priority order:
- *   1. Markdown heading boundaries  (##, ###)
- *   2. Paragraph boundaries         (double newline)
- *   3. Sentence endings             (。！？. ! ? + single newline)
- *   4. Clause pauses                (；，、, ; :)
- *   5. Hard cutoff                  (character-level, last resort)
+ *   1. Paragraph boundaries         (double newline)
+ *   2. Sentence endings             (。！？. ! ? + single newline)
+ *   3. Clause pauses                (；，、, ; :)
+ *   4. Hard cutoff                  (character-level, last resort)
  *
  * At each level the splitter finds the last separator within the chunk_size
  * window and breaks there. If no separator is found, it falls back to the
@@ -23,13 +22,11 @@
  * Each entry is a list of equivalent separators.
  */
 const SEPARATOR_PRIORITIES: string[][] = [
-  // Priority 1: Markdown heading boundaries
-  ["\n## ", "\n### ", "\n#### ", "\n# "],
-  // Priority 2: Paragraph boundaries
+  // Priority 1: Paragraph boundaries
   ["\n\n", "\r\n\r\n"],
-  // Priority 3: Sentence endings (Chinese + English)
+  // Priority 2: Sentence endings (Chinese + English)
   ["。", "！", "？", ". ", "! ", "? ", "\n", ".\n", "!\n", "?\n"],
-  // Priority 4: Clause pauses
+  // Priority 3: Clause pauses
   ["；", "，", "：", "、", "; ", ", ", ": ", ";\n", ",\n"],
 ];
 
