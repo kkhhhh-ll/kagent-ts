@@ -324,8 +324,238 @@ const agent = new ReActAgent({
 await agent.run('介绍一下 MCP 协议的使用方法？')
 ```
 
+## 检索质量评估
+
+`RAGEvaluator` 提供两种互补的评估模式，帮你衡量"检索出来的 chunk 对不对"：
+
+| 模式 | 需要标注？ | API 成本 | 适用场景 |
+|------|-----------|---------|---------|
+| Ground-Truth 指标 | 是 | 零 | CI 回归、精确对比 |
+| LLM-as-Judge | 否 | 每条若干 token | 快速探索、无标注数据 |
+
+### 评估维度
+
+```
+Layer 1: 检索质量        Layer 2: 上下文利用       Layer 3: 最终答案
+"找对了吗？"            "用对了吗？"             "答对了吗？"
+
+Precision@K / MRR       Faithfulness            EvalRunner (已有的)
+NDCG@K / Recall@K       (RAGAS 风格，待建)       正确性/完整性/清晰度
+```
+
+`RAGEvaluator` 覆盖 Layer 1——直接衡量检索系统的输出质量，在答案被 LLM 消费之前发现问题。
+
+### 基本用法
+
+```ts
+import { RAGEvaluator } from 'kagent-ts'
+
+// ragManager 可从 Agent 获取（Agent 初始化后通过 (agent as any).ragManager），
+// 或单独创建 RAGManager 实例
+const evaluator = new RAGEvaluator({ ragManager, defaultTopK: 5 })
+
+const result = await evaluator.evaluate([
+  {
+    name: "MCP 配置",
+    query: "怎么配置 MCP？",
+    // 标注的 relevant chunk ID（格式: "sourcePath#chunkIndex"）
+    relevantChunks: ["docs/advanced/mcp.md#3", "docs/advanced/mcp.md#5"],
+    topK: 5,
+  },
+  {
+    name: "Embedding 设置",
+    query: "How to set up embeddings?",
+    topK: 5, // 没有 relevantChunks → 仅靠 LLM judge（如已配置）
+  },
+])
+
+// 打印摘要
+const s = result.summary
+console.log(`Precision@K : ${s.avgPrecisionAtK.toFixed(3)}`)
+console.log(`MRR         : ${s.avgMRR.toFixed(3)}`)
+
+// 输出完整 Markdown 报告
+console.log(evaluator.generateReport(result))
+```
+
+### 模式 1: Ground-Truth 指标（零成本）
+
+需要标注数据。复用 `chunkKey()` 生成 chunk ID：
+
+```ts
+import { chunkKey } from 'kagent-ts'
+
+// 构建标注数据集
+const cases = [
+  {
+    name: "MCP 配置",
+    query: "怎么配置 MCP？",
+    relevantChunks: [
+      "docs/advanced/mcp.md#3",   // chunkKey 格式: sourcePath#chunkIndex
+      "docs/advanced/mcp.md#5",
+    ],
+    topK: 5,
+  },
+]
+
+const evaluator = new RAGEvaluator({ ragManager })
+const result = await evaluator.evaluate(cases)
+```
+
+**计算指标：**
+
+| 指标 | 公式 | 含义 |
+|------|------|------|
+| **Precision@K** | `|检索 ∩ 相关| / K` | 返回的 K 个里有多少真正相关 |
+| **Recall@K** | `|检索 ∩ 相关| / |全部相关|` | 所有相关文档被找回的比例 |
+| **MRR** | `1 / 第一个相关结果的排名` | 第一个相关结果排第几位（0 表示没找到） |
+| **NDCG@K** | `DCG / IDCG`（二值相关度） | 考虑排序位置的折损累积增益，1.0 = 完美排序 |
+
+### 模式 2: LLM-as-Judge（无标注也能评）
+
+不需要标注数据——LLM 自动判断每个 chunk 是否与 query 相关：
+
+```ts
+const evaluator = new RAGEvaluator({
+  ragManager,
+  judgeLLM: new OpenAIProvider({        // 用小模型控制成本
+    apiKey: '...',
+    model: 'gpt-4o-mini',
+  }),
+  defaultTopK: 5,
+})
+
+const result = await evaluator.evaluate([
+  { name: "MCP", query: "怎么配置 MCP？", topK: 5 },
+  { name: "团队", query: "团队介绍", topK: 5 },
+])
+
+// 每个 chunk 都有 LLM 的 relevance 判断
+for (const c of result.cases) {
+  for (const j of c.judgments) {
+    console.log(`${j.relevant ? '✅' : '❌'} [${j.score}/10] ${j.chunkId}`)
+    console.log(`  ${j.reasoning}`)
+  }
+}
+```
+
+**LLM Judge 输出：**
+
+```ts
+interface ChunkJudgment {
+  chunkId: string      // "sourcePath#chunkIndex"
+  relevant: boolean    // 是否相关（部分相关也算 true）
+  score: number        // 0–10 相关性分数
+  reasoning: string    // 一句话判断理由
+}
+```
+
+**LLM-judge 指标：**
+
+| 指标 | 含义 |
+|------|------|
+| **LLM Precision@K** | LLM 判断为相关的 chunk 占比 |
+| **LLM NDCG@K** | 用 LLM 分数（0-10）算的分级 NDCG |
+| **Avg Relevance Score** | K 个 chunk 的 LLM 平均分（0-10） |
+
+### 同时使用两种模式
+
+同时提供 `relevantChunks` 和 `judgeLLM` 时，还会计算 **Judge-Label Agreement（Cohen's κ）**——衡量 LLM judge 和人工标注的一致性：
+
+```ts
+const evaluator = new RAGEvaluator({
+  ragManager,
+  judgeLLM: smallLLM,
+})
+
+const result = await evaluator.evaluate([
+  {
+    name: "MCP",
+    query: "怎么配置 MCP？",
+    relevantChunks: ["docs/advanced/mcp.md#3"],  // 人工标注
+    topK: 5,
+  },
+])
+
+// κ = 1.0 → LLM judge 和人工标注完全一致
+// κ ≈ 0.0 → LLM judge 和随机差不多
+console.log('Judge-Label Agreement:', result.cases[0].metrics.judgeLabelAgreement)
+```
+
+### 评估时机
+
+| 阶段 | 工具 | 数据 | 频率 | 目的 |
+|------|------|------|------|------|
+| **开发迭代** | `RAGEvaluator` | 伪标注 or 手写几条 | 每次改配置 | 快速验证 chunkSize / topK / embedding |
+| **CI / 合码** | `RAGEvaluator` + 固定数据集 | 20-50 条标注 query | 每次 PR | 防退化 |
+| **线上监控** | `RAGEvaluator` + `judgeLLM` | 真实用户 query | 持续/每日 | 发现检索 drift |
+
+### 解读评估结果
+
+```
+✅ 完美 → Precision@K = 1.0, NDCG@K = 1.0
+   可能是文档太少（只有 1 个 chunk），样本量不够时指标无意义
+
+✅ 正常 → Precision@K ≈ 0.4-0.8
+   检索能命中大部分相关文档，有少量噪声
+
+⚠️ 需改进 → Precision@K < 0.3, MRR < 0.3
+   检索结果噪声大，建议调整 chunk 策略或开 hybridSearch
+
+⚠️ 排序差 → NDCG@K << 1.0 但 Precision@K 不低
+   相关文档被找到了但排在了后面，建议加 reRanker
+
+⚠️ Judge 不可靠 → κ < 0.4
+   LLM judge 和人工标注不一致，可能需要换 judge 模型或调整 prompt
+```
+
+### 完整示例
+
+```ts
+import { RAGEvaluator, OpenAIProvider, chunkKey } from 'kagent-ts'
+
+// 假设已经初始化了 agent，从中获取 ragManager
+const ragManager = (agent as any).ragManager
+
+// ── 模式 1: Ground-Truth（零成本） ──
+const evaluator = new RAGEvaluator({ ragManager, defaultTopK: 5 })
+const gtResult = await evaluator.evaluate([
+  {
+    name: "MCP 配置",
+    query: "怎么配置 MCP？",
+    relevantChunks: ["docs/advanced/mcp.md#3", "docs/advanced/mcp.md#5"],
+    topK: 5,
+  },
+])
+console.log(`Precision@5: ${gtResult.summary.avgPrecisionAtK.toFixed(3)}`)
+console.log(`MRR: ${gtResult.summary.avgMRR.toFixed(3)}`)
+
+// ── 模式 2: LLM-as-Judge ──
+const judgeEval = new RAGEvaluator({
+  ragManager,
+  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
+  defaultTopK: 5,
+})
+const llmResult = await judgeEval.evaluate([
+  { name: "MCP", query: "怎么配置 MCP？", topK: 5 },
+  { name: "团队", query: "团队介绍", topK: 5 },
+])
+
+// 逐条看 LLM 判断
+for (const c of llmResult.cases) {
+  console.log(`\n── ${c.caseName} ──`)
+  for (const j of c.judgments ?? []) {
+    console.log(`  ${j.relevant ? '✅' : '❌'} [${j.score}/10] ${j.reasoning}`)
+  }
+}
+
+// 输出完整 Markdown 报告
+console.log(judgeEval.generateReport(llmResult))
+```
+
 ## 下一步
 
+- [Eval 评估](/advanced/eval) — 完整的评估框架（工具调用 / 端到端 / 回归测试）
 - [Sub-Agent 子代理](/advanced/subagents) — 子代理如何共享 RAG 工具
 - [MCP 协议](/advanced/mcp) — 连接外部工具服务
 - [Memory 记忆](/advanced/memory) — 长期事实和规则存储

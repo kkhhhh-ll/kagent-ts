@@ -1,14 +1,15 @@
 # Eval 评估
 
-kagent-ts 提供完整的评估框架，包括工具调用指标收集、端到端测试执行、基准回归测试。
+kagent-ts 提供完整的评估框架，包括工具调用指标收集、端到端测试执行、基准回归测试，以及 RAG 检索质量评估。
 
 ## 评估组件
 
 ```
 Eval 框架
 ├── ToolCallEvaluator  → 工具调用指标收集
-├── EvalRunner         → 端到端测试用例执行
-└── Benchmark          → 基线回归测试
+├── EvalRunner         → 端到端测试用例执行（含 LLM Judge）
+├── Benchmark          → 基线回归测试
+└── RAGEvaluator       → RAG 检索质量评估（IR 指标 + LLM Judge）
 ```
 
 ## ToolCallEvaluator
@@ -227,6 +228,113 @@ interface Regression {
   description: string         // 描述
 }
 ```
+
+## RAGEvaluator — 检索质量评估
+
+直接评估 RAG 检索系统的输出质量（`Precision@K` / `Recall@K` / `MRR` / `NDCG@K`），支持两种模式：
+
+- **Ground-Truth 模式**：基于标注数据，计算传统 IR 指标，零成本
+- **LLM-as-Judge 模式**：用 LLM 对每个 chunk 打分，无需标注
+
+```ts
+import { RAGEvaluator, OpenAIProvider, chunkKey } from 'kagent-ts'
+
+// 从已初始化的 Agent 获取 ragManager
+const ragManager = (agent as any).ragManager
+
+// ── Ground-Truth 模式 ──
+const evaluator = new RAGEvaluator({ ragManager, defaultTopK: 5 })
+const result = await evaluator.evaluate([
+  {
+    name: "MCP 配置",
+    query: "怎么配置 MCP？",
+    relevantChunks: ["docs/advanced/mcp.md#3", "docs/advanced/mcp.md#5"],
+    topK: 5,
+  },
+])
+
+const s = result.summary
+console.log(`Precision@K: ${s.avgPrecisionAtK.toFixed(3)}`)
+console.log(`MRR: ${s.avgMRR.toFixed(3)}`)
+console.log(`NDCG@K: ${s.avgNdcgAtK.toFixed(3)}`)
+
+// ── LLM-as-Judge 模式 ──
+const judgeEval = new RAGEvaluator({
+  ragManager,
+  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
+})
+const llmResult = await judgeEval.evaluate([
+  { name: "MCP", query: "怎么配置 MCP？", topK: 5 },
+])
+
+for (const c of llmResult.cases) {
+  for (const j of c.judgments ?? []) {
+    console.log(`${j.relevant ? '✅' : '❌'} [${j.score}/10] ${j.reasoning}`)
+  }
+}
+
+// 完整 Markdown 报告
+console.log(judgeEval.generateReport(llmResult))
+```
+
+### 用例结构
+
+```ts
+interface RAGEvalCase {
+  name: string                // 用例名称
+  query: string               // 搜索查询
+  relevantChunks?: string[]   // 标注的 relevant chunk ID（"sourcePath#chunkIndex"）
+  topK?: number               // 检索数量（默认: evaluator 的 defaultTopK）
+}
+```
+
+### 结果结构
+
+```ts
+interface RAGCaseResult {
+  caseName: string
+  query: string
+  topK: number
+  retrieved: RAGSearchResult[]   // 检索到的 chunk（embedding 已 strip）
+  judgments?: ChunkJudgment[]    // LLM 判断（仅 judgeLLM 模式下）
+  metrics: RAGRetrievalMetrics
+}
+
+interface RAGRetrievalMetrics {
+  // Ground-Truth 指标（需要 relevantChunks）
+  precisionAtK: number           // |检索 ∩ 相关| / K
+  recallAtK: number              // |检索 ∩ 相关| / |全部相关|
+  mrr: number                    // 1 / 第一个相关结果的排名
+  ndcgAtK: number                // 归一化折损累积增益（二值相关度）
+
+  // LLM-Judge 指标（需要 judgeLLM）
+  llmPrecisionAtK?: number       // LLM 判断为相关的 chunk 占比
+  llmNdcgAtK?: number            // 用 LLM 分数算的分级 NDCG
+  avgRelevanceScore?: number     // LLM 平均相关性分 (0–10)
+
+  // 一致性（两者都需要）
+  judgeLabelAgreement?: number   // Cohen's κ (−1 到 1)
+}
+
+interface ChunkJudgment {
+  chunkId: string                // "sourcePath#chunkIndex"
+  sourcePath: string
+  chunkIndex: number
+  relevant: boolean              // LLM 判断是否相关
+  score: number                  // 0–10 相关性分数
+  reasoning: string              // 判断理由
+}
+```
+
+### 评估时机
+
+| 阶段 | 工具 | 数据 | 频率 |
+|------|------|------|------|
+| 开发迭代 | `RAGEvaluator` | 伪标注 or 手写几条 | 每次改 RAG 配置 |
+| CI / 合码 | `RAGEvaluator` + 固定数据集 | 20-50 条标注 query | 每次 PR |
+| 线上监控 | `RAGEvaluator` + `judgeLLM` | 真实用户 query | 持续/每日 |
+
+> 详细说明和解读指南见 [RAG 知识库 → 检索质量评估](/advanced/rag#检索质量评估)。
 
 ## 完整示例
 
