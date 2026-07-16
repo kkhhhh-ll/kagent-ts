@@ -7,6 +7,7 @@ import {
 } from "./response-schema";
 import { TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { wrapAndScan } from "../security/boundaries";
+import { StreamingAnswerExtractor } from "./streaming-answer-extractor";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { SessionState, SessionStatus } from "../session/session-types";
@@ -722,6 +723,9 @@ export class PlanSolveAgent extends Agent {
       let isTruncated = false;
       let toolCallsMap = new Map<number, { id?: string; name?: string; args?: string }>();
       let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+      // Filters the structured JSON envelope out of the display stream —
+      // consumers see the decoded `answer` text, not `{"thought": ...`.
+      const answerExtractor = new StreamingAnswerExtractor();
 
       try {
         for await (const event of this.llm.chatStream(
@@ -732,10 +736,11 @@ export class PlanSolveAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
+              const display = answerExtractor.feed(event.content);
               // Buffer plan-round output; stream execution-round output.
-              if (!isPlanRound) {
-                yield event.content;
-                for (const h of this.hooks) h.onChunk?.(event.content);
+              if (!isPlanRound && display) {
+                yield display;
+                for (const h of this.hooks) h.onChunk?.(display);
               }
             }
             if (event.tool_calls) {
@@ -906,6 +911,12 @@ export class PlanSolveAgent extends Agent {
         }
 
         this.logger.info("Plan-Solve", "Task complete.");
+
+        // Fallback: the envelope couldn't be streamed (no "answer" key
+        // found — malformed JSON) — emit the parsed answer now.
+        if (!answerExtractor.emitted) {
+          yield parsed.answer;
+        }
 
         // ── Answer verification (blocking, runs before returning) ──
         let verifiedAnswer = parsed.answer;

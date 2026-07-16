@@ -9,6 +9,18 @@ export type { EvalRunnerConfig, AgentFactory, EvalCase, EvalResult, LLMEvalJudgm
 export { Benchmark } from "./benchmark";
 export type { BenchmarkConfig } from "./benchmark";
 
+// RAG Evaluator — retrieval quality metrics (IR + LLM-as-judge)
+export { RAGEvaluator } from "./rag-evaluator";
+export type {
+  RAGEvalCase,
+  ChunkJudgment,
+  RAGRetrievalMetrics,
+  RAGCaseResult,
+  RAGEvalSummary,
+  RAGEvalResult,
+  RAGEvaluatorConfig,
+} from "./rag-evaluator";
+
 // Shared types
 export type {
   ToolCallRecord,

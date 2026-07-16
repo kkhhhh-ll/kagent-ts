@@ -28,6 +28,7 @@ export const WriteFileTool: Tool = {
         description: "Content to write to the file.",
       },
     },
+
     required: ["file_path", "content"],
   },
 
@@ -59,5 +60,6 @@ export const WriteFileTool: Tool = {
       return `Error writing file "${resolvedPath}": ${message}`;
     }
   },
+  sequential: true,
   requireApproval: true,
 };

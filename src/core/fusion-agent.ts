@@ -15,6 +15,7 @@ import {
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
+import { StreamingAnswerExtractor } from "./streaming-answer-extractor";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
 
@@ -1344,6 +1345,9 @@ export class FusionAgent extends Agent {
       let isTruncated = false;
       let toolCallsMap = new Map<number, { id?: string; name?: string; args?: string }>();
       let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+      // Filters the structured JSON envelope out of the display stream —
+      // consumers see the decoded `answer` text, not `{"thought": ...`.
+      const answerExtractor = new StreamingAnswerExtractor();
 
       try {
         for await (const event of this.llm.chatStream(
@@ -1354,8 +1358,11 @@ export class FusionAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              yield event.content;
-              for (const h of this.hooks) h.onChunk?.(event.content);
+              const display = answerExtractor.feed(event.content);
+              if (display) {
+                yield display;
+                for (const h of this.hooks) h.onChunk?.(display);
+              }
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
@@ -1520,6 +1527,12 @@ export class FusionAgent extends Agent {
         }
 
         this.logger.info("Fusion", "Task complete.");
+
+        // Fallback: the envelope couldn't be streamed (no "answer" key
+        // found — malformed JSON) — emit the parsed answer now.
+        if (!answerExtractor.emitted) {
+          yield parsed.answer;
+        }
 
         // ── Answer verification (blocking) ─────────────────────
         let verifiedAnswer = parsed.answer;

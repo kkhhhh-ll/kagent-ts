@@ -9,6 +9,7 @@ import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
+import { StreamingAnswerExtractor } from "./streaming-answer-extractor";
 
 
 /**
@@ -505,6 +506,9 @@ export class ReActAgent extends Agent {
       let isTruncated = false;
       let toolCallsAccumulated: Map<number, { id?: string; name?: string; args?: string }> = new Map();
       let usageInfo: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+      // Filters the structured JSON envelope out of the display stream —
+      // consumers see the decoded `answer` text, not `{"thought": ...`.
+      const answerExtractor = new StreamingAnswerExtractor();
 
       try {
         for await (const event of this.llm.chatStream(
@@ -515,8 +519,11 @@ export class ReActAgent extends Agent {
           if (event.type === "chunk") {
             if (event.content) {
               rawContent += event.content;
-              yield event.content;
-              for (const h of this.hooks) h.onChunk?.(event.content);
+              const display = answerExtractor.feed(event.content);
+              if (display) {
+                yield display;
+                for (const h of this.hooks) h.onChunk?.(display);
+              }
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
@@ -693,6 +700,12 @@ export class ReActAgent extends Agent {
       if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
         yield "\n\n[Waiting for sub-agent results...]\n\n";
         continue;
+      }
+
+      // Fallback: the envelope couldn't be streamed (no "answer" key
+      // found — plain tool round or malformed JSON) — emit the answer now.
+      if (!answerExtractor.emitted) {
+        yield answer;
       }
 
       this.fireOnFinish(answer);
