@@ -1,14 +1,5 @@
-// Shared utilities
-export { parseLLMJson } from "./utils";
-
 // Tool Call Evaluator — per-tool metrics via AgentHooks
 export { ToolCallEvaluator } from "./tool-call-evaluator";
-
-// Eval Runner — end-to-end test case execution
-export { EvalRunner, summarizeEvalResults } from "./eval-runner";
-export type { EvalRunnerConfig, AgentFactory, EvalResultsSummary } from "./eval-runner";
-// Re-export shared types from types.ts (single source of truth)
-export type { EvalCase, EvalResult, LLMEvalJudgment } from "./types";
 
 // Benchmark — regression testing & baseline comparison
 export { Benchmark } from "./benchmark";
@@ -32,8 +23,13 @@ export type {
   ToolCallRecord,
   ToolCallStats,
   ToolCallScorecard,
+  EvalCase,
+  EvalResult,
   Regression,
   Improvement,
   BenchmarkSummary,
   BenchmarkResult,
 } from "./types";
+
+// EvalRunner types (used by BenchmarkConfig)
+export type { AgentFactory } from "./eval-runner";

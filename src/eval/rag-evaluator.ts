@@ -230,8 +230,8 @@ Output ONLY the JSON array — no markdown, no extra text.`;
 /**
  * System prompt for the RAG retrieval relevance judge.
  *
- * Distinct from EvalRunner's EVAL_JUDGE_PROMPT (eval-runner.ts) which
- * judges *answer quality*, not chunk relevance.
+ * This judges *retrieval relevance* — distinct from the runtime
+ * VerifyAgent (verify-agent.ts) which checks answer quality.
  */
 const RAG_JUDGE_PROMPT = `You are an impartial retrieval relevance judge. Your job is to assess
 whether each retrieved document chunk is relevant to a search query.

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { EvalRunner, ToolCallEvaluator } from "../../src/eval";
+import { EvalRunner } from "../../src/eval/eval-runner";
+import { ToolCallEvaluator } from "../../src/eval";
 import type { AgentFactory } from "../../src/eval";
 
 // ─── Mock agent factory ───────────────────────────────────────────────

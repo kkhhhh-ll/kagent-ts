@@ -283,23 +283,20 @@ export type {
   SkillCandidate,
 } from "./precipitation/precipitate-agent";
 
-// Evaluation — tool call metrics, end-to-end testing, regression benchmarks
-export { ToolCallEvaluator, EvalRunner, Benchmark, RAGEvaluator, summarizeEvalResults, parseLLMJson } from "./eval";
+// Evaluation — tool call metrics, regression benchmarks, RAG quality
+export { ToolCallEvaluator, Benchmark, RAGEvaluator } from "./eval";
 export type {
   ToolCallRecord,
   ToolCallStats,
   ToolCallScorecard,
   EvalCase,
   EvalResult,
-  LLMEvalJudgment,
-  EvalRunnerConfig,
   AgentFactory,
   BenchmarkConfig,
   Regression,
   Improvement,
   BenchmarkSummary,
   BenchmarkResult,
-  EvalResultsSummary,
   RAGEvalCase,
   RAGCaseResult,
   RAGEvalSummary,

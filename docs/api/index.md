@@ -50,7 +50,7 @@ import {
   wrapUntrusted, detectInjectionSignatures, buildInjectionWarning,
   wrapUserAuthored, buildUserContentInjectionWarning, wrapAndScan,
   // Eval
-  ToolCallEvaluator, EvalRunner, Benchmark,
+  ToolCallEvaluator, Benchmark,
   // Trace
   TraceLogger,
   // Utils
@@ -85,7 +85,7 @@ import {
 | **Rules** | ProjectRules — 项目规则注入 | [指南 - Rules](/advanced/rules) |
 | **Git** | GitWorktreeManager — Worktree 隔离执行 | [指南 - Git](/advanced/git) |
 | **Security** | 边界标记 / 注入签名扫描 | [指南 - Security](/advanced/security) |
-| **Eval** | ToolCallEvaluator / EvalRunner / Benchmark | [指南 - Eval](/advanced/eval) |
+| **Eval** | ToolCallEvaluator / Benchmark | [指南 - Eval](/advanced/eval) |
 | **Trace** | TraceLogger — 全链路追踪 | [指南 - Trace](/advanced/trace) |
 | **Logging** | Logger / ConsoleLogger / SilentLogger | [指南 - Logging](/advanced/logging) |
 
@@ -166,7 +166,7 @@ type McpServerConfig / McpConnectionStatus / McpConnectionErrorReport
 
 // Eval & Trace
 type ToolCallRecord / ToolCallStats / ToolCallScorecard
-type EvalCase / EvalResult / LLMEvalJudgment / EvalRunnerConfig
+type EvalCase / EvalResult
 type Regression / Improvement / BenchmarkSummary / BenchmarkResult
 type TraceLoggerConfig / AgentTraceEvent / AgentTraceEventType
 

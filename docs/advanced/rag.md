@@ -339,7 +339,7 @@ await agent.run('介绍一下 MCP 协议的使用方法？')
 Layer 1: 检索质量        Layer 2: 上下文利用       Layer 3: 最终答案
 "找对了吗？"            "用对了吗？"             "答对了吗？"
 
-Precision@K / MRR       Faithfulness            EvalRunner (已有的)
+Precision@K / MRR       Faithfulness            Benchmark (回归检测)
 NDCG@K / Recall@K       (RAGAS 风格，待建)       正确性/完整性/清晰度
 ```
 

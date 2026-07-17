@@ -1,14 +1,9 @@
-import type { LLMProvider, LLMResponse } from "../llm/interface";
-import { ModelRouter } from "../llm/model-router";
-import type { MessageData } from "../messages/types";
-import { Role } from "../messages/types";
 import { ToolCallEvaluator } from "./tool-call-evaluator";
-import { parseLLMJson } from "./utils";
-import type { EvalCase, EvalResult, LLMEvalJudgment } from "./types";
+import type { EvalCase, EvalResult } from "./types";
 
 // ─── Re-export for convenience ─────────────────────────────────────────────
 
-export type { EvalCase, EvalResult, LLMEvalJudgment } from "./types";
+export type { EvalCase, EvalResult } from "./types";
 
 /**
  * An agent factory — called once per eval case to create a fresh agent
@@ -29,58 +24,7 @@ export interface EvalRunnerConfig {
    * Default: 120_000 (2 minutes).
    */
   defaultTimeoutMs?: number;
-
-  /**
-   * The main LLM provider used by the agents under test.
-   *
-   * When set and `judgeLLM` is not explicitly provided, the runner
-   * auto-resolves `judgeLLM` via `ModelRouter.forReflection()` if this
-   * is a ModelRouter — providing an unbiased quality assessment with
-   * a different model.
-   */
-  llm?: LLMProvider;
-
-  /**
-   * Optional LLM provider for answer quality judging.
-   * When set, each case's final answer is independently evaluated.
-   *
-   * When omitted:
-   * 1. If `llm` is a ModelRouter → uses `router.forReflection()`
-   * 2. Otherwise → LLM judging is skipped
-   *
-   * Using a different model than the agent's own LLM provides an
-   * unbiased quality assessment.
-   */
-  judgeLLM?: LLMProvider;
 }
-
-// ─── LLM Judge System Prompt ──────────────────────────────────────────────
-
-/**
- * System prompt for the offline evaluation judge.
- *
- * This judge operates **after** mechanical checks pass and evaluates the
- * *quality* of the final answer.  It is distinct from the runtime
- * VerifyAgent (verify-agent.ts), which checks answers during agent
- * execution with a different rubric (Correctness / Completeness /
- * Consistency / Actionability).
- */
-const EVAL_JUDGE_PROMPT = `You are an impartial evaluation judge. Your job is to assess the quality
-of an AI agent's answer to a user query.
-
-Evaluate the answer across these dimensions:
-- **Correctness**: Is the answer factually correct?
-- **Completeness**: Does it fully address the user's query?
-- **Clarity**: Is the answer well-structured and easy to understand?
-- **Efficiency**: Did the agent use a reasonable approach? Any obvious wasted effort?
-
-Output a JSON object:
-{
-  "passed": true/false,
-  "score": 0-100,
-  "reasoning": "brief explanation (1-3 sentences)",
-  "issues": ["issue 1", "issue 2"]  // empty array if no issues
-}`;
 
 /**
  * EvalRunner — runs test cases against an agent and produces pass/fail results.
@@ -88,37 +32,16 @@ Output a JSON object:
  * Uses an agent factory so each case starts fresh (no context pollution between
  * cases). The factory receives a ToolCallEvaluator hook to collect metrics.
  *
- * Usage:
- * ```ts
- * const runner = new EvalRunner({ judgeLLM: router.forReflection() });
+ * This is an internal implementation detail of {@link Benchmark}.  Most users
+ * should use `Benchmark` directly rather than `EvalRunner`.
  *
- * const results = await runner.run(
- *   (evaluator) => new ReActAgent({ llm, hooks: [evaluator] }),
- *   [
- *     { name: "basic math", input: "2+2=?", expectedTools: ["calculator"] },
- *     { name: "file read", input: "read README.md", expectedTools: ["read_file"] },
- *   ],
- * );
- *
- * console.log(runner.generateReport(results));
- * ```
+ * @internal
  */
 export class EvalRunner {
   private defaultTimeoutMs: number;
-  private judgeLLM?: LLMProvider;
 
   constructor(config?: EvalRunnerConfig) {
     this.defaultTimeoutMs = config?.defaultTimeoutMs ?? 120_000;
-
-    // Resolve judge LLM:
-    // 1. Explicit `judgeLLM` → use it directly
-    // 2. `llm` is a ModelRouter → use router.forReflection() (unbiased review)
-    // 3. Neither → skip LLM judging
-    if (config?.judgeLLM) {
-      this.judgeLLM = config.judgeLLM;
-    } else if (config?.llm instanceof ModelRouter) {
-      this.judgeLLM = config.llm.forReflection();
-    }
   }
 
   /**
@@ -195,29 +118,12 @@ export class EvalRunner {
       const durationMs = Date.now() - startedAt;
       const scorecard = evaluator.getScorecard();
 
-      // ── LLM Judging ───────────────────────────────────────────────
-      let llmJudgment: LLMEvalJudgment | undefined;
-      if (this.judgeLLM && failures.length === 0) {
-        try {
-          llmJudgment = await this.judgeAnswer(c.input, answer);
-        } catch {
-          // Judge failed — leave judgment undefined
-        }
-      }
-
-      if (llmJudgment && !llmJudgment.passed) {
-        failures.push(
-          `LLM judge (score ${llmJudgment.score}/100): ${llmJudgment.reasoning}`,
-        );
-      }
-
       results.push({
         caseName: c.name,
         passed: failures.length === 0,
         answer,
         durationMs,
         scorecard,
-        llmJudgment,
         failures,
       });
     }
@@ -259,16 +165,6 @@ export class EvalRunner {
       report += `- **Tool calls:** ${r.scorecard.totalCalls} (${toolNames.join(", ") || "none"})\n`;
       report += `- **Tool success rate:** ${(r.scorecard.overallSuccessRate * 100).toFixed(1)}%\n`;
 
-      if (r.llmJudgment) {
-        report += `- **Judge score:** ${r.llmJudgment.score}/100\n`;
-        if (r.llmJudgment.issues.length > 0) {
-          report += `- **Issues:**\n`;
-          for (const issue of r.llmJudgment.issues) {
-            report += `  - ${issue}\n`;
-          }
-        }
-      }
-
       if (r.failures.length > 0) {
         report += `- **Failures:**\n`;
         for (const f of r.failures) {
@@ -293,54 +189,6 @@ export class EvalRunner {
     return report;
   }
 
-  // ─── Private ────────────────────────────────────────────────────────────
-
-  private async judgeAnswer(
-    query: string,
-    answer: string,
-  ): Promise<LLMEvalJudgment> {
-    if (!this.judgeLLM) {
-      return { passed: true, score: 100, reasoning: "", issues: [] };
-    }
-
-    const messages: MessageData[] = [
-      { role: Role.System, content: EVAL_JUDGE_PROMPT },
-      {
-        role: Role.User,
-        content: [
-          `User query: ${query}`,
-          ``,
-          `Agent answer: ${answer}`,
-          ``,
-          `Please evaluate the answer quality. Output JSON only.`,
-        ].join("\n"),
-      },
-    ];
-
-    const response: LLMResponse = await this.judgeLLM.chat(messages);
-    return this.parseJudgment(response.content);
-  }
-
-  private parseJudgment(raw: string): LLMEvalJudgment {
-    const parsed = parseLLMJson(raw);
-
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const obj = parsed as Record<string, unknown>;
-      return {
-        passed: Boolean(obj.passed),
-        score: Math.max(0, Math.min(100, Number(obj.score) || 0)),
-        reasoning: String(obj.reasoning ?? ""),
-        issues: Array.isArray(obj.issues) ? obj.issues.map(String) : [],
-      };
-    }
-
-    return {
-      passed: true,
-      score: 50,
-      reasoning: "Could not parse judge response.",
-      issues: [],
-    };
-  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

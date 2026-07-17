@@ -129,20 +129,6 @@ export interface EvalCase {
 }
 
 /**
- * LLM-based quality judgment of an agent's final answer.
- */
-export interface LLMEvalJudgment {
-  /** Whether the LLM judge considers the answer satisfactory. */
-  passed: boolean;
-  /** 0–100 quality score. */
-  score: number;
-  /** Brief explanation of the judgment. */
-  reasoning: string;
-  /** Specific issues identified (empty if none). */
-  issues: string[];
-}
-
-/**
  * Result of running a single evaluation case.
  */
 export interface EvalResult {
@@ -156,8 +142,6 @@ export interface EvalResult {
   durationMs: number;
   /** Tool call scorecard for this run. */
   scorecard: ToolCallScorecard;
-  /** Optional LLM-based quality judgment. */
-  llmJudgment?: LLMEvalJudgment;
   /** Failure reasons (empty if passed). */
   failures: string[];
 }

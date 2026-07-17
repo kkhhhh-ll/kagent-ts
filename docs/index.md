@@ -132,7 +132,7 @@ kagent-ts
 ├── memory/         # 长期记忆 (MEMORY.md)
 ├── preferences/    # 用户偏好注入
 ├── rules/          # 项目规则注入 (CLAUDE.md)
-├── eval/           # 评估框架（EvalRunner, Benchmark 回归测试）
+├── eval/           # 评估框架（Benchmark 回归测试）
 ├── trace/          # 执行追踪 (HTML Trace Logger)
 ├── logging/        # 结构化日志接口
 └── utils/          # Token 计数等工具
