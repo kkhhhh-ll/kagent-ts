@@ -12,6 +12,19 @@ Eval 框架
 └── RAGEvaluator       → RAG 检索质量评估（IR 指标 + LLM Judge）
 ```
 
+### 两种 Judge 的区别
+
+框架有两套独立的 LLM Judge，评测对象和维度不同：
+
+| | EvalRunner Judge | RAGEvaluator Judge | VerifyAgent |
+|---|---|---|---|
+| **用途** | 离线评估：Agent 最终回答质量 | 离线评估：RAG chunk 检索相关性 | 运行时自检：Agent 回答质量 |
+| **维度** | Correctness / Completeness / Clarity / Efficiency | 每个 chunk 的 relevance (0/1) + score (0-10) | Correctness / Completeness / Consistency / Actionability |
+| **工具** | ❌ 无 | ❌ 无 | ✅ read_file / grep_search 查代码库 |
+| **触发** | EvalRunner 机械校验通过后 | RAGEvaluator.evaluate() | Agent 回答完成时（post-hoc） |
+
+**RAGEvaluator Judge** 和 **EvalRunner Judge** 虽然都接受 `judgeLLM` 配置，但评测不同对象，可以同时使用、不冲突。`VerifyAgent` 用于运行时自纠（会 fork 子 Agent 用只读工具验证），与离线评估互不干扰。
+
 ## ToolCallEvaluator
 
 收集每个工具的调用指标：
@@ -252,6 +265,10 @@ const cases = await RAGEvaluator.generateSyntheticCases(ragManager, {
 })
 
 // Step 2: 双模式同时评估
+// 方式 1: 传入 llm（ModelRouter）→ 自动走 forReflection() 做 unbiased review
+const evaluator = new RAGEvaluator({ ragManager, llm: router })
+
+// 方式 2: 显式指定 judgeLLM（完全控制评判模型）
 const evaluator = new RAGEvaluator({
   ragManager,
   judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),

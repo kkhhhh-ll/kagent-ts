@@ -8,6 +8,15 @@ import type { VerificationResult, VerificationInput } from "./types";
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
+/**
+ * System prompt for the **runtime** answer-verification agent.
+ *
+ * This runs during agent execution (post-hoc verification) and can use
+ * read-only tools to fact-check claims against the codebase.  It is
+ * distinct from the offline EvalRunner judge (eval-runner.ts) which
+ * evaluates answer quality on Correctness / Completeness / Clarity /
+ * Efficiency without tool access.
+ */
 const VERIFY_SYSTEM_PROMPT = `You are an answer-verification agent. Your job is to check whether an AI assistant's
 answer correctly and completely addresses the user's question.
 

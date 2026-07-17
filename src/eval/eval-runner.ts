@@ -3,6 +3,7 @@ import { ModelRouter } from "../llm/model-router";
 import type { MessageData } from "../messages/types";
 import { Role } from "../messages/types";
 import { ToolCallEvaluator } from "./tool-call-evaluator";
+import { parseLLMJson } from "./utils";
 import type { EvalCase, EvalResult, LLMEvalJudgment } from "./types";
 
 // ─── Re-export for convenience ─────────────────────────────────────────────
@@ -55,7 +56,16 @@ export interface EvalRunnerConfig {
 
 // ─── LLM Judge System Prompt ──────────────────────────────────────────────
 
-const JUDGE_SYSTEM_PROMPT = `You are an impartial evaluation judge. Your job is to assess the quality
+/**
+ * System prompt for the offline evaluation judge.
+ *
+ * This judge operates **after** mechanical checks pass and evaluates the
+ * *quality* of the final answer.  It is distinct from the runtime
+ * VerifyAgent (verify-agent.ts), which checks answers during agent
+ * execution with a different rubric (Correctness / Completeness /
+ * Consistency / Actionability).
+ */
+const EVAL_JUDGE_PROMPT = `You are an impartial evaluation judge. Your job is to assess the quality
 of an AI agent's answer to a user query.
 
 Evaluate the answer across these dimensions:
@@ -294,7 +304,7 @@ export class EvalRunner {
     }
 
     const messages: MessageData[] = [
-      { role: Role.System, content: JUDGE_SYSTEM_PROMPT },
+      { role: Role.System, content: EVAL_JUDGE_PROMPT },
       {
         role: Role.User,
         content: [
@@ -312,27 +322,24 @@ export class EvalRunner {
   }
 
   private parseJudgment(raw: string): LLMEvalJudgment {
-    try {
-      let json = raw.trim();
-      const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) json = fenceMatch[1];
+    const parsed = parseLLMJson(raw);
 
-      const parsed = JSON.parse(json);
-
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
       return {
-        passed: Boolean(parsed.passed),
-        score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
-        reasoning: String(parsed.reasoning ?? ""),
-        issues: Array.isArray(parsed.issues) ? parsed.issues.map(String) : [],
-      };
-    } catch {
-      return {
-        passed: true,
-        score: 50,
-        reasoning: "Could not parse judge response.",
-        issues: [],
+        passed: Boolean(obj.passed),
+        score: Math.max(0, Math.min(100, Number(obj.score) || 0)),
+        reasoning: String(obj.reasoning ?? ""),
+        issues: Array.isArray(obj.issues) ? obj.issues.map(String) : [],
       };
     }
+
+    return {
+      passed: true,
+      score: 50,
+      reasoning: "Could not parse judge response.",
+      issues: [],
+    };
   }
 }
 

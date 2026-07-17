@@ -42,8 +42,10 @@ import { chunkKey } from "../rag/rrf";
 import type { RAGManager } from "../rag/rag-manager";
 import type { RAGSearchResult } from "../rag/rag-types";
 import type { LLMProvider } from "../llm/interface";
+import { ModelRouter } from "../llm/model-router";
 import type { MessageData } from "../messages/types";
 import { Role } from "../messages/types";
+import { parseLLMJson } from "./utils";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -163,14 +165,25 @@ export interface RAGEvaluatorConfig {
   ragManager: RAGManager;
 
   /**
+   * The main LLM provider (optional — used to auto-resolve `judgeLLM`).
+   *
+   * When set and `judgeLLM` is not explicitly provided:
+   * 1. If this is a ModelRouter → uses `router.forReflection()`
+   * 2. Otherwise → LLM judging is skipped
+   *
+   * This mirrors EvalRunner's resolution logic so both evaluators
+   * behave consistently.
+   */
+  llm?: LLMProvider;
+
+  /**
    * Optional LLM provider for judging chunk relevance.
    *
    * When provided, each retrieved chunk is independently scored by the
    * LLM for relevance to the query. Use a small/fast model here to
    * control cost (e.g. gpt-4o-mini, haiku).
    *
-   * When omitted, only ground-truth metrics are computed. Cases without
-   * `relevantChunks` will have zeroed ground-truth metrics.
+   * When omitted, resolved from `llm` (see above) or skipped.
    */
   judgeLLM?: LLMProvider;
 
@@ -214,7 +227,13 @@ Output ONLY the JSON array — no markdown, no extra text.`;
 
 // ─── LLM Judge Prompt ───────────────────────────────────────────────────────
 
-const JUDGE_SYSTEM_PROMPT = `You are an impartial retrieval relevance judge. Your job is to assess
+/**
+ * System prompt for the RAG retrieval relevance judge.
+ *
+ * Distinct from EvalRunner's EVAL_JUDGE_PROMPT (eval-runner.ts) which
+ * judges *answer quality*, not chunk relevance.
+ */
+const RAG_JUDGE_PROMPT = `You are an impartial retrieval relevance judge. Your job is to assess
 whether each retrieved document chunk is relevant to a search query.
 
 For each chunk, determine:
@@ -243,8 +262,17 @@ export class RAGEvaluator {
 
   constructor(config: RAGEvaluatorConfig) {
     this.ragManager = config.ragManager;
-    this.judgeLLM = config.judgeLLM;
     this.defaultTopK = config.defaultTopK ?? 5;
+
+    // Resolve judge LLM (same 3-tier logic as EvalRunner):
+    // 1. Explicit `judgeLLM` → use it directly
+    // 2. `llm` is a ModelRouter → use router.forReflection() (unbiased review)
+    // 3. Neither → skip LLM judging
+    if (config.judgeLLM) {
+      this.judgeLLM = config.judgeLLM;
+    } else if (config.llm instanceof ModelRouter) {
+      this.judgeLLM = config.llm.forReflection();
+    }
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -550,7 +578,7 @@ export class RAGEvaluator {
     ).join("\n\n---\n\n");
 
     const messages: MessageData[] = [
-      { role: Role.System, content: JUDGE_SYSTEM_PROMPT },
+      { role: Role.System, content: RAG_JUDGE_PROMPT },
       {
         role: Role.User,
         content: [
@@ -585,31 +613,17 @@ export class RAGEvaluator {
     raw: string,
     expectedCount: number,
   ): Array<{ relevant: boolean; score: number; reasoning: string }> {
-    // Try to extract JSON from the response (handles markdown fences and
-    // leading/trailing text).
-    try {
-      let json = raw.trim();
+    const parsed = parseLLMJson(raw);
 
-      // Strip markdown code fences if present
-      const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) json = fenceMatch[1];
+    if (!parsed || !Array.isArray(parsed)) return [];
 
-      // Find the outermost JSON array
-      const arrayMatch = json.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (arrayMatch) json = arrayMatch[0];
-
-      const arr = JSON.parse(json) as Array<Record<string, unknown>>;
-
-      if (!Array.isArray(arr)) return [];
-
-      return arr.slice(0, expectedCount).map((item) => ({
+    return (parsed as Array<Record<string, unknown>>)
+      .slice(0, expectedCount)
+      .map((item) => ({
         relevant: Boolean(item.relevant),
         score: Math.max(0, Math.min(10, Math.round(Number(item.score) || 0))),
         reasoning: String(item.reasoning ?? ""),
       }));
-    } catch {
-      return [];
-    }
   }
 
   /**
@@ -617,24 +631,13 @@ export class RAGEvaluator {
    * Handles markdown fences and leading/trailing text.
    */
   private static parseQuestions(raw: string): string[] {
-    try {
-      let json = raw.trim();
+    const parsed = parseLLMJson(raw);
 
-      const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fenceMatch) json = fenceMatch[1];
+    if (!parsed || !Array.isArray(parsed)) return [];
 
-      const arrayMatch = json.match(/\[\s*"[\s\S]*"[\s\S]*\]/);
-      if (arrayMatch) json = arrayMatch[0];
-
-      const arr = JSON.parse(json);
-      if (!Array.isArray(arr)) return [];
-
-      return arr
-        .map((item) => String(item ?? "").trim())
-        .filter((q) => q.length > 0);
-    } catch {
-      return [];
-    }
+    return (parsed as unknown[])
+      .map((item) => String(item ?? "").trim())
+      .filter((q) => q.length > 0);
   }
 
   // ─── Private: Metrics ────────────────────────────────────────────────────

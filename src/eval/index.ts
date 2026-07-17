@@ -1,3 +1,6 @@
+// Shared utilities
+export { parseLLMJson } from "./utils";
+
 // Tool Call Evaluator — per-tool metrics via AgentHooks
 export { ToolCallEvaluator } from "./tool-call-evaluator";
 
