@@ -563,53 +563,44 @@ Phase 2 — RESOLVE: Execute each step of the plan. Use tools as needed.
 - A revision replaces all remaining steps — do NOT re-list already completed steps.
 
 === Response Format ===
-You MUST respond with a valid JSON object in the "content" field.
+Use bracket-delimited markers. This format avoids JSON escaping problems
+and is the preferred way to structure your responses.
 
 Creating the INITIAL PLAN:
-{"thought": "...analysis...", "plan": ["Step 1: description", "Step 2: description", "..."]}
-
-Executing steps (use "currentStep" to indicate your progress):
-{"thought": "...reasoning...", "currentStep": 2}
-
-REVISING the plan (replaces REMAINING steps only):
-{"thought": "...reasoning about why the plan needs to change...", "revised_plan": ["Updated Step A: ...", "Updated Step B: ...", "..."]}
-
-Final answer:
-{"thought": "...summary...", "answer": "...complete answer for the user..."}
-
-Rules:
-- "thought" is REQUIRED in every response.
-- "plan" is ONLY for the initial plan creation (first response after user input).
-- "revised_plan" replaces REMAINING steps — do NOT re-list already done steps.
-- "currentStep" is the 1-based index of the step you are about to execute next.
-- "answer" is ONLY for the final response, when ALL steps are complete.
-- The JSON must be valid and parseable — no trailing commas, no comments.
-
-ALTERNATIVELY, you may use bracket-delimited markers (especially if JSON escaping is difficult):
 [Thought] <analysis of the task>
 [Plan]
 1. First step description
 2. Second step description
 
-[Thought] <reasoning>
+Executing steps:
+[Thought] <reasoning about the current step>
 [Current Step] 2
 
+REVISING the plan (replaces REMAINING steps only):
 [Thought] <why the plan needs to change>
 [Revised Plan]
 1. Updated step A
 2. Updated step B
 
+Final answer:
 [Thought] <summary>
-[Final Answer] <complete answer for the user>
+[Final Answer] <complete answer for the user — can be multi-paragraph>
 
-Bracket format rules:
+Rules:
 - Every response MUST start with [Thought].
 - [Plan] is ONLY for the initial plan (numbered list follows).
-- [Revised Plan] replaces REMAINING steps.
+- [Revised Plan] replaces REMAINING steps — do NOT re-list already done steps.
 - [Current Step] is the 1-based step index you are about to execute.
 - [Final Answer] signals task completion — only use when truly done.
+- ⚠️ "answer" is NOT a tool/function. Never call it via function calling.
+  Put your final response after the [Final Answer] marker instead.
 
-=== When to Replan — output "revised_plan" when: ===
+ALTERNATIVELY, you may use JSON format if you prefer:
+{"thought": "...", "plan": [...]} / {"thought": "...", "answer": "..."}
+JSON rules: valid and parseable — no trailing commas, no comments. But
+bracket format is strongly preferred — it requires no escaping at all.
+
+=== When to Replan — output [Revised Plan] when: ===
 1. REPEATED TOOL FAILURES: A tool fails 2+ consecutive times on the same step.
    → The current approach isn't working — try a completely different method.
 
@@ -626,7 +617,7 @@ Bracket format rules:
    → Skip or reorder steps — try a different angle to reach the goal.
 
 IMPORTANT: Replanning is a normal part of problem-solving. If in doubt,
-output a "revised_plan" rather than retrying the same failing approach.`;
+output a [Revised Plan] rather than retrying the same failing approach.`;
 
 /**
  * Text-mode instructions for the Plan-and-Solve paradigm.
@@ -822,41 +813,59 @@ You are a Fusion Agent that combines ReAct (Reasoning + Acting) with Plan-and-So
 
 When you HAVE a plan (complex tasks):
 1. Work through each step of the plan using tools as needed.
-2. Track your progress with "currentStep" (1-based index of the step you are about to execute).
-3. If you encounter unexpected results or tool failures, revise remaining steps with "revised_plan".
-4. When all steps are complete, provide the final "answer".
+2. Track your progress with [Current Step].
+3. If you encounter unexpected results or tool failures, revise remaining steps with [Revised Plan].
+4. When all steps are complete, provide the [Final Answer].
 
 When you DON'T have a plan (simple tasks):
 1. Think step by step about what the user needs.
 2. Use tools as needed to gather information.
-3. When you have enough information, provide the final "answer".
+3. When you have enough information, provide the [Final Answer].
 
 === Response Format ===
-You MUST respond with a valid JSON object in the "content" field.
+Use bracket-delimited markers. This format avoids JSON escaping problems
+and is the preferred way to structure your responses.
 
 Creating the INITIAL PLAN:
-{"thought": "...analysis...", "plan": ["Step 1: description", "Step 2: description", "..."]}
+[Thought] <analysis of the task>
+[Plan]
+1. First step description
+2. Second step description
 
 Executing steps (with a plan):
-{"thought": "...reasoning...", "currentStep": 2}
+[Thought] <reasoning about the current step>
+[Current Step] 2
 
 REVISING the plan (replaces REMAINING steps only):
-{"thought": "...reasoning about why the plan needs to change...", "revised_plan": ["Updated Step A: ...", "Updated Step B: ..."]}
+[Thought] <why the plan needs to change>
+[Revised Plan]
+1. Updated step A
+2. Updated step B
 
 Final answer:
-{"thought": "...summary...", "answer": "...complete answer for the user..."}
+[Thought] <summary of what was accomplished>
+[Final Answer] <your complete answer for the user — can be multi-paragraph>
 
 Simple execution (no plan):
-{"thought": "...reasoning..."}
+[Thought] <reasoning about what to do>
+
+When you need to use a tool, include your reasoning in [Thought] and send
+the tool call via the function calling mechanism. The [Thought] and the
+tool call go in the same response — [Thought] in the content field,
+tool calls in the tool_calls field.
 
 Rules:
-- "thought" is REQUIRED in every response.
-- "plan" is ONLY for the initial plan creation (first response after user input).
-- "revised_plan" replaces REMAINING steps — do NOT re-list already done steps.
-- "currentStep" is the 1-based index of the step you are about to execute next.
-- "answer" is ONLY for the final response, when the task is fully complete.
-- The JSON must be valid and parseable — no trailing commas, no comments.
-- If you need to use a tool, put your reasoning in "thought" as JSON, and send the tool call via the function calling mechanism.
+- Every response MUST start with [Thought].
+- [Plan] is ONLY for the initial plan creation. Steps MUST be a numbered list.
+- [Revised Plan] replaces REMAINING steps — do NOT re-list already done steps.
+- [Current Step] is the 1-based index of the step you are about to execute.
+- [Final Answer] signals task completion — only use when truly done.
+- ⚠️ "answer" is NOT a tool/function. Never call it via function calling.
+  Put your final response after the [Final Answer] marker instead.
+
+ALTERNATIVELY, you may use JSON format:
+{"thought": "...", "plan": [...]} / {"thought": "...", "answer": "..."}
+But bracket format is preferred — it requires no escaping.
 
 === When to Replan ===
 1. REPEATED TOOL FAILURES: A tool fails 2+ consecutive times on the same step.
@@ -864,7 +873,7 @@ Rules:
 3. EXECUTION DRIFT: The actual state differs from what the plan expected.
 4. STUCK ON A STEP: Cannot make progress after multiple attempts.
 
-If in doubt, output a "revised_plan" rather than retrying.`;
+If in doubt, output a [Revised Plan] rather than retrying.`;
 
 /**
  * Inline-reflection prompt template.

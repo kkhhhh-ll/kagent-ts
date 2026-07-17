@@ -2,35 +2,39 @@
  * StreamingAnswerExtractor — incremental display filter for structured
  * LLM output.
  *
- * The agents instruct the LLM to emit a JSON envelope
- * (`{"thought": "...", "answer": "..."}`). Streaming that envelope raw
- * gives consumers escaped JSON (`\n`, `\"`) instead of the answer text.
+ * The agents instruct the LLM to emit either JSON or bracket-delimited
+ * markers. Streaming the raw structured output gives consumers noise
+ * (JSON escapes, thought markers) instead of the answer text.
  * This extractor is fed each content delta and returns only what should
  * be displayed:
  *
- * - Output that does NOT start with `{` is passed through verbatim
- *   (the model answered in plain text).
- * - For JSON output, everything before the `"answer"` string value is
- *   suppressed (the thought, tool-call envelopes), and the answer value
- *   is emitted incrementally with JSON string escapes decoded.
- * - Deltas may split anywhere — including in the middle of an escape
- *   sequence (`\` + `n`) or a `\uXXXX` unicode escape.
+ * - JSON format:  `{"thought": "...", "answer": "..."}` — the answer
+ *   value is extracted incrementally with JSON string escapes decoded.
+ * - Bracket format: `[Thought] ... [Final Answer] ...` — everything
+ *   before `[Final Answer]` is suppressed; the answer text after is
+ *   passed through verbatim.
+ * - Plain text (starts with neither `{` nor `[`): passed through verbatim.
+ *
+ * Deltas may split anywhere — including in the middle of an escape
+ * sequence or a bracket marker.
  *
  * One instance per LLM call. When `emitted` is false after the stream
- * ends (no answer key found — e.g. a thought-only tool round or
- * malformed JSON), the caller is responsible for yielding the parsed
- * answer as a fallback.
+ * ends (no answer key found — e.g. a thought-only tool round), the
+ * caller is responsible for yielding the parsed answer as a fallback.
  */
 export class StreamingAnswerExtractor {
-  private mode: "detect" | "passthrough" | "search" | "answer" | "done" = "detect";
-  /** Accumulates raw text while detecting / searching for the answer key. */
+  private mode: "detect" | "passthrough" | "search" | "answer" | "bracket" | "done" = "detect";
+  /** Accumulates raw text while detecting / searching for the answer delimiter. */
   private buffer = "";
-  /** Holds an incomplete escape sequence split across deltas. */
+  /** Holds an incomplete escape sequence split across deltas (JSON mode). */
   private pending = "";
   private _emitted = false;
 
   /** Matches the opening of the answer string value in the JSON envelope. */
   private static ANSWER_KEY = /"answer"\s*:\s*"/;
+
+  /** Matches the [Final Answer] bracket marker (case-insensitive). */
+  private static FINAL_ANSWER_MARKER = /\[Final Answer\]\s*/i;
 
   /** Whether any display text has been produced so far. */
   get emitted(): boolean {
@@ -53,6 +57,11 @@ export class StreamingAnswerExtractor {
         this.buffer += delta;
         const trimmed = this.buffer.trimStart();
         if (trimmed.length === 0) return ""; // only whitespace so far
+        if (trimmed[0] === "[") {
+          // Bracket format — suppress until [Final Answer]
+          this.mode = "bracket";
+          return this.scanForFinalAnswer(delta);
+        }
         if (trimmed[0] !== "{") {
           // Plain-text answer — flush the buffer and pass through from now on.
           this.mode = "passthrough";
@@ -70,7 +79,29 @@ export class StreamingAnswerExtractor {
 
       case "answer":
         return this.decodeAnswer(delta);
+
+      case "bracket":
+        return this.scanForFinalAnswer(delta);
     }
+  }
+
+  /**
+   * Buffer content incrementally until the [Final Answer] marker is found,
+   * then switch to passthrough for everything after.
+   */
+  private scanForFinalAnswer(delta: string): string {
+    this.buffer += delta;
+    const match = StreamingAnswerExtractor.FINAL_ANSWER_MARKER.exec(this.buffer);
+    if (!match) return "";
+    // Found [Final Answer] — everything after it is the answer text.
+    const after = this.buffer.slice(match.index + match[0].length);
+    this.buffer = "";
+    this.mode = "passthrough";
+    if (after.length > 0) {
+      this._emitted = true;
+      return after;
+    }
+    return "";
   }
 
   /** Look for `"answer": "` in the accumulated JSON prefix. */

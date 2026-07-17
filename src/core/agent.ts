@@ -891,6 +891,34 @@ export abstract class Agent {
   }
 
   /**
+   * Intercept hallucinated "answer" tool calls.
+   *
+   * Some models (e.g. DeepSeek) occasionally confuse the "answer" key in the
+   * JSON response format with a function name and emit it via tool_calls
+   * instead of the content field. This extracts the answer text so we don't
+   * waste a round-trip on a FATAL:UNKNOWN_TOOL error.
+   *
+   * @returns The answer string if found, or null.
+   */
+  protected extractAnswerFromToolCalls(
+    toolCalls: { function?: { name?: string; arguments?: string } }[],
+  ): string | null {
+    const answerCall = toolCalls.find(
+      (tc) => tc.function?.name === "answer",
+    );
+    if (!answerCall?.function?.arguments) return null;
+    try {
+      const args = JSON.parse(answerCall.function.arguments);
+      if (typeof args.answer === "string" && args.answer.trim()) {
+        return args.answer;
+      }
+    } catch {
+      // Malformed JSON — not a real answer call
+    }
+    return null;
+  }
+
+  /**
    * Pre-iteration maintenance: compress context window if needed.
    */
   protected async checkAndCompress(): Promise<void> {

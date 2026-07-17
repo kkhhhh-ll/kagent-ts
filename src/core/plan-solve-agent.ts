@@ -335,6 +335,13 @@ export class PlanSolveAgent extends Agent {
 
       // ── Handle tool calls (execution phase) ─────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
+        // Intercept hallucinated "answer" tool calls before execution
+        const extractedAnswer = this.extractAnswerFromToolCalls(response.tool_calls);
+        if (extractedAnswer) {
+          this.consecutiveFailures = 0;
+          return extractedAnswer;
+        }
+
         consecutiveEmptyIterations = 0;
 
         if (parsed.thought) {
@@ -803,6 +810,15 @@ export class PlanSolveAgent extends Agent {
 
       // ── Tool calls → execute and continue ─────────────────────────
       if (toolCalls.length > 0) {
+        // Intercept hallucinated "answer" tool calls before execution
+        const extractedAnswer = this.extractAnswerFromToolCalls(toolCalls);
+        if (extractedAnswer) {
+          this.consecutiveFailures = 0;
+          yield extractedAnswer;
+          yield "\n\n[DONE]";
+          return;
+        }
+
         consecutiveEmptyIterations = 0;
         if (parsed.thought) {
 

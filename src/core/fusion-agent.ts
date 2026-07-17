@@ -751,6 +751,13 @@ export class FusionAgent extends Agent {
 
       // ── Tool calls ──────────────────────────────────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
+        // Intercept hallucinated "answer" tool calls before execution
+        const extractedAnswer = this.extractAnswerFromToolCalls(response.tool_calls);
+        if (extractedAnswer) {
+          this.consecutiveFailures = 0;
+          return extractedAnswer;
+        }
+
         consecutiveEmptyIterations = 0;
 
         if (parsed.thought) {
@@ -1424,6 +1431,15 @@ export class FusionAgent extends Agent {
 
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {
+        // Intercept hallucinated "answer" tool calls before execution
+        const extractedAnswer = this.extractAnswerFromToolCalls(toolCalls);
+        if (extractedAnswer) {
+          this.consecutiveFailures = 0;
+          yield extractedAnswer;
+          yield "\n\n[DONE]";
+          return;
+        }
+
         consecutiveEmptyIterations = 0;
         if (parsed.thought) {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
