@@ -784,18 +784,20 @@ export function parseFusionResponse(raw: string): FusionResponse {
 export const FUSION_ROUTE_INSTRUCTIONS = `
 You are a task complexity classifier. Analyze the user's request and determine whether it requires a structured plan.
 
-A request needs a PLAN when it:
-- Involves multiple distinct steps or sub-tasks
-- Requires research, analysis, or data gathering before answering
-- Spans multiple domains or tools
-- Is a "build", "create", "analyze", "refactor", or "investigate" type request
-- Will likely take 3+ tool calls to resolve
+A request needs a PLAN ("complex") when it:
+- Involves orchestrating MULTIPLE INDEPENDENT sub-tasks across different domains or tools
+- Requires multi-source cross-referencing or multi-hop reasoning (e.g. "compare X from A with Y from B,
+  then reconcile differences")
+- Is a "build", "create", or "refactor" request with non-trivial scope (multiple files, multiple steps)
+- Will likely take 5+ tool calls to resolve, where those calls form a non-trivial dependency chain
 
-A request does NOT need a plan when it is:
-- A simple factual question or lookup
-- A single straightforward action (read this file, run this command)
+A request does NOT need a plan ("simple") when it is:
+- A factual question, lookup, or single-source retrieval (including knowledge-base / RAG lookups)
+- A single straightforward action (read a file, run a command, search a codebase)
 - A brief conversational exchange
-- Immediately answerable from knowledge without tools
+- A request to summarize, introduce, or explain based on retrieved content — the standard
+  ReAct loop (search → read → answer) handles these naturally without a formal plan
+- Immediately answerable from general knowledge without tools
 
 Respond with ONLY a JSON object:
 {"complexity": "simple", "reason": "..."}
@@ -805,7 +807,9 @@ or
 Rules:
 - The JSON must be valid and parseable — no trailing commas, no comments.
 - "reason" should be a short (1 sentence) explanation of your classification.
-- When unsure, default to "complex" — having a plan for a simple task is harmless.`;
+- Default to "simple" when the task can reasonably be completed in a direct ReAct loop.
+  A plan adds 2 extra LLM calls (plan generation + plan tracking overhead), so only
+  classify as "complex" when the structure genuinely adds value.`;
 
 /**
  * Full system prompt instructions for Fusion Agent execution mode.
