@@ -2,8 +2,10 @@
 export { ToolCallEvaluator } from "./tool-call-evaluator";
 
 // Eval Runner — end-to-end test case execution
-export { EvalRunner } from "./eval-runner";
-export type { EvalRunnerConfig, AgentFactory, EvalCase, EvalResult, LLMEvalJudgment } from "./eval-runner";
+export { EvalRunner, summarizeEvalResults } from "./eval-runner";
+export type { EvalRunnerConfig, AgentFactory, EvalResultsSummary } from "./eval-runner";
+// Re-export shared types from types.ts (single source of truth)
+export type { EvalCase, EvalResult, LLMEvalJudgment } from "./types";
 
 // Benchmark — regression testing & baseline comparison
 export { Benchmark } from "./benchmark";

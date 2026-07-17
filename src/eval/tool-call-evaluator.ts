@@ -116,7 +116,11 @@ export class ToolCallEvaluator implements AgentHooks {
     const totalSuccesses = allStats.reduce((s, t) => s + t.successCount, 0);
     const totalFailures = totalCalls - totalSuccesses;
 
-    const allLatencies = allStats.flatMap((t) => t.latencySamples);
+    // Collect latencies locally (no longer exposed on ToolCallStats)
+    const allLatencies: number[] = [];
+    for (const r of this.records) {
+      if (r.endTime && r.latencyMs !== undefined) allLatencies.push(r.latencyMs);
+    }
     const avgLatencyMs =
       allLatencies.length > 0
         ? Math.round(
@@ -303,7 +307,6 @@ export class ToolCallEvaluator implements AgentHooks {
             : failures.length,
         circuitBreakerTrips: this.circuitBreakerTripCounts.get(toolName) ?? 0,
         errorDistribution: errorDist,
-        latencySamples: latencies,
       });
     }
 

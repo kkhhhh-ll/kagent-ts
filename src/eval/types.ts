@@ -67,8 +67,6 @@ export interface ToolCallStats {
   circuitBreakerTrips: number;
   /** Distribution of error codes for failed calls. */
   errorDistribution: Record<string, number>;
-  /** Raw latency samples (for percentile computation). */
-  latencySamples: number[];
 }
 
 /**
@@ -154,10 +152,6 @@ export interface EvalResult {
   passed: boolean;
   /** The agent's final answer. */
   answer: string;
-  /** Tool names called during execution (in order). */
-  toolCalls: string[];
-  /** Number of ReAct/PlanSolve iterations consumed. */
-  iterations: number;
   /** Wall-clock duration in milliseconds. */
   durationMs: number;
   /** Tool call scorecard for this run. */
@@ -216,8 +210,8 @@ export interface BenchmarkSummary {
   passRate: number;
   /** Average tool calls per case. */
   avgToolCallsPerCase: number;
-  /** Average latency per case in milliseconds. */
-  avgLatencyMs: number;
+  /** Average case duration in milliseconds. */
+  avgCaseDurationMs: number;
   /** Regressions vs baseline (empty if no baseline). */
   regressions: Regression[];
   /** Improvements vs baseline (empty if no baseline). */

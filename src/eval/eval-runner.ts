@@ -130,24 +130,24 @@ export class EvalRunner {
       const startedAt = Date.now();
 
       let answer: string;
-      let iterations = 0;
-      const toolCalls: string[] = [];
       const failures: string[] = [];
 
       try {
         answer = await withTimeout(agent.run(c.input), caseTimeout);
 
-        // Collect tool calls from the evaluator
-        for (const r of evaluator.getRecords()) {
-          if (r.endTime) toolCalls.push(r.toolName);
-        }
-        iterations = toolCalls.length;
+        // Collect called tool names (deduplicated) for expected/forbidden checks
+        const calledTools = new Set(
+          evaluator
+            .getRecords()
+            .filter((r) => r.endTime)
+            .map((r) => r.toolName),
+        );
 
         // ── Checks ──────────────────────────────────────────────────
 
         if (c.expectedTools && c.expectedTools.length > 0) {
           for (const expected of c.expectedTools) {
-            if (!toolCalls.includes(expected)) {
+            if (!calledTools.has(expected)) {
               failures.push(`Expected tool "${expected}" was not called.`);
             }
           }
@@ -155,7 +155,7 @@ export class EvalRunner {
 
         if (c.forbiddenTools && c.forbiddenTools.length > 0) {
           for (const forbidden of c.forbiddenTools) {
-            if (toolCalls.includes(forbidden)) {
+            if (calledTools.has(forbidden)) {
               failures.push(`Forbidden tool "${forbidden}" was called.`);
             }
           }
@@ -205,8 +205,6 @@ export class EvalRunner {
         caseName: c.name,
         passed: failures.length === 0,
         answer,
-        toolCalls,
-        iterations,
         durationMs,
         scorecard,
         llmJudgment,
@@ -229,31 +227,26 @@ export class EvalRunner {
    * Generate a Markdown report from evaluation results.
    */
   generateReport(results: EvalResult[]): string {
-    const passed = results.filter((r) => r.passed).length;
-    const total = results.length;
-    const passRate = total > 0 ? ((passed / total) * 100).toFixed(1) : "0.0";
-    const avgLatency =
-      total > 0
-        ? Math.round(results.reduce((s, r) => s + r.durationMs, 0) / total)
-        : 0;
+    const summary = summarizeEvalResults(results);
 
     let report = `# Evaluation Report\n\n`;
     report += `## Summary\n\n`;
     report += `| Metric | Value |\n`;
     report += `|--------|-------|\n`;
-    report += `| Cases | ${total} |\n`;
-    report += `| Passed | ${passed} |\n`;
-    report += `| Failed | ${total - passed} |\n`;
-    report += `| Pass Rate | ${passRate}% |\n`;
-    report += `| Avg Duration | ${avgLatency}ms |\n\n`;
+    report += `| Cases | ${summary.total} |\n`;
+    report += `| Passed | ${summary.passed} |\n`;
+    report += `| Failed | ${summary.total - summary.passed} |\n`;
+    report += `| Pass Rate | ${(summary.passRate * 100).toFixed(1)}% |\n`;
+    report += `| Avg Duration | ${summary.avgDurationMs}ms |\n\n`;
 
     report += `## Results\n\n`;
 
     for (const r of results) {
       const icon = r.passed ? "✅" : "❌";
+      const toolNames = r.scorecard.perTool.map((t) => t.toolName);
       report += `### ${icon} ${r.caseName}\n\n`;
       report += `- **Duration:** ${r.durationMs}ms\n`;
-      report += `- **Tool calls:** ${r.toolCalls.join(", ") || "(none)"}\n`;
+      report += `- **Tool calls:** ${r.scorecard.totalCalls} (${toolNames.join(", ") || "none"})\n`;
       report += `- **Tool success rate:** ${(r.scorecard.overallSuccessRate * 100).toFixed(1)}%\n`;
 
       if (r.llmJudgment) {
@@ -270,6 +263,16 @@ export class EvalRunner {
         report += `- **Failures:**\n`;
         for (const f of r.failures) {
           report += `  - ${f}\n`;
+        }
+      }
+
+      // Per-tool breakdown (P50/P99/retries from scorecard)
+      if (r.scorecard.perTool.length > 0) {
+        report += `\n| Tool | Calls | Success Rate | Avg | P50 | P99 | Retries |\n`;
+        report += `|------|-------|-------------|-----|-----|-----|--------|\n`;
+        for (const stat of r.scorecard.perTool) {
+          const sr = (stat.successRate * 100).toFixed(0);
+          report += `| \`${stat.toolName}\` | ${stat.totalCalls} | ${sr}% | ${stat.avgLatencyMs}ms | ${stat.p50LatencyMs}ms | ${stat.p99LatencyMs}ms | ${stat.avgRetries.toFixed(1)} |\n`;
         }
       }
 
@@ -334,6 +337,43 @@ export class EvalRunner {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Computed summary of a batch of evaluation results.
+ * Used by both EvalRunner.generateReport() and Benchmark.buildSummary()
+ * to avoid duplicated pass-rate / duration aggregation logic.
+ */
+export interface EvalResultsSummary {
+  total: number;
+  passed: number;
+  passRate: number; // 0–1
+  avgDurationMs: number;
+  avgToolCalls: number;
+}
+
+/**
+ * Aggregate summary statistics from a list of EvalResults.
+ */
+export function summarizeEvalResults(results: EvalResult[]): EvalResultsSummary {
+  const total = results.length;
+  const passed = results.filter((r) => r.passed).length;
+  const avgDurationMs =
+    total > 0
+      ? Math.round(results.reduce((s, r) => s + r.durationMs, 0) / total)
+      : 0;
+  const avgToolCalls =
+    total > 0
+      ? results.reduce((s, r) => s + r.scorecard.totalCalls, 0) / total
+      : 0;
+
+  return {
+    total,
+    passed,
+    passRate: total > 0 ? passed / total : 1,
+    avgDurationMs,
+    avgToolCalls,
+  };
+}
 
 async function withTimeout<T>(
   promise: Promise<T>,

@@ -60,9 +60,11 @@ describe("EvalRunner", () => {
       );
 
       expect(results[0].durationMs).toBeGreaterThanOrEqual(0);
-      // iterations = toolCalls.length (from completed calls)
-      expect(results[0].toolCalls).toEqual(["read_file", "bash"]);
-      expect(results[0].iterations).toBe(2);
+      // Tool call count tracked via scorecard
+      expect(results[0].scorecard.totalCalls).toBe(2);
+      expect(results[0].scorecard.perTool.map((t) => t.toolName).sort()).toEqual(
+        ["bash", "read_file"],
+      );
     });
   });
 
@@ -213,7 +215,7 @@ describe("EvalRunner", () => {
     expect(results[0].passed).toBe(true);
     expect(results[1].passed).toBe(false); // doesn't contain "wrong"
     expect(results[2].passed).toBe(true);
-    expect(results[0].toolCalls).toEqual([]); // fresh evaluator per case
+    expect(results[0].scorecard.totalCalls).toBe(0); // fresh evaluator per case
   });
 
   // ── runCase convenience ────────────────────────────────────────────

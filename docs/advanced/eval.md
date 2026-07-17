@@ -68,7 +68,6 @@ interface ToolCallStats {
   avgRetries: number              // 平均重试次数
   circuitBreakerTrips: number     // 熔断器触发次数
   errorDistribution: Record<string, number>  // 错误码分布
-  latencySamples: number[]        // 延迟样本（内部用）
 }
 ```
 
@@ -118,7 +117,7 @@ const results = await runner.run(
 )
 
 for (const r of results) {
-  console.log(`${r.caseName}: ${r.passed ? '✅' : '❌'} (${r.durationMs}ms, ${r.iterations} 轮)`)
+  console.log(`${r.caseName}: ${r.passed ? '✅' : '❌'} (${r.durationMs}ms, ${r.scorecard.totalCalls} 次工具调用)`)
   if (r.failures.length > 0) console.log('  失败原因:', r.failures.join(', '))
   if (r.llmJudgment) console.log('  质量评分:', r.llmJudgment.score, '-', r.llmJudgment.reasoning)
 }
@@ -145,10 +144,8 @@ interface EvalResult {
   caseName: string            // 用例名称
   passed: boolean             // 是否通过所有检查
   answer: string              // Agent 最终回答
-  toolCalls: string[]         // 实际调用的工具列表
-  iterations: number          // 实际迭代轮数
   durationMs: number          // 耗时
-  scorecard: ToolCallScorecard  // 工具调用评分卡
+  scorecard: ToolCallScorecard  // 工具调用评分卡（含 per-tool 明细）
   llmJudgment?: LLMEvalJudgment // LLM 评判（仅当配置了 judgeLLM）
   failures: string[]          // 失败原因列表
 }
@@ -189,7 +186,7 @@ const benchmark = new Benchmark({
 const result = await benchmark.run()
 
 console.log(`通过率: ${(result.summary.passRate * 100).toFixed(1)}%`)
-console.log(`平均延迟: ${result.summary.avgLatencyMs}ms`)
+console.log(`平均用例耗时: ${result.summary.avgCaseDurationMs}ms`)
 
 // 退化 / 改进检测
 for (const r of result.summary.regressions) {
@@ -215,7 +212,7 @@ interface BenchmarkSummary {
   total: number               // 总用例数
   passRate: number            // 通过率 (0–1)
   avgToolCallsPerCase: number // 每用例平均工具调用
-  avgLatencyMs: number        // 每用例平均延迟
+  avgCaseDurationMs: number   // 每用例平均耗时 (ms)
   regressions: Regression[]   // 退化项
   improvements: Improvement[] // 改进项
 }

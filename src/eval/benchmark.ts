@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import { EvalRunner, AgentFactory } from "./eval-runner";
-import type { EvalCase, EvalResult } from "./eval-runner";
-import type { BenchmarkResult, BenchmarkSummary } from "./types";
+import { EvalRunner, summarizeEvalResults } from "./eval-runner";
+import type { AgentFactory } from "./eval-runner";
+import type { EvalCase, EvalResult, BenchmarkResult, BenchmarkSummary } from "./types";
 
 /**
  * Configuration for a benchmark run.
@@ -128,7 +128,7 @@ export class Benchmark {
     report += `|--------|-------|\n`;
     report += `| Pass Rate | ${passRate}% (${s.passed}/${s.total}) |\n`;
     report += `| Avg Tool Calls / Case | ${s.avgToolCallsPerCase.toFixed(1)} |\n`;
-    report += `| Avg Duration | ${s.avgLatencyMs}ms |\n\n`;
+    report += `| Avg Duration | ${s.avgCaseDurationMs}ms |\n\n`;
 
     // Regressions (most important — show first)
     if (s.regressions.length > 0) {
@@ -161,7 +161,7 @@ export class Benchmark {
     for (const r of result.cases) {
       const icon = r.passed ? "✅" : "❌";
       const sr = (r.scorecard.overallSuccessRate * 100).toFixed(0);
-      report += `| ${icon} ${r.caseName} | ${r.passed ? "PASS" : "FAIL"} | ${r.durationMs}ms | ${r.toolCalls.length} | ${sr}% |\n`;
+      report += `| ${icon} ${r.caseName} | ${r.passed ? "PASS" : "FAIL"} | ${r.durationMs}ms | ${r.scorecard.totalCalls} | ${sr}% |\n`;
     }
     report += `\n`;
 
@@ -188,25 +188,16 @@ export class Benchmark {
     results: EvalResult[],
     timestamp: string,
   ): BenchmarkSummary {
-    const total = results.length;
-    const passed = results.filter((r) => r.passed).length;
-    const avgToolCalls =
-      total > 0
-        ? results.reduce((s, r) => s + r.toolCalls.length, 0) / total
-        : 0;
-    const avgLatencyMs =
-      total > 0
-        ? Math.round(results.reduce((s, r) => s + r.durationMs, 0) / total)
-        : 0;
+    const s = summarizeEvalResults(results);
 
     return {
       name: this.config.name,
       timestamp,
-      passed,
-      total,
-      passRate: total > 0 ? passed / total : 1,
-      avgToolCallsPerCase: avgToolCalls,
-      avgLatencyMs,
+      passed: s.passed,
+      total: s.total,
+      passRate: s.passRate,
+      avgToolCallsPerCase: s.avgToolCalls,
+      avgCaseDurationMs: s.avgDurationMs,
       regressions: [],
       improvements: [],
     };
@@ -247,16 +238,16 @@ export class Benchmark {
 
     // ── Latency regression ────────────────────────────────────────────
     if (
-      summary.avgLatencyMs > bl.avgLatencyMs * LATENCY_REGRESSION_FACTOR &&
-      summary.avgLatencyMs - bl.avgLatencyMs > LATENCY_MIN_ABSOLUTE_INCREASE_MS
+      summary.avgCaseDurationMs > bl.avgCaseDurationMs * LATENCY_REGRESSION_FACTOR &&
+      summary.avgCaseDurationMs - bl.avgCaseDurationMs > LATENCY_MIN_ABSOLUTE_INCREASE_MS
     ) {
       summary.regressions.push({
         target: "overall",
-        metric: "avgLatencyMs",
-        baseline: `${bl.avgLatencyMs}ms`,
-        current: `${summary.avgLatencyMs}ms`,
-        description: `Average latency increased by ${
-          summary.avgLatencyMs - bl.avgLatencyMs
+        metric: "avgCaseDurationMs",
+        baseline: `${bl.avgCaseDurationMs}ms`,
+        current: `${summary.avgCaseDurationMs}ms`,
+        description: `Average case duration increased by ${
+          summary.avgCaseDurationMs - bl.avgCaseDurationMs
         }ms.`,
       });
     }
