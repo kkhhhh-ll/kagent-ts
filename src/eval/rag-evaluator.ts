@@ -178,6 +178,40 @@ export interface RAGEvaluatorConfig {
   defaultTopK?: number;
 }
 
+// ─── Synthetic Dataset Generation ───────────────────────────────────────
+
+/** Configuration for synthetic test-case generation. */
+export interface SyntheticCaseGenConfig {
+  /** LLM used to generate questions from chunk content. */
+  llm: LLMProvider;
+
+  /** Maximum total questions to generate (default: 30). */
+  maxQuestions?: number;
+
+  /** Questions per sampled chunk (default: 2). */
+  questionsPerChunk?: number;
+
+  /**
+   * Maximum chunks to sample across all documents.
+   * Chunks are spread evenly across documents. Default: 15.
+   */
+  maxChunks?: number;
+}
+
+const GEN_SYSTEM_PROMPT = `You are a test-dataset generator. Given a document chunk, generate questions
+that can be answered using ONLY the information in this chunk.
+
+Rules:
+- Write in the SAME language as the chunk (中文 for Chinese, English for English, etc.)
+- Questions should be natural — phrased as a real user would ask
+- Vary question style: some short, some detailed; some specific, some broad
+- Make sure each question is answerable from this chunk alone
+
+Output a JSON array of questions:
+["question 1", "question 2"]
+
+Output ONLY the JSON array — no markdown, no extra text.`;
+
 // ─── LLM Judge Prompt ───────────────────────────────────────────────────────
 
 const JUDGE_SYSTEM_PROMPT = `You are an impartial retrieval relevance judge. Your job is to assess
@@ -259,6 +293,137 @@ export class RAGEvaluator {
     const summary = this.buildSummary(results);
 
     return { summary, cases: results };
+  }
+
+  /**
+   * Generate synthetic evaluation cases from the knowledge base.
+   *
+   * Samples chunks across documents, asks an LLM to generate questions
+   * that each chunk can answer, and automatically labels those chunks as
+   * relevant. Zero manual effort — the LLM does all the work.
+   *
+   * Combine with a `judgeLLM` evaluator to get both ground-truth metrics
+   * (from synthetic labels) and LLM-judge metrics in a single run.
+   *
+   * Usage:
+   * ```ts
+   * const cases = await RAGEvaluator.generateSyntheticCases({
+   *   llm: provider,
+   *   ragManager: ragManager,
+   *   maxQuestions: 20,
+   * });
+   *
+   * const evaluator = new RAGEvaluator({ ragManager, judgeLLM: smallLLM });
+   * const result = await evaluator.evaluate(cases);
+   * // Now you have BOTH ground-truth metrics AND LLM-judge metrics
+   * ```
+   */
+  static async generateSyntheticCases(
+    ragManager: RAGManager,
+    config: SyntheticCaseGenConfig,
+  ): Promise<RAGEvalCase[]> {
+    const maxQuestions = config.maxQuestions ?? 30;
+    const questionsPerChunk = config.questionsPerChunk ?? 2;
+    const maxChunks = config.maxChunks ?? 15;
+
+    // ── Sample chunks evenly across documents ────────────────────────
+    const allPaths = ragManager.documentPaths;
+    if (allPaths.length === 0) return [];
+
+    const sampledChunks: Array<{
+      chunkKey: string;
+      text: string;
+      sourcePath: string;
+      chunkIndex: number;
+    }> = [];
+
+    if (allPaths.length >= maxChunks) {
+      // More docs than needed: pick one chunk each from maxChunks docs
+      const shuffled = [...allPaths].sort(() => Math.random());
+      for (const path of shuffled.slice(0, maxChunks)) {
+        const results = await ragManager.search(
+          path.replace(/[._-]/g, " "), // crude query from path
+          1,
+        );
+        if (results.length > 0) {
+          const r = results[0];
+          sampledChunks.push({
+            chunkKey: `${r.chunk.sourcePath}#${r.chunk.chunkIndex}`,
+            text: r.chunk.text,
+            sourcePath: r.chunk.sourcePath,
+            chunkIndex: r.chunk.chunkIndex,
+          });
+        }
+      }
+    } else {
+      // Fewer docs: spread across all docs, multiple chunks per doc
+      const chunksPerDoc = Math.max(1, Math.ceil(maxChunks / allPaths.length));
+      for (const path of allPaths) {
+        const results = await ragManager.search(
+          path.replace(/[._-]/g, " "),
+          chunksPerDoc,
+        );
+        for (const r of results) {
+          sampledChunks.push({
+            chunkKey: `${r.chunk.sourcePath}#${r.chunk.chunkIndex}`,
+            text: r.chunk.text,
+            sourcePath: r.chunk.sourcePath,
+            chunkIndex: r.chunk.chunkIndex,
+          });
+        }
+      }
+    }
+
+    // ── Generate questions per chunk via LLM ─────────────────────────
+    const casesMap = new Map<string, RAGEvalCase>();
+
+    for (const chunk of sampledChunks.slice(0, maxChunks)) {
+      // Stop once we have enough questions
+      const currentTotal = Array.from(casesMap.values()).reduce(
+        (s, c) => s + (c.relevantChunks?.length ?? 0),
+        0,
+      );
+      if (currentTotal >= maxQuestions) break;
+
+      try {
+        const messages: MessageData[] = [
+          { role: Role.System, content: GEN_SYSTEM_PROMPT },
+          {
+            role: Role.User,
+            content: [
+              `Document chunk (source: ${chunk.sourcePath}):`,
+              "",
+              chunk.text.slice(0, 1500),
+              "",
+              `Generate ${questionsPerChunk} questions that this chunk can answer.`,
+            ].join("\n"),
+          },
+        ];
+
+        const response = await config.llm.chat(messages);
+        const questions = this.parseQuestions(response.content);
+
+        for (const q of questions) {
+          // Deduplicate by query text (case-insensitive)
+          const key = q.toLowerCase().trim();
+          const existing = casesMap.get(key);
+          if (existing) {
+            // Same question, add this chunk to the relevant set
+            existing.relevantChunks?.push(chunk.chunkKey);
+          } else {
+            casesMap.set(key, {
+              name: q.slice(0, 60),
+              query: q,
+              relevantChunks: [chunk.chunkKey],
+            });
+          }
+        }
+      } catch {
+        // Skip failed chunks
+      }
+    }
+
+    return Array.from(casesMap.values());
   }
 
   /**
@@ -442,6 +607,31 @@ export class RAGEvaluator {
         score: Math.max(0, Math.min(10, Math.round(Number(item.score) || 0))),
         reasoning: String(item.reasoning ?? ""),
       }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Parse an LLM-generated JSON array of question strings.
+   * Handles markdown fences and leading/trailing text.
+   */
+  private static parseQuestions(raw: string): string[] {
+    try {
+      let json = raw.trim();
+
+      const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (fenceMatch) json = fenceMatch[1];
+
+      const arrayMatch = json.match(/\[\s*"[\s\S]*"[\s\S]*\]/);
+      if (arrayMatch) json = arrayMatch[0];
+
+      const arr = JSON.parse(json);
+      if (!Array.isArray(arr)) return [];
+
+      return arr
+        .map((item) => String(item ?? "").trim())
+        .filter((q) => q.length > 0);
     } catch {
       return [];
     }

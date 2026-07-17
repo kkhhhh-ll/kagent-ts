@@ -490,6 +490,42 @@ console.log('Judge-Label Agreement:', result.cases[0].metrics.judgeLabelAgreemen
 | **CI / 合码** | `RAGEvaluator` + 固定数据集 | 20-50 条标注 query | 每次 PR | 防退化 |
 | **线上监控** | `RAGEvaluator` + `judgeLLM` | 真实用户 query | 持续/每日 | 发现检索 drift |
 
+### 零人工标注：LLM 自动生成评估用例
+
+最懒的方式 —— 让 LLM 读知识库自动生成问题，同时标注好 relevant chunk：
+
+```ts
+import { RAGEvaluator } from 'kagent-ts'
+
+const ragManager = (agent as any).ragManager  // 从已初始化的 Agent 获取
+
+// Step 1: LLM 自动生成带标注的测试用例（零人工）
+const cases = await RAGEvaluator.generateSyntheticCases(ragManager, {
+  llm: provider,           // 用任意 LLM 生成问题
+  maxQuestions: 20,        // 最多生成 20 条（默认 30）
+  questionsPerChunk: 2,    // 每个 chunk 生成 2 个问题
+  maxChunks: 10,           // 最多采样 10 个 chunk（均匀分布在文档间）
+})
+
+// cases 直接包含 relevantChunks 标注，格式:
+// { name: "...", query: "怎么配置 MCP？", relevantChunks: ["mcp.md#3"] }
+
+// Step 2: 双模式同时评估
+const evaluator = new RAGEvaluator({
+  ragManager,
+  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
+})
+
+const result = await evaluator.evaluate(cases)
+
+// 现在你同时拥有:
+// 1. Ground-Truth 指标（基于 LLM 合成的标注）→ 确定性、可复现
+// 2. LLM-Judge 指标（独立的逐 chunk 打分）    → 无需人工
+// 3. Judge-Label Agreement (κ)                → 衡量两者一致性
+```
+
+**原理：** LLM 读取每个 chunk 内容，生成能用该 chunk 回答的问题，同时把该 chunk 的 `sourcePath#chunkIndex` 自动标为 relevant。这样一箭双雕——有标注数据做 CI 回归，也不用花时间人工标注。
+
 ### 解读评估结果
 
 ```

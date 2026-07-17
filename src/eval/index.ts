@@ -19,6 +19,7 @@ export type {
   RAGEvalSummary,
   RAGEvalResult,
   RAGEvaluatorConfig,
+  SyntheticCaseGenConfig,
 } from "./rag-evaluator";
 
 // Shared types

@@ -231,18 +231,48 @@ interface Regression {
 
 ## RAGEvaluator — 检索质量评估
 
-直接评估 RAG 检索系统的输出质量（`Precision@K` / `Recall@K` / `MRR` / `NDCG@K`），支持两种模式：
+直接评估 RAG 检索系统的输出质量（`Precision@K` / `Recall@K` / `MRR` / `NDCG@K`），支持三种评估方式：
 
 - **Ground-Truth 模式**：基于标注数据，计算传统 IR 指标，零成本
 - **LLM-as-Judge 模式**：用 LLM 对每个 chunk 打分，无需标注
+- **合成数据模式**：LLM 自动读知识库生成问题 + 标注，零人工
+
+### 零人工标注：LLM 自动生成用例
+
+最懒的方式——让 LLM 读知识库自动生成问题，同时标注好 relevant chunk：
 
 ```ts
-import { RAGEvaluator, OpenAIProvider, chunkKey } from 'kagent-ts'
+import { RAGEvaluator } from 'kagent-ts'
 
-// 从已初始化的 Agent 获取 ragManager
 const ragManager = (agent as any).ragManager
 
-// ── Ground-Truth 模式 ──
+// Step 1: LLM 自动生成带标注的测试用例
+const cases = await RAGEvaluator.generateSyntheticCases(ragManager, {
+  llm: provider,           // 用任意 LLM 生成问题
+  maxQuestions: 20,        // 最多 20 条（默认 30）
+  questionsPerChunk: 2,    // 每个 chunk 生成 2 个问题
+  maxChunks: 10,           // 最多采样 10 个 chunk
+})
+
+// Step 2: 双模式同时评估
+const evaluator = new RAGEvaluator({
+  ragManager,
+  judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
+})
+
+const result = await evaluator.evaluate(cases)
+// → Ground-Truth 指标（确定性） + LLM-Judge 指标 + κ 一致性
+
+console.log(evaluator.generateReport(result))
+```
+
+**原理**：LLM 读每个 chunk → 生成问题 → 自动标 `sourcePath#chunkIndex` 为 relevant。chunk 在文档间均匀采样，问题去重。真正零人工。
+
+### 手动标注模式
+
+如果有标注数据（或想写固定测试集），直接传 `relevantChunks`：
+
+```ts
 const evaluator = new RAGEvaluator({ ragManager, defaultTopK: 5 })
 const result = await evaluator.evaluate([
   {
@@ -257,24 +287,25 @@ const s = result.summary
 console.log(`Precision@K: ${s.avgPrecisionAtK.toFixed(3)}`)
 console.log(`MRR: ${s.avgMRR.toFixed(3)}`)
 console.log(`NDCG@K: ${s.avgNdcgAtK.toFixed(3)}`)
+```
 
-// ── LLM-as-Judge 模式 ──
-const judgeEval = new RAGEvaluator({
+### 纯 LLM-as-Judge（无标注、无合成）
+
+```ts
+const evaluator = new RAGEvaluator({
   ragManager,
   judgeLLM: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o-mini' }),
 })
-const llmResult = await judgeEval.evaluate([
+
+const result = await evaluator.evaluate([
   { name: "MCP", query: "怎么配置 MCP？", topK: 5 },
 ])
 
-for (const c of llmResult.cases) {
+for (const c of result.cases) {
   for (const j of c.judgments ?? []) {
     console.log(`${j.relevant ? '✅' : '❌'} [${j.score}/10] ${j.reasoning}`)
   }
 }
-
-// 完整 Markdown 报告
-console.log(judgeEval.generateReport(llmResult))
 ```
 
 ### 用例结构
@@ -324,14 +355,37 @@ interface ChunkJudgment {
   score: number                  // 0–10 相关性分数
   reasoning: string              // 判断理由
 }
+
+// 聚合摘要
+interface RAGEvalSummary {
+  totalCases: number
+  casesWithGroundTruth: number
+  casesWithLLMJudgments: number
+  avgPrecisionAtK: number
+  avgRecallAtK: number
+  avgMRR: number
+  avgNdcgAtK: number
+  avgLlmPrecisionAtK?: number
+  avgLlmNdcgAtK?: number
+  avgRelevanceScore?: number
+  avgJudgeLabelAgreement?: number  // Cohen's κ
+}
+
+// 合成数据生成配置
+interface SyntheticCaseGenConfig {
+  llm: LLMProvider               // 用于生成问题的 LLM
+  maxQuestions?: number          // 最多生成问题数（默认 30）
+  questionsPerChunk?: number     // 每个 chunk 生成几个问题（默认 2）
+  maxChunks?: number             // 最多采样 chunk 数（默认 15）
+}
 ```
 
 ### 评估时机
 
 | 阶段 | 工具 | 数据 | 频率 |
 |------|------|------|------|
-| 开发迭代 | `RAGEvaluator` | 伪标注 or 手写几条 | 每次改 RAG 配置 |
-| CI / 合码 | `RAGEvaluator` + 固定数据集 | 20-50 条标注 query | 每次 PR |
+| 开发迭代 | `RAGEvaluator` + `generateSyntheticCases()` | 自动合成 | 每次改 RAG 配置 |
+| CI / 合码 | `RAGEvaluator` + 固定合成数据集 | 保存到 JSON 复现 | 每次 PR |
 | 线上监控 | `RAGEvaluator` + `judgeLLM` | 真实用户 query | 持续/每日 |
 
 > 详细说明和解读指南见 [RAG 知识库 → 检索质量评估](/advanced/rag#检索质量评估)。

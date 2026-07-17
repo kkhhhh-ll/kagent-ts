@@ -306,4 +306,5 @@ export type {
   RAGEvaluatorConfig,
   ChunkJudgment,
   RAGRetrievalMetrics,
+  SyntheticCaseGenConfig,
 } from "./eval";
