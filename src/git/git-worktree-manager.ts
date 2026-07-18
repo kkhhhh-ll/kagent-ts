@@ -393,6 +393,23 @@ export class GitWorktreeManager {
           info.id,
         );
       }
+
+      // Merge succeeded — restore the main repo to the original branch.
+      // The merge commit is already on mergeTarget; there is no reason to
+      // leave the working directory on a different branch.
+      if (originalBranch) {
+        try {
+          await this.runGit(["checkout", originalBranch], this.repoPath, undefined, info.id);
+          this.logger.info("GitWorktree", `Restored main repo to "${originalBranch}".`);
+        } catch (restoreErr: unknown) {
+          this.logger.warn(
+            "GitWorktree",
+            `Failed to restore original branch "${originalBranch}" after successful merge. ` +
+            `Main repo remains on "${mergeTarget}". ` +
+            `Error: ${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
+          );
+        }
+      }
     }
 
     // Remove the worktree directory + git metadata
@@ -410,9 +427,15 @@ export class GitWorktreeManager {
           fs.rmSync(info.path, { recursive: true, force: true });
           await this.runGit(["worktree", "prune"], this.repoPath, undefined, info.id);
           info.status = "completed";
-        } catch {
+        } catch (forceErr: unknown) {
           info.status = "failed";
-          this.logger.warn("GitWorktree", `Failed to force-remove worktree "${info.id}".`);
+          const detail = forceErr instanceof Error ? forceErr.message : String(forceErr);
+          this.logger.warn("GitWorktree", `Failed to force-remove worktree "${info.id}": ${detail}`);
+          throw new GitWorktreeError(
+            `Failed to force-remove worktree "${info.id}": ${detail}`,
+            "WORKTREE_REMOVE_FAILED",
+            info.id,
+          );
         }
       } else {
         info.status = "failed";
@@ -439,9 +462,12 @@ export class GitWorktreeManager {
 
   /**
    * List worktrees managed by this instance, optionally filtered by status.
+   *
+   * Returns shallow copies so callers cannot accidentally mutate the
+   * manager's internal state.
    */
   listWorktrees(status?: WorktreeStatus): WorktreeInfo[] {
-    const all = Array.from(this.worktrees.values());
+    const all = Array.from(this.worktrees.values(), (w) => ({ ...w }));
     if (status) {
       return all.filter((w) => w.status === status);
     }
@@ -549,14 +575,13 @@ export class GitWorktreeManager {
   }
 
   /**
-   * Clean up all active worktrees managed by this instance.
+   * Clean up both active and failed worktrees managed by this instance.
    *
-   * Called during shutdown / cancellation.  Failed worktrees are preserved
-   * on disk for debugging; active ones are force-removed.
+   * Called during shutdown / cancellation.  Both "active" and "failed"
+   * worktrees are force-removed to prevent disk leaks; "failed" worktrees
+   * may still have leftover directories.
    */
   async cleanup(): Promise<void> {
-    // Clean up both "active" and "failed" worktrees — "failed" worktrees may
-    // still have disk directories that would leak if we skip them.
     const toClean = Array.from(this.worktrees.values()).filter(
       (w) => w.status === "active" || w.status === "failed",
     );
@@ -766,6 +791,15 @@ export class GitWorktreeManager {
     if (branchName.startsWith("-")) {
       throw new GitWorktreeError(
         `Invalid branch name: "${branchName}". Branch names must not start with a hyphen.`,
+        "INVALID_CONFIG",
+      );
+    }
+
+    // Reject branch names ending with ".lock" — git reserves this suffix
+    // for internal lock files and will reject such refnames.
+    if (branchName.endsWith(".lock")) {
+      throw new GitWorktreeError(
+        `Invalid branch name: "${branchName}". Branch names must not end with ".lock".`,
         "INVALID_CONFIG",
       );
     }
