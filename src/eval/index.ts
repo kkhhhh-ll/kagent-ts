@@ -5,19 +5,6 @@ export { ToolCallEvaluator } from "./tool-call-evaluator";
 export { Benchmark } from "./benchmark";
 export type { BenchmarkConfig } from "./benchmark";
 
-// RAG Evaluator — retrieval quality metrics (IR + LLM-as-judge)
-export { RAGEvaluator } from "./rag-evaluator";
-export type {
-  RAGEvalCase,
-  ChunkJudgment,
-  RAGRetrievalMetrics,
-  RAGCaseResult,
-  RAGEvalSummary,
-  RAGEvalResult,
-  RAGEvaluatorConfig,
-  SyntheticCaseGenConfig,
-} from "./rag-evaluator";
-
 // Shared types
 export type {
   ToolCallRecord,

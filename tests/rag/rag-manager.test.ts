@@ -68,7 +68,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "a.md", "# Document A\n\nThis is document A about TypeScript.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -87,7 +87,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "c.json", '{"x": 1}');
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -99,7 +99,7 @@ describe("RAGManager", () => {
 
   it("handles empty directory gracefully", async () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -114,7 +114,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "doc.md", "# Doc\n\nContent.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -131,7 +131,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "doc.md", "# V1\n\nVersion one.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -162,7 +162,7 @@ describe("RAGManager", () => {
     );
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3 },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3, reRanker: null },
       new SilentLogger(),
     );
 
@@ -179,7 +179,7 @@ describe("RAGManager", () => {
 
   it("search returns empty array when store is not indexed", async () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -191,7 +191,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "long.md", "Content. ".repeat(100));
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3 },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3, reRanker: null },
       new SilentLogger(),
     );
 
@@ -205,7 +205,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "long.md", "Data. ".repeat(80));
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3 },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3, reRanker: null },
       new SilentLogger(),
     );
 
@@ -221,7 +221,7 @@ describe("RAGManager", () => {
     writeFile(docsDir, "doc.md", "# Doc\n\nContent here.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -239,7 +239,7 @@ describe("RAGManager", () => {
 
   it("formatResults returns placeholder for empty results", () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -265,7 +265,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
     writeFile(docsDir, "doc.md", "# Test\n\nContent.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
     await manager.index();
@@ -277,7 +277,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
 
   it("search_knowledge tool returns empty-msg when not indexed", async () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
     // NOT calling index()
@@ -291,7 +291,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
     writeFile(docsDir, "api.md", "# API Reference\n\nThe API provides endpoints for data access.");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3 },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), topK: 3, reRanker: null },
       new SilentLogger(),
     );
     await manager.index();
@@ -308,7 +308,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
     writeFile(docsDir, "b.txt", "B");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
     await manager.index();
@@ -322,7 +322,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
 
   it("list_knowledge_documents tool reports when not indexed", async () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
 
@@ -333,7 +333,7 @@ describe("RAG tools (search_knowledge / list_knowledge_documents)", () => {
 
   it("list_knowledge_documents tool reports empty knowledge base", async () => {
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
     await manager.index(); // Empty dir → 0 documents
@@ -365,6 +365,7 @@ describe("RAGManager — hybrid search", () => {
         documentsDir: docsDir,
         embeddingProvider: new MockEmbeddingProvider(),
         hybridSearch: true,
+        reRanker: null,
       },
       new SilentLogger(),
     );
@@ -381,6 +382,7 @@ describe("RAGManager — hybrid search", () => {
         documentsDir: docsDir,
         embeddingProvider: new MockEmbeddingProvider(),
         hybridSearch: true,
+        reRanker: null,
       },
       new SilentLogger(),
     );
@@ -399,6 +401,7 @@ describe("RAGManager — hybrid search", () => {
         documentsDir: docsDir,
         embeddingProvider: new MockEmbeddingProvider(),
         hybridSearch: true,
+        reRanker: null,
         topK: 1,
       },
       new SilentLogger(),
@@ -417,6 +420,7 @@ describe("RAGManager — hybrid search", () => {
         documentsDir: docsDir,
         embeddingProvider: new MockEmbeddingProvider(),
         hybridSearch: true,
+        reRanker: null,
       },
       new SilentLogger(),
     );
@@ -437,6 +441,7 @@ describe("RAGManager — hybrid search", () => {
         documentsDir: docsDir,
         embeddingProvider: new MockEmbeddingProvider(),
         hybridSearch: true,
+        reRanker: null,
       },
       new SilentLogger(),
     );
@@ -448,7 +453,7 @@ describe("RAGManager — hybrid search", () => {
     fs.writeFileSync(path.join(docsDir, "a.md"), "Hello world.", "utf-8");
 
     const manager = new RAGManager(
-      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider() },
+      { documentsDir: docsDir, embeddingProvider: new MockEmbeddingProvider(), reRanker: null },
       new SilentLogger(),
     );
     await manager.index();

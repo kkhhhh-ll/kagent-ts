@@ -201,7 +201,7 @@ export { SubAgentManager, SubAgentLoader } from "./subagent/index";
 export type { SubAgentDefinition, SubAgentResult } from "./subagent/index";
 
 // RAG — retrieval-augmented generation
-export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore, InMemoryKeywordIndex, LLMReRanker, rrfFusion, chunkKey } from "./rag/index";
+export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore, InMemoryKeywordIndex, LLMReRanker, CrossEncoderReRanker, rrfFusion, chunkKey } from "./rag/index";
 export type {
   EmbeddingProvider,
   VectorStore,
@@ -216,6 +216,7 @@ export type {
   RRFFusionResult,
   ReRanker,
   LLMReRankerConfig,
+  CrossEncoderReRankerConfig,
 } from "./rag/index";
 
 // MCP (Model Context Protocol) — dynamic tool discovery
@@ -283,8 +284,8 @@ export type {
   SkillCandidate,
 } from "./precipitation/precipitate-agent";
 
-// Evaluation — tool call metrics, regression benchmarks, RAG quality
-export { ToolCallEvaluator, Benchmark, RAGEvaluator } from "./eval";
+// Evaluation — tool call metrics, regression benchmarks
+export { ToolCallEvaluator, Benchmark } from "./eval";
 export type {
   ToolCallRecord,
   ToolCallStats,
@@ -297,12 +298,4 @@ export type {
   Improvement,
   BenchmarkSummary,
   BenchmarkResult,
-  RAGEvalCase,
-  RAGCaseResult,
-  RAGEvalSummary,
-  RAGEvalResult,
-  RAGEvaluatorConfig,
-  ChunkJudgment,
-  RAGRetrievalMetrics,
-  SyntheticCaseGenConfig,
 } from "./eval";

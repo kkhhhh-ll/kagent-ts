@@ -124,6 +124,7 @@ kagent-ts
 │   ├── search-knowledge.ts    # 知识搜索工具
 │   ├── rrf.ts                 # RRF 融合算法
 │   ├── llm-reranker.ts        # LLM 重排序
+│   ├── cross-encoder-reranker.ts  # Cross-Encoder 重排序（默认）
 │   └── rag-types.ts           # 类型定义
 ├── reflection/     # 反思代理 + 错误笔记本 (错题本)
 ├── precipitation/  # 技能沉淀 (提取可复用 Skills)

@@ -21,13 +21,14 @@ import { loadDocuments } from "./document-loader";
 import { InMemoryVectorStore } from "./vector-store";
 import { InMemoryKeywordIndex } from "./keyword-index";
 import { rrfFusion, chunkKey, type RankedResult } from "./rrf";
+import { CrossEncoderReRanker } from "./cross-encoder-reranker";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
 export class RAGManager {
   private config: RAGConfig;
   private store: VectorStore;
   private keywordIndex?: InMemoryKeywordIndex;
-  private reRanker?: ReRanker;
+  private reRanker?: ReRanker | null;
   private logger: Logger;
   private documents: RAGDocument[] = [];
   private _indexed = false;
@@ -43,7 +44,13 @@ export class RAGManager {
     if (this.config.hybridSearch) {
       this.keywordIndex = new InMemoryKeywordIndex();
     }
-    this.reRanker = config.reRanker;
+    // Default to CrossEncoderReRanker unless user explicitly set reRanker
+    // (pass `reRanker: null` to disable re-ranking entirely).
+    if ("reRanker" in config) {
+      this.reRanker = config.reRanker;
+    } else {
+      this.reRanker = new CrossEncoderReRanker();
+    }
     this.logger = logger ?? new ConsoleLogger();
   }
 
@@ -187,16 +194,26 @@ export class RAGManager {
       results = await this.store.search(queryEmbedding, fetchK);
     }
 
-    // ── Re-rank (optional) ────────────────────────────────────────────
+    // ── Re-rank (default: Cross-Encoder) ───────────────────────────────
     //
     // When both hybrid search AND re-rank are enabled, RRF fusion acts as a
     // candidate-pool selector (merging + deduplicating the two retrieval
-    // paths with a ranking bias toward chunks that appear in both).  The LLM
-    // re-ranker then re-scores this pool from scratch.  The RRF scores are
-    // intentionally discarded here — the LLM's semantic relevance judgment
+    // paths with a ranking bias toward chunks that appear in both).  The
+    // re-ranker then re-scores this pool from scratch.  RRF scores are
+    // intentionally discarded — the re-ranker's semantic relevance judgment
     // is more accurate than the RRF formula for the final ordering.
+    //
+    // If the re-ranker fails (e.g. model not downloaded yet, disk full),
+    // we log a warning and return the un-ranked results rather than crashing
+    // the search.  The quality degrades but the system stays available.
     if (this.reRanker && results.length > 0) {
-      results = await this.reRanker.rerank(query, results);
+      try {
+        results = await this.reRanker.rerank(query, results);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn("RAG", `Re-ranker failed, returning un-ranked results: ${message}`);
+        // results unchanged — continue with original retrieval scores
+      }
     }
 
     // Take final top-K

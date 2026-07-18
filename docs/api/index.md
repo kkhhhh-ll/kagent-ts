@@ -35,7 +35,7 @@ import {
   McpClientManager, McpConnectionError,
   // RAG
   RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore,
-  InMemoryKeywordIndex, LLMReRanker, rrfFusion, chunkKey,
+  InMemoryKeywordIndex, LLMReRanker, CrossEncoderReRanker, rrfFusion, chunkKey,
   // SubAgent
   SubAgentManager, SubAgentLoader,
   // Memory
@@ -122,7 +122,7 @@ type RAGConfig / RAGDocument / RAGChunk
 type EmbeddingProvider / VectorStore
 type OpenAIEmbeddingConfig / ChromaVectorStoreConfig
 type RAGSearchResult / BM25Result / RankedResult / RRFFusionResult
-type ReRanker / LLMReRankerConfig
+type ReRanker / LLMReRankerConfig / CrossEncoderReRankerConfig
 
 // 工具系统
 type Tool / ToolResult / ToolErrorCode

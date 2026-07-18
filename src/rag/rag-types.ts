@@ -151,7 +151,7 @@ export interface RAGConfig {
   hybridRetrievalFactor?: number;
 
   /**
-   * Optional re-ranker for post-retrieval refinement.
+   * Re-ranker for post-retrieval refinement.
    *
    * After retrieval (and optionally RRF fusion), the candidate results
    * are passed to the re-ranker, which re-scores them using a more
@@ -161,7 +161,10 @@ export interface RAGConfig {
    * re-sorted list. The final top-K results are taken from the
    * re-ranker's output.
    *
-   * Without a re-ranker, results are returned as-is from retrieval/RRF.
+   * **Default:** `CrossEncoderReRanker` (local BGE-Reranker via ONNX).
+   * The cross-encoder model is downloaded on first use (~100–200 MB,
+   * cached for subsequent calls).  Set to `null` to disable re-ranking
+   * entirely and return results as-is from retrieval/RRF.
    */
-  reRanker?: ReRanker;
+  reRanker?: ReRanker | null;
 }

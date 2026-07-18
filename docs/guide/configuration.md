@@ -212,8 +212,9 @@ const agent = new ReActAgent({
     /** 混合检索时每路取 topK × factor 条候选（默认: 3） */
     hybridRetrievalFactor: 3,
 
-    /** Re-rank 精排器 — LLM / Cross-Encoder（可选） */
-    reRanker: new LLMReRanker({ llm: provider }),
+    /** Re-rank 精排器 — 默认 CrossEncoderReRanker（本地 ONNX）。
+     *  传 null 禁用，或传 LLMReRanker 切换为 LLM 打分。 */
+    reRanker: undefined, // 不设置 = 默认 CrossEncoderReRanker
   },
 })
 ```
