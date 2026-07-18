@@ -290,7 +290,6 @@ export class OrchestratorAgent extends Agent {
           worktreesDir: this.worktreesDir,
           branchPrefix: this.worktreeBranchPrefix,
           logger: this.logger,
-          autoCleanup: this.autoCleanupWorktrees,
         });
         this.logger.info("Orchestrator", "Git worktree isolation enabled.");
       } catch (err: unknown) {
@@ -484,7 +483,6 @@ export class OrchestratorAgent extends Agent {
           worktreesDir: this.worktreesDir,
           branchPrefix: this.worktreeBranchPrefix,
           logger: this.logger,
-          autoCleanup: this.autoCleanupWorktrees,
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

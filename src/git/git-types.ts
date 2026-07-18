@@ -23,7 +23,8 @@ export type GitWorktreeErrorCode =
   | "MERGE_CONFLICT"
   | "BRANCH_EXISTS"
   | "PERMISSION_DENIED"
-  | "INVALID_CONFIG";
+  | "INVALID_CONFIG"
+  | "GIT_OPERATION_FAILED";
 
 /**
  * Thrown when a git worktree operation fails.
@@ -81,12 +82,6 @@ export interface GitWorktreeConfig {
    */
   branchPrefix?: string;
 
-  /**
-   * Whether to auto-remove worktrees after their operation completes.
-   * When true, removeWorktree is called as soon as a node finishes.
-   * Default: true.
-   */
-  autoCleanup?: boolean;
 }
 
 // ─── Worktree Info & Status ─────────────────────────────────────────────────
