@@ -73,7 +73,7 @@ interface ToolCallStats {
 
 ## Benchmark
 
-基准回归测试：批量运行用例并对比历史基线，检测 Agent 行为是否退化。
+基准回归测试：批量运行用例、对比历史基线，**10 维度自动检测** Agent 行为是否退化。
 
 ```ts
 import { Benchmark } from 'kagent-ts'
@@ -92,7 +92,13 @@ const benchmark = new Benchmark({
     { name: 'code-search', input: '查找所有未使用的导入' },
     { name: 'file-ops', input: '统计每个目录的 TypeScript 文件数量' },
   ],
-  baselinePath: './benchmark-baseline.json',  // 与上次结果对比
+  baselinePath: './.kagent-benchmarks/benchmark-xxx.json',  // 与上次结果对比
+
+  // 全部可选，默认值如下：
+  passRateRegressionThreshold: 0.05,    // 通过率 ≥5pp 下降 → 回归
+  failureCountRegressionThreshold: 2,   // 单 case 失败数 ≥2 增长 → 回归
+  latencyRegressionFactor: 1.5,         // 延迟 >1.5x 基线 → 回归
+  latencyMinAbsoluteIncreaseMs: 1000,   // 且绝对增量 ≥1s（防小数值抖动）
 })
 
 // run() 执行所有用例，自动对比基线并持久化结果
@@ -109,6 +115,23 @@ for (const i of result.summary.improvements) {
   console.log(`✅ 进步: ${i.target} — ${i.metric} 从 ${i.baseline} 变为 ${i.current}`)
 }
 ```
+
+### 回归检测维度
+
+10 个检测维度，benchmark 结束后自动对比 baseline：
+
+| 维度 | 检测逻辑 | 粒度 |
+|------|---------|------|
+| passRate | 通过率下降 ≥ threshold | 整体 |
+| PASS→FAIL 翻转 | 上个版本通过、当前版本失败 | 单 case |
+| failureCount | 单 case 失败数增加 ≥ threshold | 单 case |
+| avgDuration | 平均耗时 > baseline × factor 且绝对增量 ≥ minAbs | 整体 |
+| per-tool P50 | 同上，per-tool 粒度 | 单 case / 单工具 |
+| per-tool P99 | 同上 | 单 case / 单工具 |
+| per-tool successRate | 工具成功率下降 ≥ passRateThreshold | 单 case / 单工具 |
+| per-tool avgRetries | 平均重试增加 ≥ failureCountThreshold | 单 case / 单工具 |
+| per-tool circuitBreaker | 熔断次数增加 ≥ 1 | 单 case / 单工具 |
+| FAIL→PASS 改进 | 上个版本失败、当前版本通过 | 单 case |
 
 ### 结果结构
 

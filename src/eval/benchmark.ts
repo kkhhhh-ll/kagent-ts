@@ -35,24 +35,44 @@ export interface BenchmarkConfig {
 
   /**
    * EvalRunner instance (shared across cases).
-   * When omitted, a default EvalRunner is created (no LLM judge).
+   * When omitted, a default EvalRunner is created.
    */
   runner?: EvalRunner;
+
+  // ── Regression thresholds (all optional, with sensible defaults) ──────
+
+  /**
+   * Minimum drop in pass rate to flag as a regression.
+   * Expressed as a fraction (0–1).  Default: 0.05 (5 percentage points).
+   */
+  passRateRegressionThreshold?: number;
+
+  /**
+   * Minimum increase in per-case failure count to flag as a regression.
+   * Expressed as an absolute count.  Default: 2.
+   */
+  failureCountRegressionThreshold?: number;
+
+  /**
+   * Factor by which average case duration must increase to flag as a
+   * latency regression.  Default: 1.5 (50% slower).
+   */
+  latencyRegressionFactor?: number;
+
+  /**
+   * Minimum absolute increase in average case duration to flag as a
+   * latency regression (ms).  Prevents noise when durations are very
+   * small.  Default: 1_000 (1 second).
+   */
+  latencyMinAbsoluteIncreaseMs?: number;
 }
 
-// ─── Regression Detection Thresholds ─────────────────────────────────────
+// ─── Default Regression Thresholds ─────────────────────────────────────────
 
-/** Minimum drop in success rate to flag as a regression (percentage points). */
-const SUCCESS_RATE_REGRESSION_THRESHOLD = 0.05;
-
-/** Minimum increase in failures to flag as a regression (absolute count). */
-const FAILURE_COUNT_REGRESSION_THRESHOLD = 2;
-
-/** Factor by which latency must increase to flag as a regression. */
-const LATENCY_REGRESSION_FACTOR = 1.5;
-
-/** Minimum absolute latency increase to flag (ms). */
-const LATENCY_MIN_ABSOLUTE_INCREASE_MS = 1000;
+const DEFAULT_PASS_RATE_THRESHOLD = 0.05;
+const DEFAULT_FAILURE_COUNT_THRESHOLD = 2;
+const DEFAULT_LATENCY_FACTOR = 1.5;
+const DEFAULT_LATENCY_MIN_ABSOLUTE_MS = 1000;
 
 /**
  * Benchmark — runs evaluation cases against an agent, compares with
@@ -64,7 +84,10 @@ const LATENCY_MIN_ABSOLUTE_INCREASE_MS = 1000;
  *   name: "tool-calling-v2",
  *   agentFactory: (evaluator) => new ReActAgent({ llm, hooks: [evaluator] }),
  *   cases: myEvalCases,
- *   baselinePath: ".kagent-benchmarks/tool-calling-v1.json",
+ *   baselinePath: ".kagent-benchmarks/benchmark-xxx.json",
+ *   // Optional: customise regression thresholds
+ *   passRateRegressionThreshold: 0.1,   // 10pp drop → alert (default: 0.05)
+ *   latencyRegressionFactor: 2,         // 2× slower → alert (default: 1.5)
  * });
  *
  * const result = await benchmark.run();
@@ -214,8 +237,11 @@ export class Benchmark {
   ): void {
     const bl = baseline.summary;
 
+    const passRateThreshold =
+      this.config.passRateRegressionThreshold ?? DEFAULT_PASS_RATE_THRESHOLD;
+
     // ── Pass rate regression ──────────────────────────────────────────
-    if (bl.passRate - summary.passRate >= SUCCESS_RATE_REGRESSION_THRESHOLD) {
+    if (bl.passRate - summary.passRate >= passRateThreshold) {
       const drop = ((bl.passRate - summary.passRate) * 100).toFixed(1);
       summary.regressions.push({
         target: "overall",
@@ -225,8 +251,7 @@ export class Benchmark {
         description: `Pass rate dropped by ${drop} percentage points.`,
       });
     } else if (
-      summary.passRate - bl.passRate >=
-      SUCCESS_RATE_REGRESSION_THRESHOLD
+      summary.passRate - bl.passRate >= passRateThreshold
     ) {
       summary.improvements.push({
         target: "overall",
@@ -236,10 +261,15 @@ export class Benchmark {
       });
     }
 
+    const latencyFactor =
+      this.config.latencyRegressionFactor ?? DEFAULT_LATENCY_FACTOR;
+    const latencyMinAbs =
+      this.config.latencyMinAbsoluteIncreaseMs ?? DEFAULT_LATENCY_MIN_ABSOLUTE_MS;
+
     // ── Latency regression ────────────────────────────────────────────
     if (
-      summary.avgCaseDurationMs > bl.avgCaseDurationMs * LATENCY_REGRESSION_FACTOR &&
-      summary.avgCaseDurationMs - bl.avgCaseDurationMs > LATENCY_MIN_ABSOLUTE_INCREASE_MS
+      summary.avgCaseDurationMs > bl.avgCaseDurationMs * latencyFactor &&
+      summary.avgCaseDurationMs - bl.avgCaseDurationMs > latencyMinAbs
     ) {
       summary.regressions.push({
         target: "overall",
@@ -283,7 +313,9 @@ export class Benchmark {
       // Failure count increased significantly
       const prevFailCount = prev.failures.length;
       const currFailCount = current.failures.length;
-      if (currFailCount - prevFailCount >= FAILURE_COUNT_REGRESSION_THRESHOLD) {
+      const failThreshold =
+        this.config.failureCountRegressionThreshold ?? DEFAULT_FAILURE_COUNT_THRESHOLD;
+      if (currFailCount - prevFailCount >= failThreshold) {
         summary.regressions.push({
           target: current.caseName,
           metric: "failureCount",
@@ -291,6 +323,84 @@ export class Benchmark {
           current: String(currFailCount),
           description: `Failure count increased from ${prevFailCount} to ${currFailCount}.`,
         });
+      }
+
+      // ── Per-tool comparison ──────────────────────────────────────
+      const prevToolMap = new Map(
+        prev.scorecard.perTool.map((t) => [t.toolName, t]),
+      );
+
+      for (const curTool of current.scorecard.perTool) {
+        const prevTool = prevToolMap.get(curTool.toolName);
+        if (!prevTool) continue; // New tool — no baseline
+
+        const toolLabel = `${current.caseName}/${curTool.toolName}`;
+
+        // Per-tool P50 latency
+        if (
+          curTool.p50LatencyMs > prevTool.p50LatencyMs * latencyFactor &&
+          curTool.p50LatencyMs - prevTool.p50LatencyMs > latencyMinAbs
+        ) {
+          summary.regressions.push({
+            target: toolLabel,
+            metric: "p50LatencyMs",
+            baseline: `${prevTool.p50LatencyMs}ms`,
+            current: `${curTool.p50LatencyMs}ms`,
+            description: `P50 latency increased by ${
+              curTool.p50LatencyMs - prevTool.p50LatencyMs
+            }ms.`,
+          });
+        }
+
+        // Per-tool P99 latency
+        if (
+          curTool.p99LatencyMs > prevTool.p99LatencyMs * latencyFactor &&
+          curTool.p99LatencyMs - prevTool.p99LatencyMs > latencyMinAbs
+        ) {
+          summary.regressions.push({
+            target: toolLabel,
+            metric: "p99LatencyMs",
+            baseline: `${prevTool.p99LatencyMs}ms`,
+            current: `${curTool.p99LatencyMs}ms`,
+            description: `P99 latency increased by ${
+              curTool.p99LatencyMs - prevTool.p99LatencyMs
+            }ms.`,
+          });
+        }
+
+        // Per-tool success rate regression
+        if (prevTool.successRate - curTool.successRate >= passRateThreshold) {
+          const drop = ((prevTool.successRate - curTool.successRate) * 100).toFixed(1);
+          summary.regressions.push({
+            target: toolLabel,
+            metric: "successRate",
+            baseline: `${(prevTool.successRate * 100).toFixed(1)}%`,
+            current: `${(curTool.successRate * 100).toFixed(1)}%`,
+            description: `Success rate dropped by ${drop} percentage points.`,
+          });
+        }
+
+        // Per-tool retry increase
+        if (curTool.avgRetries - prevTool.avgRetries >= failThreshold) {
+          summary.regressions.push({
+            target: toolLabel,
+            metric: "avgRetries",
+            baseline: prevTool.avgRetries.toFixed(1),
+            current: curTool.avgRetries.toFixed(1),
+            description: `Avg retries increased from ${prevTool.avgRetries.toFixed(1)} to ${curTool.avgRetries.toFixed(1)}.`,
+          });
+        }
+
+        // Per-tool circuit breaker trip increase
+        if (curTool.circuitBreakerTrips > prevTool.circuitBreakerTrips) {
+          summary.regressions.push({
+            target: toolLabel,
+            metric: "circuitBreakerTrips",
+            baseline: String(prevTool.circuitBreakerTrips),
+            current: String(curTool.circuitBreakerTrips),
+            description: `Circuit breaker tripped ${curTool.circuitBreakerTrips - prevTool.circuitBreakerTrips} more time(s).`,
+          });
+        }
       }
     }
   }
