@@ -2,6 +2,7 @@ import { LLMProvider, ToolCall } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
+import { Role } from "../messages/types";
 import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION, RAG_KNOWLEDGE_BASE_HINT } from "./system-prompts";
 import { wrapAndScan } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
@@ -267,11 +268,32 @@ export interface AgentConfig {
     | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
   /**
-   * Maximum concurrent sub-agent runs. Default: 3. The spawn tool returns
-   * a "wait" error when this limit is reached, signaling the LLM to wait
-   * for a running sub-agent to complete before spawning another.
+   * Maximum concurrent sub-agent runs. Default: 3. When this limit is
+   * reached, new spawns enter a FIFO wait queue instead of failing.
    */
   maxPending?: number;
+
+  /**
+   * Maximum sub-agent wait queue length. Default: 20. When the queue is
+   * full, the spawn tool returns an error, signaling the LLM to wait
+   * before spawning more. Prevents runaway memory growth from
+   * uncontrolled spawns.
+   */
+  maxQueueSize?: number;
+
+  /**
+   * When the LLM spawns sub-agents in a tool-call batch, the agent
+   * opportunistically waits up to this many milliseconds for quick
+   * sub-agent results before continuing the ReAct loop.
+   *
+   * Fast results are injected into context in the same iteration,
+   * saving a full LLM round-trip. Results that don't finish in time
+   * are picked up by the next iteration's {@code pollCompleted()}.
+   *
+   * Default: 30_000 (30 seconds).  Set to 0 to disable (always
+   * background).
+   */
+  subAgentFastTimeoutMs?: number;
 
   /**
    * RAG configuration. When set, documents are indexed at startup and the
@@ -504,6 +526,12 @@ export abstract class Agent {
   /** Max concurrent sub-agent runs (default: 3). */
   protected maxPending?: number;
 
+  /** Max sub-agent wait queue length (default: 20). */
+  protected maxQueueSize?: number;
+
+  /** Max ms to wait for fast sub-agent results after spawn (default: 30_000). */
+  protected subAgentFastTimeoutMs?: number;
+
   /** LLM provider for task-complexity routing (defaults to main llm if not set). */
   protected routeLLM?: LLMProvider;
 
@@ -652,6 +680,8 @@ export abstract class Agent {
       this.subAgentLLM = cfg.llm.forSubAgent();
     }
     this.maxPending = cfg.maxPending;
+    this.maxQueueSize = cfg.maxQueueSize;
+    this.subAgentFastTimeoutMs = cfg.subAgentFastTimeoutMs;
 
     // Resolve routing LLM (task-complexity classification):
     // 1. Explicit `routeLLM` → use it directly
@@ -1179,7 +1209,7 @@ export abstract class Agent {
   protected async executeToolCallsBatch(
     toolCalls: ToolCall[],
     mcpWarnedServers: Set<string>,
-  ): Promise<{ hadFailure: boolean }> {
+  ): Promise<{ hadFailure: boolean; hadSpawnCalls: boolean }> {
     // Per-slot state: parsed args + eventual result
     interface Slot {
       toolCall: ToolCall;
@@ -1342,6 +1372,7 @@ export abstract class Agent {
 
     // ── Step 5: Inject results into context & post-process ─────────────
     let hadFailure = false;
+    let hadSpawnCalls = false;
     for (const slot of slots) {
       const result = slot.result!;
       const toolName = slot.toolCall.function.name;
@@ -1358,8 +1389,10 @@ export abstract class Agent {
       }
 
       // Sub-agent spawned — purely informational; results arrive
-      // asynchronously and will be injected via pollSubAgentResults().
+      // asynchronously and will be injected via pollSubAgentResults() or
+      // the fast-results wait (collectFastResults) in the ReAct loop.
       if (result.success && slot.toolCall.function.name === "spawn_subagent") {
+        hadSpawnCalls = true;
         this.logger.info(
           "SubAgent",
           `Spawned "${slot.args.name ?? "unknown"}" — ` +
@@ -1397,7 +1430,7 @@ export abstract class Agent {
       }
     }
 
-    return { hadFailure };
+    return { hadFailure, hadSpawnCalls };
   }
 
   /**
@@ -1608,7 +1641,7 @@ export abstract class Agent {
     this.contextManager.clear();
     this.coreSystemPrompt = "";
     this.tokenBudget?.reset();
-    this.subAgentManager?.cancelAll();
+    this.subAgentManager?.clear();
     if (this.sessionManager) {
       this.sessionManager.deleteSession(this.sessionManager.getSessionId());
     }
@@ -1711,6 +1744,7 @@ export abstract class Agent {
       this.subAgentLLM,
       this.subAgentHooks,
       this.maxPending,
+      this.maxQueueSize,
     );
     this.subAgentManager.registerFromDirectory(this.subAgentsDir!);
     this.safeRegister(createListSubagentsTool(this.subAgentManager));
@@ -1757,6 +1791,59 @@ export abstract class Agent {
   }
 
   /**
+   * Cancel a single sub-agent run by its run ID.
+   *
+   * - **Queued** (not yet started): removed from the wait queue immediately.
+   * - **Running**: the agent's in-flight LLM request is aborted and its
+   *   ReAct loop terminates. Cancelled results appear in the next
+   *   `pollCompleted()` call.
+   * - **Already completed / errored**: no-op, returns
+   *   `{cancelled: false}`.
+   *
+   * @param runId The run ID returned by {@link spawnSubAgent}.
+   * @returns A result indicating whether cancellation succeeded.
+   */
+  cancelSubAgent(runId: string): { cancelled: boolean; wasRunning?: boolean; reason?: string } {
+    if (!this.subAgentManager) {
+      return { cancelled: false, reason: "no sub-agent manager configured" };
+    }
+    return this.subAgentManager.cancel(runId);
+  }
+
+  /**
+   * Opportunistically wait for fast sub-agent results after a spawn.
+   *
+   * Called after tool execution when {@code hadSpawnCalls} is true.  Waits
+   * up to {@link subAgentFastTimeoutMs} (default 30 s) for any spawned
+   * sub-agent to complete.  Fast results are injected directly into context
+   * so the LLM sees them on the very next ReAct iteration — no wasted
+   * round-trip for sub-agents that finish quickly.  Slower results stay in
+   * the background and are picked up by {@link pollSubAgentResults}.
+   */
+  protected async collectFastSubAgentResults(hadSpawnCalls: boolean): Promise<void> {
+    if (!hadSpawnCalls || !this.subAgentManager) return;
+    const timeout = this.subAgentFastTimeoutMs ?? 30_000;
+    if (timeout <= 0) return;
+
+    const fastResults = await this.subAgentManager.collectFastResults(timeout);
+    for (const r of fastResults) {
+      const source = `subagent:${r.name}`;
+      const msg = new Message(
+        Role.User,
+        wrapAndScan(source, r.output),
+        { name: source },
+      );
+      this.contextManager.addMessage(msg.toDict());
+    }
+    if (fastResults.length > 0) {
+      this.logger.info(
+        "SubAgent",
+        `${fastResults.length} fast result(s) injected in same iteration.`,
+      );
+    }
+  }
+
+  /**
    * Spawn a sub-agent by definition name. Runs asynchronously — call
    * `pollSubAgentResults()` each iteration to collect completed results.
    */
@@ -1787,14 +1874,18 @@ export abstract class Agent {
    */
   protected holdAnswerForPendingSubAgents(): boolean {
     if (!this.subAgentManager || !this.subAgentManager.hasRunning()) return false;
-    const pending = this.subAgentManager.getActiveCount();
+    const running = this.subAgentManager.getActiveCount();
+    const queued = this.subAgentManager.getQueueLength();
+    const parts: string[] = [];
+    if (running > 0) parts.push(`${running} running`);
+    if (queued > 0) parts.push(`${queued} queued`);
     this.logger.info(
       "SubAgent",
-      `Final answer proposed while ${pending} sub-agent(s) still running — waiting for their results before finalizing.`,
+      `Final answer proposed while ${parts.join(" + ")} sub-agent(s) still pending — waiting for their results before finalizing.`,
     );
     const msg = Message.user(
-      `[System] ${pending} sub-agent(s) you spawned are still running — do NOT finalize yet. ` +
-        `Their results will arrive in the next message; incorporate them before giving your final answer.`,
+      `[System] ${parts.join(" and ")} sub-agent(s) you spawned are still pending — do NOT finalize yet. ` +
+        `Their results will arrive in a future message; incorporate them before giving your final answer.`,
     );
     this.contextManager.addMessage(msg.toDict());
     return true;

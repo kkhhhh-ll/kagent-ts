@@ -301,8 +301,10 @@ export class GitWorktreeManager {
         // Guard: check the worktree itself for uncommitted changes before
         // merging — only committed changes on the worktree branch will be
         // carried into the merge target.
+        // --untracked-files=no excludes the .kagent-worktrees/ directory
+        // (which is inside the repo) from the status check.
         const { stdout: wtStatusOut } = await this.runGit(
-          ["status", "--porcelain"],
+          ["status", "--porcelain", "--untracked-files=no"],
           info.path,
           undefined,
           info.id,
@@ -324,8 +326,12 @@ export class GitWorktreeManager {
         // the main repository rather than in a dedicated temporary worktree.
         // A future refactor should consider using `git worktree add` to stage
         // the merge in isolation, then pushing the result.
+        //
+        // --untracked-files=no: the default worktreesDir (.kagent-worktrees/)
+        // lives inside the repo; without this flag its untracked content
+        // would falsely trigger the WORKTREE_DIRTY guard.
         const { stdout: statusOut } = await this.runGit(
-          ["status", "--porcelain"],
+          ["status", "--porcelain", "--untracked-files=no"],
           this.repoPath,
           undefined,
           info.id,
@@ -386,7 +392,11 @@ export class GitWorktreeManager {
 
         // Leave the worktree in place so the user can inspect the conflict
         info.status = "failed";
-        if (err instanceof GitWorktreeError) throw err;
+        // Only pre-condition guard errors (WORKTREE_DIRTY) are re-thrown
+        // as-is — they indicate a real issue the caller must fix (e.g.
+        // uncommitted changes).  Everything else, including GIT_OPERATION_FAILED
+        // from a failed `git merge`, is wrapped as MERGE_CONFLICT.
+        if (err instanceof GitWorktreeError && err.code === "WORKTREE_DIRTY") throw err;
         throw new GitWorktreeError(
           `Merge failed: ${err instanceof Error ? err.message : String(err)}`,
           "MERGE_CONFLICT",

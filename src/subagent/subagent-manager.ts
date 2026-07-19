@@ -1,4 +1,10 @@
-import { SubAgentDefinition, SubAgentResult, PendingRun } from "./subagent-types";
+import {
+  SubAgentDefinition,
+  SubAgentResult,
+  PendingRun,
+  QueuedRun,
+  CancelResult,
+} from "./subagent-types";
 import { SubAgentLoader } from "./subagent-loader";
 import type { ReActAgent } from "../core/react-agent";
 import { LLMProvider } from "../llm/interface";
@@ -31,7 +37,8 @@ function globToRegex(pattern: string): RegExp {
  *
  * The SubAgentManager is owned by the main agent. It:
  * 1. Loads sub-agent definitions from a directory (AGENT.md files)
- * 2. Spawns sub-agents on demand (fire-and-forget)
+ * 2. Spawns sub-agents on demand (fire-and-forget, with an internal queue
+ *    when all concurrent slots are full)
  * 3. Collects completed results for the main agent to pick up
  *
  * Sub-agents are standard ReActAgent instances with:
@@ -39,6 +46,13 @@ function globToRegex(pattern: string): RegExp {
  * - A filtered tool set (only tools declared in the definition)
  * - Pre-activated skills (as declared)
  * - NO spawn tool (prevents nested agent creation)
+ *
+ * ## Queue behaviour
+ *
+ * When {@link maxPending} slots are all occupied, new spawns enter a FIFO
+ * wait queue (up to {@link maxQueueSize} entries). As running sub-agents
+ * complete, queued entries are automatically promoted. A queued or running
+ * run can be individually cancelled via {@link cancel}.
  */
 export class SubAgentManager {
   private logger: Logger = new ConsoleLogger();
@@ -51,8 +65,14 @@ export class SubAgentManager {
   /** Registered definitions keyed by name. */
   private definitions: Map<string, SubAgentDefinition> = new Map();
 
-  /** Currently pending (running) sub-agents. */
+  /** Currently running sub-agents. */
   private pending: PendingRun[] = [];
+
+  /**
+   * Wait queue — spawns that couldn't get a slot immediately.
+   * FIFO order; oldest entry is promoted first when a slot frees up.
+   */
+  private waitQueue: QueuedRun[] = [];
 
   /** Shared LLM provider injected by the main agent. */
   private llmProvider?: LLMProvider;
@@ -79,6 +99,9 @@ export class SubAgentManager {
 
   /** Maximum concurrent sub-agent runs. Default: 3. */
   private maxPending: number = 3;
+
+  /** Maximum wait queue length. Default: 20. Prevents runaway spawns. */
+  private maxQueueSize: number = 20;
 
   /**
    * Default ToolFilter applied to every sub-agent's tool set.
@@ -164,6 +187,7 @@ export class SubAgentManager {
     subAgentLLM?: LLMProvider,
     subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]),
     maxPending?: number,
+    maxQueueSize?: number,
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
@@ -174,13 +198,17 @@ export class SubAgentManager {
     this.subAgentLLM = subAgentLLM;
     this.subAgentHooks = subAgentHooks;
     if (maxPending !== undefined) this.maxPending = maxPending;
+    if (maxQueueSize !== undefined) this.maxQueueSize = maxQueueSize;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
 
   /**
-   * Spawn a sub-agent by definition name. Returns immediately with a run ID;
-   * the sub-agent executes asynchronously.
+   * Spawn a sub-agent by definition name. Returns immediately with a run ID.
+   *
+   * If a running slot is available (`pending.length < maxPending`) the
+   * sub-agent starts immediately. Otherwise it enters a FIFO wait queue;
+   * it will be started automatically when a slot frees up.
    *
    * Multiple instances of the same definition can run concurrently — each
    * gets a unique run ID. This enables orchestrator patterns where the same
@@ -191,7 +219,8 @@ export class SubAgentManager {
    * @param options Optional overrides — workdir scopes the sub-agent to
    *                a specific directory (e.g. a git worktree).
    * @returns The unique run ID (used to correlate results later).
-   * @throws If the definition is unknown or the manager is not yet bound.
+   * @throws If the definition is unknown, the manager is not yet bound, or
+   *         the wait queue is full.
    */
   spawn(name: string, input: string, options?: { workdir?: string }): string {
     const definition = this.definitions.get(name);
@@ -202,15 +231,6 @@ export class SubAgentManager {
       );
     }
 
-    // Prevent runaway spawns — if there are already several sub-agents
-    // running, tell the LLM to wait instead of spawning more.
-    if (this.pending.length >= this.maxPending) {
-      throw new Error(
-        `Too many sub-agents already running (${this.pending.length}). ` +
-        `Wait for at least one to complete before spawning another.`,
-      );
-    }
-
     if (!this.llmProvider || !this.toolRegistry || !this.skillManager) {
       throw new Error(
         "SubAgentManager is not bound to an LLM provider / ToolRegistry / SkillManager. " +
@@ -218,111 +238,147 @@ export class SubAgentManager {
       );
     }
 
-    const runId = `${name}_${++this.runIdCounter}_${Date.now()}`;
-
-    const pending: PendingRun = {
-      subAgentId: runId,
-      name,
-      startedAt: Date.now(),
-      resolved: null,
-      promise: Promise.resolve(undefined as unknown as SubAgentResult), // placeholder
-    };
-
-    // Fire-and-forget: start the sub-agent run, store the result
-    pending.promise = this.executeRun(name, runId, definition, input, pending.startedAt, options)
-      .then((r) => { pending.resolved = r; return r; })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        const fallback: SubAgentResult = {
-          subAgentId: runId,
-          name,
-          success: false,
-          output: this.wrapXml(name, runId, false, message, Date.now() - pending.startedAt),
-          durationMs: Date.now() - pending.startedAt,
-        };
-        pending.resolved = fallback;
-        return fallback;
-      });
-
-    this.pending.push(pending);
-
-    this.logger.info("SubAgent", `Spawned "${name}" (run: ${runId}).`);
-    return runId;
-  }
-
-  // ─── Poll ─────────────────────────────────────────────────────────────────
-
-  /**
-   * Check all pending sub-agent runs for completion.
-   *
-   * Call this at the start of each ReAct iteration. Completed results
-   * are removed from the pending queue and returned; still-running
-   * entries remain queued.
-   *
-   * @returns Array of completed sub-agent results (empty if none finished).
-   */
-  async pollCompleted(): Promise<SubAgentResult[]> {
-    if (this.pending.length === 0) return [];
-
-    // Block until at least one pending sub-agent completes.
-    // This prevents the main agent from spinning the LLM loop while
-    // waiting for async sub-agent results — no wasted iterations.
-    await Promise.race(
-      this.pending.map((r) => r.promise),
-    );
-    // Quick yield so any other recently-completed runs also surface
-    await new Promise((r) => setImmediate(r));
-
-    const results: SubAgentResult[] = [];
-    const stillPending: PendingRun[] = [];
-
-    for (const run of this.pending) {
-      if (run.resolved !== null) {
-        results.push(run.resolved);
-        this.logger.info(
-          "SubAgent",
-          `"${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
-        );
-      } else {
-        stillPending.push(run);
-      }
+    // Guard against runaway spawns — if the wait queue is full the LLM
+    // must wait for running sub-agents to complete before spawning more.
+    if (this.waitQueue.length >= this.maxQueueSize) {
+      throw new Error(
+        `Sub-agent queue full (${this.maxQueueSize}). ` +
+        `Wait for running sub-agents to complete before spawning another.`,
+      );
     }
 
-    this.pending = stillPending;
-    return results;
-  }
+    const runId = `${name}_${++this.runIdCounter}_${Date.now()}`;
 
-  /**
-   * Wait for all pending sub-agents to complete.
-   * Useful for graceful shutdown.
-   */
-  async awaitAll(): Promise<SubAgentResult[]> {
-    const results = await Promise.all(this.pending.map((r) => r.promise));
-    this.pending = [];
-    return results;
+    const queued: QueuedRun = {
+      subAgentId: runId,
+      name,
+      definition,
+      input,
+      createdAt: Date.now(),
+      options,
+      abortController: new AbortController(),
+    };
+
+    // Start immediately if a slot is available; otherwise enqueue.
+    if (this.pending.length < this.maxPending) {
+      this.dequeue(queued);
+    } else {
+      this.waitQueue.push(queued);
+      this.logger.info(
+        "SubAgent",
+        `"${name}" queued (run: ${runId}), ${this.waitQueue.length} ahead.`,
+      );
+    }
+
+    return runId;
   }
 
   // ─── Cancel ───────────────────────────────────────────────────────────────
 
   /**
-   * Cancel all pending sub-agents without waiting for them to finish.
+   * Cancel a single sub-agent run by its run ID.
    *
-   * Running sub-agents are marked as cancelled but their promises are
-   * kept alive. When the agent resumes, `collectOrphanedResults()` can
-   * recover completed results so the LLM sees sub-agent output instead
-   * of losing it forever.
+   * - **Queued** (not yet started): removed from the wait queue immediately.
+   * - **Running**: the agent's in-flight LLM request is aborted and its
+   *   ReAct loop terminates. The cancelled result will appear in the next
+   *   `pollCompleted()` call.
+   * - **Already completed / errored**: returns `{cancelled: false}` —
+   *   results were already delivered.
+   *
+   * @param runId The run ID returned by {@link spawn}.
+   * @returns A {@link CancelResult} indicating success / failure reason.
+   */
+  cancel(runId: string): CancelResult {
+    // ── 1. Check wait queue ───────────────────────────────────────────
+    const qIdx = this.waitQueue.findIndex((q) => q.subAgentId === runId);
+    if (qIdx !== -1) {
+      const [removed] = this.waitQueue.splice(qIdx, 1);
+      removed.abortController.abort(); // clean up any listener
+      this.logger.info("SubAgent", `Cancelled queued run "${runId}".`);
+      return { cancelled: true, wasRunning: false };
+    }
+
+    // ── 2. Check running ──────────────────────────────────────────────
+    const pending = this.pending.find((r) => r.subAgentId === runId);
+    if (!pending) {
+      return { cancelled: false, reason: "not_found" };
+    }
+
+    if (pending.resolved !== null) {
+      return { cancelled: false, reason: "already_completed" };
+    }
+
+    // Actually stop the agent
+    pending.status = "cancelled";
+    pending.cancelled = true;
+    pending.agent?.cancel();
+
+    this.logger.info("SubAgent", `Cancelled running "${runId}".`);
+    return { cancelled: true, wasRunning: true };
+  }
+
+  /**
+   * Synchronously discard ALL sub-agent state.
+   *
+   * Unlike {@link cancelAll} (which preserves results for later recovery),
+   * this method is a hard reset: queued items are removed, running agents
+   * are aborted, and all pending entries are discarded without waiting
+   * for promises to settle.
+   *
+   * Call this in {@code reset()} when the owning agent wants a clean slate
+   * and orphaned results from a previous session must not leak into the
+   * next run.
+   */
+  clear(): void {
+    for (const q of this.waitQueue) {
+      q.abortController.abort();
+    }
+    this.waitQueue = [];
+
+    for (const run of this.pending) {
+      run.agent?.cancel();
+    }
+    this.pending = [];
+
+    this.logger.info("SubAgent", "All sub-agent state cleared.");
+  }
+
+  /**
+   * Cancel all pending and queued sub-agents.
+   *
+   * - Wait queue entries are discarded (they never started).
+   * - Running sub-agents are marked as cancelled and their LLM calls are
+   *   aborted. Their promises stay alive — completed results can be
+   *   recovered later via {@link collectOrphanedResults}.
    */
   cancelAll(): void {
-    if (this.pending.length === 0) return;
+    // Discard queued items — they never started, no recovery needed
+    if (this.waitQueue.length > 0) {
+      this.logger.info(
+        "SubAgent",
+        `Discarding ${this.waitQueue.length} queued run(s).`,
+      );
+      for (const q of this.waitQueue) {
+        q.abortController.abort();
+      }
+      this.waitQueue = [];
+    }
+
+    // Cancel running ones (results preserved for recovery)
     let marked = 0;
     for (const run of this.pending) {
       if (!run.cancelled && run.resolved === null) {
+        run.status = "cancelled";
         run.cancelled = true;
+        run.agent?.cancel();
         marked++;
       }
     }
     if (marked > 0) {
-      this.logger.info("SubAgent", `Marked ${marked} pending sub-agent(s) as cancelled (results preserved).`);
+      this.logger.info(
+        "SubAgent",
+        `Cancelled ${marked} running sub-agent(s) (results preserved).`,
+      );
     }
   }
 
@@ -355,14 +411,167 @@ export class SubAgentManager {
     return results;
   }
 
-  // ─── Queries ──────────────────────────────────────────────────────────────
+  // ─── Poll ─────────────────────────────────────────────────────────────────
 
-  hasRunning(): boolean {
-    return this.pending.length > 0;
+  /**
+   * Wait up to `timeoutMs` for at least one pending sub-agent to complete.
+   *
+   * Unlike {@link pollCompleted} (which blocks indefinitely), this method
+   * races all unresolved promises against a timeout. If a sub-agent finishes
+   * within the window its result is collected and returned so the LLM sees
+   * it in the same ReAct iteration — saving a full round-trip.
+   *
+   * Results that don't finish in time stay in `this.pending` and will be
+   * picked up by the next {@link pollCompleted} call.
+   *
+   * Freed slots are filled from the wait queue (FIFO).
+   *
+   * @param timeoutMs Max milliseconds to wait (default: 30_000).
+   * @returns Completed sub-agent results (empty if none finished in time).
+   */
+  async collectFastResults(timeoutMs: number = 30_000): Promise<SubAgentResult[]> {
+    const alive = this.pending.filter((r) => r.resolved === null);
+    if (alive.length === 0) return [];
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // Race: first completed result vs. timeout
+      const winner = await Promise.race([
+        ...alive.map((r) => r.promise),
+        new Promise<"timeout">((resolve) => {
+          timeoutId = setTimeout(() => resolve("timeout"), timeoutMs);
+        }),
+      ]);
+
+      if (typeof winner === "object" && winner !== null && "subAgentId" in winner) {
+        // At least one resolved — quick yield so other recently-completed
+        // runs (within the same microtick window) also surface.
+        await new Promise((r) => setImmediate(r));
+      } else {
+        // Timeout or unexpected winner — no results.
+        return [];
+      }
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+
+    // Collect resolved, fill freed slots from queue
+    const results: SubAgentResult[] = [];
+    const stillPending: PendingRun[] = [];
+
+    for (const run of this.pending) {
+      if (run.resolved !== null) {
+        results.push(run.resolved);
+        this.logger.info(
+          "SubAgent",
+          `Fast result: "${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
+        );
+      } else {
+        stillPending.push(run);
+      }
+    }
+
+    this.pending = stillPending;
+
+    while (this.pending.length < this.maxPending && this.waitQueue.length > 0) {
+      const next = this.waitQueue.shift()!;
+      this.dequeue(next);
+    }
+
+    return results;
   }
 
+  /**
+   * Check all pending sub-agent runs for completion.
+   *
+   * Call this at the start of each ReAct iteration. Completed results
+   * are removed from the pending queue and returned; still-running
+   * entries remain queued.
+   *
+   * After collecting results, any freed slots are filled from the wait
+   * queue (FIFO order).
+   *
+   * @returns Array of completed sub-agent results (empty if none finished).
+   */
+  async pollCompleted(): Promise<SubAgentResult[]> {
+    if (this.pending.length === 0 && this.waitQueue.length === 0) return [];
+
+    // Block until at least one pending sub-agent completes.
+    // This prevents the main agent from spinning the LLM loop while
+    // waiting for async sub-agent results — no wasted iterations.
+    if (this.pending.length > 0) {
+      await Promise.race(
+        this.pending.map((r) => r.promise),
+      );
+      // Quick yield so any other recently-completed runs also surface
+      await new Promise((r) => setImmediate(r));
+    }
+
+    const results: SubAgentResult[] = [];
+    const stillPending: PendingRun[] = [];
+
+    for (const run of this.pending) {
+      if (run.resolved !== null) {
+        results.push(run.resolved);
+        this.logger.info(
+          "SubAgent",
+          `"${run.name}" (run: ${run.subAgentId}) completed in ${run.resolved.durationMs}ms.`,
+        );
+      } else {
+        stillPending.push(run);
+      }
+    }
+
+    this.pending = stillPending;
+
+    // ── Fill freed slots from wait queue ───────────────────────────────
+    while (this.pending.length < this.maxPending && this.waitQueue.length > 0) {
+      const next = this.waitQueue.shift()!;
+      this.dequeue(next);
+    }
+
+    return results;
+  }
+
+  /**
+   * Wait for all pending sub-agents to complete.
+   *
+   * Queued (not-yet-started) items are discarded — this is called during
+   * shutdown, so there is no consumer left to poll for their results.
+   * Useful for graceful shutdown.
+   */
+  async awaitAll(): Promise<SubAgentResult[]> {
+    if (this.waitQueue.length > 0) {
+      this.logger.warn(
+        "SubAgent",
+        `Closing — discarding ${this.waitQueue.length} queued run(s).`,
+      );
+      for (const q of this.waitQueue) {
+        q.abortController.abort();
+      }
+      this.waitQueue = [];
+    }
+
+    const results = await Promise.all(this.pending.map((r) => r.promise));
+    this.pending = [];
+    return results;
+  }
+
+  // ─── Queries ──────────────────────────────────────────────────────────────
+
+  /** Whether any sub-agent is running or queued. */
+  hasRunning(): boolean {
+    return this.pending.length > 0 || this.waitQueue.length > 0;
+  }
+
+  /** Number of currently running sub-agents (excludes queued). */
   getActiveCount(): number {
     return this.pending.length;
+  }
+
+  /** Number of runs waiting in the queue. */
+  getQueueLength(): number {
+    return this.waitQueue.length;
   }
 
   getDefinitions(): SubAgentDefinition[] {
@@ -389,6 +598,65 @@ export class SubAgentManager {
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────────
+
+  /**
+   * Promote a queued run to a running slot — create the PendingRun,
+   * kick off execution, and push onto `this.pending`.
+   */
+  private dequeue(item: QueuedRun): void {
+    const pending: PendingRun = {
+      subAgentId: item.subAgentId,
+      name: item.name,
+      startedAt: Date.now(),
+      status: "running",
+      resolved: null,
+      promise: Promise.resolve(undefined as unknown as SubAgentResult),
+    };
+
+    pending.promise = this.executeRun(
+      item.name,
+      item.subAgentId,
+      item.definition,
+      item.input,
+      pending.startedAt,
+      item.options,
+    )
+      .then((r) => {
+        pending.status = r.success ? "completed" : "error";
+        pending.resolved = r;
+        return r;
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        pending.status = "error";
+        const fallback: SubAgentResult = {
+          subAgentId: item.subAgentId,
+          name: item.name,
+          success: false,
+          output: this.wrapXml(
+            item.name,
+            item.subAgentId,
+            false,
+            message,
+            Date.now() - pending.startedAt,
+          ),
+          durationMs: Date.now() - pending.startedAt,
+        };
+        pending.resolved = fallback;
+        return fallback;
+      });
+
+    this.pending.push(pending);
+
+    const slotInfo =
+      this.waitQueue.length > 0
+        ? ` (${this.waitQueue.length} still queued)`
+        : "";
+    this.logger.info(
+      "SubAgent",
+      `Started "${item.name}" (run: ${item.subAgentId})${slotInfo}.`,
+    );
+  }
 
   /**
    * Execute a sub-agent run and wrap the result in XML.
@@ -435,6 +703,19 @@ export class SubAgentManager {
     options?: { workdir?: string },
   ): Promise<SubAgentResult> {
     const agent = await this.buildSubAgent(definition, options?.workdir);
+
+    // Store the agent reference on the PendingRun so cancel(runId) can
+    // call agent.cancel() to abort the in-flight LLM request + ReAct loop.
+    // Guard: if cancel() was called during buildSubAgent (the window between
+    // dequeue and here), cancel the agent now so it stops immediately instead
+    // of running to completion.
+    const pending = this.pending.find((r) => r.subAgentId === runId);
+    if (pending) {
+      pending.agent = agent;
+      if (pending.cancelled) {
+        agent.cancel();
+      }
+    }
 
     // Resolve and apply sub-agent hooks (static or factory).
     // Unsafe hooks (safeForSubAgent === false) are skipped — they could
@@ -533,9 +814,9 @@ export class SubAgentManager {
     if (this.defaultFilter || definition.toolFilter) {
       const filteredRegistry = new ToolRegistry();
       const namesOnly = toolRegistry.toolNames;
-      const allTools = this.toolRegistry!.getTools();
+      const allTools2 = this.toolRegistry!.getTools();
       for (const toolName of namesOnly) {
-        const tool = allTools.find((t) => t.name === toolName);
+        const tool = allTools2.find((t) => t.name === toolName);
         if (!tool) continue;
 
         let pass = true;
@@ -550,7 +831,6 @@ export class SubAgentManager {
         }
       }
       // Replace with the doubly-filtered registry
-      // (reuse the variable for the rest of the method)
       return await this.finishBuildSubAgent(
         definition,
         filteredRegistry,
@@ -608,6 +888,11 @@ export class SubAgentManager {
       // "" explicitly disables the default (undefined would be overridden
       // by the ?? "./subagents/" fallback in the Agent constructor).
       subAgentsDir: "",
+      // Sub-agents execute a specific delegated task — they do not need
+      // intent detection (wantsRemember, riskLevel, scenarios, complexity),
+      // skill auto-activation (skills are pre-declared in the definition),
+      // or side-effect tools (remember, recall, skill, list_errors).
+      skipAutoTools: true,
       workdir,
     });
   }

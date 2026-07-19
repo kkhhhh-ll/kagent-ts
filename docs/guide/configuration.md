@@ -48,8 +48,14 @@ interface AgentConfig {
   // ── 子代理生命周期钩子（支持静态/数组/工厂函数）──
   subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
 
-  // ── 最大并行子 Agent 数 (默认: 3) ──
+  // ── 最大并行子 Agent 数 (默认: 3，超过的排队) ──
   maxPending?: number
+
+  // ── 子代理等待队列上限 (默认: 20，满时拒绝新 spawn) ──
+  maxQueueSize?: number
+
+  // ── fast-result 等待时间 (默认: 30_000 ms，设为 0 禁用) ──
+  subAgentFastTimeoutMs?: number
 
   // ── 子 Agent 专用 LLM Provider（默认复用 llm）──
   subAgentLLM?: LLMProvider

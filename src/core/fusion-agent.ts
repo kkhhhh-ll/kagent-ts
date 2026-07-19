@@ -778,7 +778,7 @@ export class FusionAgent extends Agent {
         }
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(
           response.tool_calls!,
           mcpWarnedServers,
         );
@@ -836,6 +836,9 @@ export class FusionAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("active");
         }
+
+        // Opportunistic fast wait for sub-agent results.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
 
         continue;
       }
@@ -1468,7 +1471,7 @@ export class FusionAgent extends Agent {
         this.contextManager.addMessage(assistantMessage.toDict());
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
         // Inject truncation continuation AFTER tool execution so the
         // assistant(tool_calls) → tool_result pairing is preserved.
@@ -1497,6 +1500,10 @@ export class FusionAgent extends Agent {
         }
 
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+        // Opportunistic fast wait for sub-agent results.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
+
         continue;
       }
 

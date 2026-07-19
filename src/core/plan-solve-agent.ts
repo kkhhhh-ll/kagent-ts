@@ -361,7 +361,7 @@ export class PlanSolveAgent extends Agent {
         }
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure: roundHadFailure } = await this.executeToolCallsBatch(
+        const { hadFailure: roundHadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(
           response.tool_calls!,
           mcpWarnedServers,
         );
@@ -423,6 +423,9 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("active");
         }
+
+        // Opportunistic fast wait for sub-agent results.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
 
         // Continue the loop for the next thought
         continue;
@@ -848,7 +851,7 @@ export class PlanSolveAgent extends Agent {
         this.contextManager.addMessage(assistantMessage.toDict());
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
         // Inject truncation continuation AFTER tool execution so the
         // assistant(tool_calls) → tool_result pairing is preserved.
@@ -880,6 +883,10 @@ export class PlanSolveAgent extends Agent {
           }
         }
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
+
+        // Opportunistic fast wait for sub-agent results.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
+
         continue;
       }
 

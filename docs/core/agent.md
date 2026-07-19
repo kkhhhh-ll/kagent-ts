@@ -51,15 +51,24 @@ await agent.newTopic('帮我重构这个组件')
 
 ### `cancel(): void`
 
-取消当前正在执行的 `run()` 调用。已执行的工具调用无法回滚。
+取消当前正在执行的 `run()` 调用。已执行的工具调用无法回滚。同时取消所有正在运行和排队的子代理（通过 `cancelAll()`），恢复时可打捞已完成的结果。
 
 ```ts
 agent.cancel()
 ```
 
+### `cancelSubAgent(runId): CancelResult`
+
+精确取消单个子代理，无论其处于排队还是运行状态。排队中的从队列移除，运行中的中止其 LLM 调用和 ReAct 循环。已完成/不存在的返回 `cancelled: false`。
+
+```ts
+const result = agent.cancelSubAgent('code-analyzer_3_1720000000000')
+// { cancelled: true, wasRunning: true } | { cancelled: false, reason: "not_found" }
+```
+
 ### `reset(): void`
 
-完全重置 Agent 到初始状态（清除对话历史、会话状态等）。
+完全重置 Agent 到初始状态（清除对话历史、会话状态、子代理状态等）。子代理通过 `clear()` 硬清空（不保留结果）。
 
 ```ts
 agent.reset()
@@ -174,6 +183,22 @@ const agent = new ReActAgent({
 // 支持纯向量检索、混合检索（BM25 + RRF）、Re-rank 精排
 // 详见 [RAG 知识库](/advanced/rag)
 await agent.run('怎么配置 MCP？')
+```
+
+## 子代理配置
+
+在 `AgentConfig` 中传入以下选项即可启用子代理系统。详见 [Sub-Agent 子代理](/advanced/subagents)。
+
+```ts
+const agent = new ReActAgent({
+  llm: provider,
+  subAgentsDir: './subagents',       // AGENT.md 目录
+  maxPending: 3,                      // 并发上限（默认 3）
+  maxQueueSize: 20,                   // 队列上限（默认 20）
+  subAgentFastTimeoutMs: 30_000,      // fast-result 等待（默认 30s，0 禁用）
+  subAgentLLM: cheapProvider,         // 子代理专用 LLM（可选）
+  subAgentHooks: mainTrace,           // 子代理 hook（可选）
+})
 ```
 
 ## 下一步

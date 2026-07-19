@@ -301,7 +301,7 @@ export class ReActAgent extends Agent {
         }
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
         if (hadFailure) {
           consecutiveFailures++;
           if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
@@ -321,6 +321,11 @@ export class ReActAgent extends Agent {
           );
           this.contextManager.addMessage(continueMsg.toDict());
         }
+
+        // Opportunistic fast wait: after spawning sub-agents, wait up to
+        // `subAgentFastTimeoutMs` (default 30s) for quick results so the
+        // LLM sees them on the next iteration without wasting a round-trip.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
 
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("active");
@@ -618,7 +623,7 @@ export class ReActAgent extends Agent {
         this.contextManager.addMessage(assistantMessage.toDict());
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
         if (hadFailure) {
           consecutiveFailures++;
@@ -641,6 +646,9 @@ export class ReActAgent extends Agent {
             ).toDict(),
           );
         }
+
+        // Opportunistic fast wait for sub-agent results.
+        await this.collectFastSubAgentResults(hadSpawnCalls);
 
         if (this.checkpointingEnabled) this.saveCheckpoint("active");
         continue;

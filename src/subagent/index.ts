@@ -4,4 +4,8 @@ export type {
   SubAgentDefinition,
   SubAgentStatus,
   SubAgentResult,
+  RunStatus,
+  QueuedRun,
+  PendingRun,
+  CancelResult,
 } from "./subagent-types";
