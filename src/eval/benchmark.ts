@@ -316,14 +316,12 @@ export class Benchmark {
     try {
       fs.mkdirSync(this.outputDir, { recursive: true });
 
-      // Replace characters unsafe in filenames (Windows reserved + control chars).
-      // Unicode letters (e.g. CJK) are preserved so names remain readable.
-      const safeName = this.config.name
-        .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
-        .replace(/^[. ]+|[. ]+$/g, "")  // Windows: trim leading/trailing dots and spaces
-        .slice(0, 200);                 // Keep filename length reasonable
-      const timestamp = result.summary.timestamp.replace(/[:.]/g, "-");
-      const filename = `${safeName}_${timestamp}.json`;
+      // Same naming convention as kagent-sessions:
+      //   benchmark-{Date.now()}-{random6}.json
+      // The human-readable name is stored inside the JSON (result.summary.name).
+      const ts = Date.now();
+      const rand = Math.random().toString(36).slice(2, 8);
+      const filename = `benchmark-${ts}-${rand}.json`;
       const filePath = path.join(this.outputDir, filename);
 
       fs.writeFileSync(filePath, JSON.stringify(result, null, 2), "utf-8");

@@ -3,6 +3,7 @@ dist/
 test/
 .kagent/
 .kagent-sessions/
+.kagent-benchmarks/
 .error-traces/
 *.tgz
 .npmrc
