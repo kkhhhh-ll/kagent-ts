@@ -1,32 +1,29 @@
 # kagent-ts
 
-生产级 TypeScript Agent 框架，支持多范式执行引擎、意图识别、答案验证、工具治理、会话持久化、渐进式技能与自我进化。
+**生产级 TypeScript Agent 框架** — 多范式执行引擎、意图识别、答案验证、工具治理、会话持久化、渐进式技能、自我进化。
 
 [![npm version](https://img.shields.io/npm/v/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
+[![npm downloads](https://img.shields.io/npm/dm/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-green)](package.json)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-green)](https://nodejs.org)
+[![Docs](https://img.shields.io/badge/docs-online-brightgreen)](https://kkhhhh-ll.github.io/kagent-ts)
 
 ---
 
-## 核心特性
+## 为什么选择 kagent-ts？
 
-| 模块 | 能力 |
-|------|------|
-| **多范式引擎** | ReAct（Think→Act→Observe）、PlanSolve（Plan→Resolve→Revise）、Fusion（Route→Plan/Execute→Verify）、Orchestrator（Decompose→Dispatch→Synthesize） |
-| **意图识别** | 零 LLM 开销的信号检测（`记住`/`deploy` 等）+ Skill 关键词自动匹配激活，统一数据源 |
-| **答案验证** | 返回前 Fork 独立 Agent 审查正确性与完整性，不通过则自动修正 |
-| **工具治理** | 熔断器三态转换 + JSON Schema 字段级校验 + 大输出截断 + HITL 按工具粒度审批 |
-| **LLM 抽象** | OpenAI / Anthropic 统一接口 + 模型路由（main/subAgent/reflection/verification/memory/precipitation）+ 自动降级 + Token 预算 |
-| **上下文管理** | 渐进 4 步压缩（截断→裁剪→清除→摘要），每步后检测 Token 达标即停 |
-| **会话持久化** | 每种 Agent 类型保存完整运行时状态，断点续跑 + AbortController 安全取消 |
-| **渐进式技能** | SKILL.md 文件定义，关键词自动激活，Precipitation 自动沉淀含关键词的技能 |
-| **长期记忆** | Markdown 文件替代向量库，`[[wiki-link]]` 互联，LLM 自主管理 |
-| **反思系统** | 错题本（ErrorNotebook）跨 Session 注入 + 记忆提取 + 技能沉淀，全部 fire-and-forget |
-| **安全防护** | 边界标记分离 Data/Instruction + 注入签名扫描 + System Prompt 指令优先 |
-| **可观测性** | Hook 系统零侵入全链路追踪，自动传导嵌套 Agent；Eval + Benchmark 量化评估 |
-| **SubAgent** | AGENT.md 零代码注册，三级权限过滤，结果作为用户消息注入主 Agent |
-| **Git Worktree** | 文件系统级沙箱，默认丢弃不留痕，零外部依赖 |
-| **MCP / RAG** | MCP 协议动态工具发现 + 混合检索（向量+BM25+RRF）+ LLM 重排序 |
+构建生产级 AI Agent 不仅仅是 Prompt Engineering —— 你还需要**可靠的工具执行**、**答案验证**、**安全取消**、**会话恢复**、**技能复用**和**可观测性**。kagent-ts 开箱即用地提供了这一切，API 简洁、可组合。
+
+| 关注点 | 没有 kagent-ts | 有了 kagent-ts |
+|--------|---------------|---------------|
+| **Agent 循环** | 自己写 ReAct | 4 种久经考验的范式：ReAct、PlanSolve、Fusion、Orchestrator |
+| **工具安全** | try/catch 碰运气 | 熔断器（CLOSED→HALF_OPEN→OPEN）+ JSON Schema 校验 + HITL 审批 |
+| **答案质量** | 盲目信任 | Fork 独立 Agent 验证正确性与完整性后才返回 |
+| **LLM 韧性** | 单 provider → 宕机 | 多 provider 路由 + 自动降级 + Token 预算 |
+| **会话恢复** | 崩溃即丢失 | 完整 checkpoint/resume，支持网络中断恢复 |
+| **技能复用** | 复制粘贴 Prompt | `.md` 文件定义技能，关键词自动激活 + 自动沉淀 |
+| **可观测性** | `console.log` | Hook 系统零侵入全链路追踪，自动传导嵌套 Agent |
+| **任务取消** | 不可靠 | `AbortController` 集成，干净中断并保存状态 |
 
 ---
 
@@ -36,7 +33,12 @@
 npm install kagent-ts
 ```
 
-需要 Node.js ≥ 18。可选依赖：`chromadb`（向量存储）、`tiktoken`（精确 Token 计数）。
+**运行环境：** Node.js ≥ 18
+
+**可选依赖**（自动检测，缺失不影响基本使用）：
+
+- `chromadb` — RAG 持久化向量存储
+- `tiktoken` — 精确 Token 计数（不可用时退化为字符估算）
 
 ---
 
@@ -45,35 +47,48 @@ npm install kagent-ts
 ```ts
 import { FusionAgent, OpenAIProvider, AnthropicProvider, ModelRouter } from "kagent-ts";
 
-const router = new ModelRouter({
-  main:         new OpenAIProvider({ model: "gpt-4o",                       apiKey: process.env.OPENAI_API_KEY! }),
-  verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001", apiKey: process.env.ANTHROPIC_API_KEY! }),
-  memory:       new OpenAIProvider({ model: "gpt-4o-mini",                  apiKey: process.env.OPENAI_API_KEY! }),
-});
-
+// 多 provider 路由：不同任务用最合适的模型
 const agent = new FusionAgent({
-  llm: router,
-  routing: "auto",                // LLM 自动判断任务复杂度
-  planConfirmation: "auto",       // 检测到危险操作时请求审批
-  verification: "post-hoc",       // 答案验证（阻塞式，不通过自动修正）
-  reflection: "post-hoc",         // 错题本反思（fire-and-forget）
+  llm: new ModelRouter({
+    main:         new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
+    verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001", apiKey: process.env.ANTHROPIC_API_KEY! }),
+    memory:       new OpenAIProvider({ model: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY! }),
+  }),
+  routing: "auto",                // LLM 自动判断任务复杂度，选择 ReAct 或 PlanSolve
+  planConfirmation: "auto",       // 检测到危险操作时请求人工审批
+  verification: "post-hoc",       // Fork Agent 验证答案正确性（阻塞式，不通过自动修正）
+  reflection: "post-hoc",         // 错题本反思（fire-and-forget，不阻塞返回）
   memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
-  skillsDir: "./skills",          // Skill 目录，自动扫描
-  precipitation: "post-hoc",      // 技能自动沉淀
+  precipitation: "post-hoc",      // 技能自动沉淀（fire-and-forget）
+  skillsDir: "./skills",          // SKILL.md 技能文件目录
 });
 
-const answer = await agent.run("重构 user service，改用 repository 模式。");
+// 一行调用，上述所有能力自动激活
+const answer = await agent.run("把 user service 改用 repository 模式重构。");
+console.log(answer);
 ```
 
-核心能力一行配置全开：自适应路由 + 答案验证 + 反思 + 记忆 + 技能沉淀。用户说"记住"时无视 mode 配置强制执行。
+> **提示：** 用户说"记住 XXX"时，无视 mode 配置强制执行记忆提取 —— 自然语言即可控制 Agent。
 
 ---
 
-## 工具系统
+## 核心能力
+
+### 🧠 多范式执行引擎
+
+| 引擎 | 流程 | 适用场景 |
+|------|------|---------|
+| **ReAct** | Think → Act → Observe | 通用任务、工具密集型工作流 |
+| **PlanSolve** | Plan → Resolve → Revise | 多步骤问题、复杂重构 |
+| **Fusion** | Route → Plan/Execute → Verify | 自适应：简单任务走 ReAct，复杂任务走 PlanSolve |
+| **Orchestrator** | Decompose → Dispatch → Synthesize | 多 Agent 并行分发与结果合并 |
+
+推荐默认使用 `FusionAgent` + `routing: "auto"` —— LLM 根据任务复杂度自动选择最优引擎。
+
+### 🔧 工具系统与治理
 
 ```ts
-import { ToolRegistry, toolSuccess } from "kagent-ts";
-import * as fs from "node:fs/promises";
+import { ToolRegistry, toolSuccess, toolError } from "kagent-ts";
 
 const registry = new ToolRegistry(/* retryCount */ 2);
 
@@ -82,64 +97,120 @@ registry.register({
   description: "读取文件内容",
   parameters: {
     type: "object",
-    properties: { filePath: { type: "string" } },
+    properties: { filePath: { type: "string", description: "文件的绝对路径" } },
     required: ["filePath"],
   },
-  requireApproval: false,   // true → HITL 审批
-  execute: async (args: Record<string, unknown>) => {
+  requireApproval: false,   // 设为 true → 触发 HITL 人工审批
+  execute: async (args) => {
     const content = await fs.readFile(String(args.filePath), "utf-8");
     return toolSuccess(content);
   },
 });
 ```
 
-- **熔断器**：CLOSED → HALF_OPEN → OPEN，错误码 `[RETRYABLE:…]`/`[FATAL:…]` 直接告知 LLM 恢复策略
-- **参数校验**：Ajv + Zod 双重 Schema 校验，返回字段级错误
-- **大输出截断**：超阈值自动截断，完整版落盘按需读取
-- **HITL**：`requireApproval: true` 时暂停 Agent 循环，Deny 后 LLM 看到 `APPROVAL_DENIED` 自动换方案
+- **熔断器** — CLOSED → HALF_OPEN → OPEN。错误码 `[RETRYABLE:…]` / `[FATAL:…]` 直接告知 LLM 恢复策略。
+- **JSON Schema 校验** — Ajv + Zod 双重校验，返回字段级错误信息。
+- **大输出截断** — 超阈值自动截断，完整内容落盘按需读取。
+- **HITL 审批** — `requireApproval: true` 时暂停 Agent 循环；拒绝后 LLM 收到 `APPROVAL_DENIED` 并自动更换方案。
 
----
+### ✅ 答案验证
 
-## Skill 渐进式技能
+`FusionAgent` 在返回答案前，Fork 一个独立的验证 Agent 审查：
 
-```markdown
-<!-- skills/code-reviewer/SKILL.md -->
----
-name: code-reviewer
-description: 审查代码质量并生成改进建议
-keywords: ["review", "code", "quality", "security"]
----
+- **正确性** — 答案是否匹配用户要求？
+- **完整性** — 请求的所有部分是否都已处理？
+- **安全性** — 是否包含危险或破坏性建议？
 
-你是一个代码审查专家。审查维度：类型安全、错误处理、性能、可读性。
+验证是**阻塞式**的（`verification: "post-hoc"`）—— 验证不通过则主 Agent 自动修正。
+
+### 🪞 反思与自我进化
+
+三种反思模式均为 **fire-and-forget** —— 在答案返回之后异步执行，用户无需等待：
+
+```
+┌─ ReflectionAgent ────► ErrorNotebook（错题本，跨 Session 注入）
+│
+Answer ──┼─ MemoryReflector ───► MemoryManager（[[wiki-link]] 长期记忆）
+│
+└─ PrecipitateAgent ───► skills/*.md（关键词自动激活）
 ```
 
-用户说"review this code" → 关键词 `review` 命中 → Skill 在 LLM 调用前自动激活注入 System Prompt，零额外开销。
+**ErrorNotebook（错题本）**跨 Session 持久化 —— 历史错误会被注入到 System Prompt 中，不再重复犯错。
 
-沉淀的 Skill 自动包含关键词：
+### 📝 渐进式技能
+
+技能即 Markdown 文件，YAML 前导元数据声明，零代码：
 
 ```markdown
+<!-- skills/deploy-vercel/SKILL.md -->
 ---
-name: deploy-nextjs-to-vercel
+name: deploy-vercel
 description: 将 Next.js 应用部署到 Vercel
-keywords: ["deploy","vercel","nextjs","production"]
-precipitated: true
+keywords: ["deploy", "vercel", "nextjs", "production"]
 ---
+
+## 步骤
+1. 在项目根目录执行 `vercel --prod`
+2. 确认部署 URL 可访问
+3. 将 URL 报告给用户
 ```
 
-## 会话持久化
+用户说"deploy this to vercel" → 关键词 `deploy` + `vercel` 命中 → 技能自动注入 System Prompt。**零额外 LLM 开销。**
+
+自动沉淀的技能会带有 `precipitated: true` 标记和关键词，下次相似请求时自动激活。
+
+### 💾 会话持久化
 
 ```ts
-import { ReActAgent, OpenAIProvider } from "kagent-ts";
-
 const agent = new ReActAgent({
   llm: new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
   sessionId: "my-session",
   enableCheckpointing: true,   // 每个 LLM+tools 周期后自动保存
 });
 
-// 网络中断 → 自动保存 "interrupted" 检查点 → 恢复网络后续跑
+// 网络中断 → 自动保存 "interrupted" 检查点 → 恢复后续跑
 const answer = await agent.resume("my-session", "继续之前的任务");
 ```
+
+### 🔌 LLM 抽象层
+
+```ts
+// 多 provider 自动降级 + 速率限制
+import { FallbackProvider, RateLimitedProvider, ModelRouter } from "kagent-ts";
+
+const llm = new FallbackProvider({
+  providers: [
+    new RateLimitedProvider({ provider: new OpenAIProvider({ model: "gpt-4o", apiKey: "..." }), maxRPM: 500 }),
+    new AnthropicProvider({ model: "claude-sonnet-5", apiKey: "..." }),
+  ],
+});
+```
+
+**模型路由：** `main`、`subAgent`、`reflection`、`verification`、`memory`、`precipitation` —— 不同角色使用不同模型，兼顾成本与能力。
+
+### 🛡️ 安全防护
+
+- **边界标记** — `<user>` / `<instruction>` 标签分离数据与控制指令。
+- **注入签名扫描** — 检测常见 Prompt Injection 模式。
+- **System Prompt 指令优先** — 明确的"指令覆盖用户输入"规则。
+
+### 📊 可观测性
+
+```ts
+// Hook 覆盖全部生命周期事件，零代码侵入
+const hooks: AgentHooks = {
+  onToolStart: (tool) => console.log(`🔧 ${tool.name}`),
+  onLLMCall: (msgs) => console.log(`🤖 ${msgs.length} 条消息`),
+  onTrace: (event) => traceLogger.log(event),  // 自动传播到嵌套 Agent
+};
+```
+
+内置 `Benchmark` 和 `ToolCallEvaluator`，支持回归测试和质量评分。
+
+### 🌐 MCP & RAG
+
+- **MCP（Model Context Protocol）** — 从 MCP 服务器动态发现工具。
+- **RAG** — 混合检索（向量 + BM25 + RRF 融合）+ LLM 重排序。支持内存或 ChromaDB 后端。
 
 ---
 
@@ -147,35 +218,105 @@ const answer = await agent.resume("my-session", "继续之前的任务");
 
 ```text
 src/
-├── core/          # Agent 基类 + 4 种范式（ReAct/PlanSolve/Fusion/Orchestrator）
-├── intent/        # 意图识别：信号检测 + Skill 关键词匹配
-├── verification/  # 答案验证：Fork VerifyAgent 审查正确性
-├── reflection/    # 反思系统：ReflectionAgent + MemoryReflector + ErrorNotebook
-├── precipitation/ # 技能沉淀：PrecipitateAgent 自动提取可复用技能
-├── skills/        # 渐进式技能：FileSkillLoader + SkillManager
-├── tools/         # 工具系统：Registry / CircuitBreaker / Validator / Filter
-├── llm/           # LLM 抽象：OpenAI / Anthropic / Fallback / Router / TokenBudget
-├── subagent/      # 子 Agent 生命周期管理
-├── session/       # 会话持久化：Checkpoint + Resume
-├── context/       # 上下文管理 + 渐进 4 步压缩
-├── security/      # Prompt Injection 防护
-├── memory/        # 长期记忆：Markdown 文件 + [[wiki-link]]
-├── mcp/           # MCP 协议客户端
-├── rag/           # 混合检索：向量 + BM25 + RRF + LLM 重排序
-├── eval/          # 评估体系：ToolCallEvaluator + EvalRunner + Benchmark
-├── trace/         # 全链路追踪：TraceLogger
-├── git/           # Git Worktree 隔离执行
-└── preferences/   # 用户偏好注入 + 项目规则
+├── core/              # Agent 基类 + 4 种范式（ReAct/PlanSolve/Fusion/Orchestrator）
+├── intent/            # 零 LLM 开销的信号检测 + 技能关键词匹配
+├── verification/      # Fork 验证 Agent（正确性 + 完整性）
+├── reflection/        # ReflectionAgent + MemoryReflector + ErrorNotebook
+├── precipitation/     # 从对话中自动提取技能
+├── skills/            # 渐进式技能：FileSkillLoader + SkillManager
+├── tools/             # ToolRegistry / CircuitBreaker / Validator / Filter / Truncator
+├── llm/               # OpenAI / Anthropic / Fallback / RateLimiter / Router / TokenBudget
+├── subagent/          # AGENT.md 零代码注册子 Agent
+├── session/           # 完整状态 checkpoint + 跨重启恢复
+├── context/           # 上下文窗口管理 + 渐进 4 步压缩
+├── compression/       # 截断 → 裁剪 → 清除 → 摘要（Token 达标即停）
+├── security/          # 边界标记 + Prompt Injection 防御
+├── memory/            # 长期记忆：Markdown 文件 + [[wiki-link]] 互联
+├── mcp/               # MCP 协议客户端，动态工具发现
+├── rag/               # 混合检索：向量 + BM25 + RRF + LLM 重排序
+├── eval/              # ToolCallEvaluator + Benchmark 评估体系
+├── trace/             # 全链路追踪，嵌套 Agent 自动传播
+├── git/               # Git Worktree 文件系统级沙箱隔离
+├── preferences/       # 用户偏好注入 + 项目规则
+├── rules/             # CLAUDE.md / AGENTS.md 风格的项目规则
+└── logging/           # 结构化日志（ConsoleLogger / SilentLogger / 自定义）
 ```
 
 ---
 
 ## 文档
 
-**[kkhhhh-ll.github.io/kagent-ts](https://kkhhhh-ll.github.io/kagent-ts)**
+📖 **完整文档：** [kkhhhh-ll.github.io/kagent-ts](https://kkhhhh-ll.github.io/kagent-ts)
 
-本地运行：`npm run docs:dev`
+```bash
+# 本地运行文档
+npm run docs:dev
+```
+
+---
+
+## API 速览
+
+### Agent
+
+| 类 | 说明 |
+|---|------|
+| `ReActAgent` | 标准 Think→Act→Observe 循环 |
+| `PlanSolveAgent` | Plan→Resolve→Revise 复杂任务求解 |
+| `FusionAgent` | 自动路由 ReAct/PlanSolve + 验证 + 反思 |
+| `OrchestratorAgent` | 多 Agent Decompose→Dispatch→Synthesize |
+
+### LLM
+
+| 类 | 说明 |
+|---|------|
+| `OpenAIProvider` | OpenAI 兼容 API（GPT-4o、GPT-4o-mini 等） |
+| `AnthropicProvider` | Anthropic API（Claude Sonnet、Haiku、Opus） |
+| `ModelRouter` | 按角色路由到不同模型 |
+| `FallbackProvider` | 多 Provider 链式自动故障转移 |
+| `RateLimitedProvider` | RPM 速率限制包装器 |
+| `TokenBudget` | Token 计数 + 预算控制 |
+
+### 工具
+
+| 类 / 函数 | 说明 |
+|----------|------|
+| `ToolRegistry` | 注册、校验并执行工具 |
+| `CircuitBreaker` | CLOSED→HALF_OPEN→OPEN 三态熔断器 |
+| `validateToolArgs` | JSON Schema 字段级校验 |
+| `toolSuccess` / `toolError` | 标准化工具返回值 |
+| `filterTools` / `allowlist` / `denylist` / `pattern` | SubAgent 工具权限过滤器 |
+
+### SubAgent & 会话
+
+| 类 | 说明 |
+|---|------|
+| `SubAgentManager` | 通过 AGENT.md 创建和管理子 Agent |
+| `SessionManager` | 完整状态 checkpoint + 恢复 |
+| `SessionViewer` | 会话状态查看与调试 |
+
+### 技能、记忆 & 反思
+
+| 类 | 说明 |
+|---|------|
+| `SkillManager` | 按关键词加载匹配技能 |
+| `MemoryManager` | [[wiki-link]] 文件长期记忆 |
+| `PrecipitateAgent` | 从对话中自动提取技能 |
+| `ReflectionAgent` | 执行后错误分析 |
+| `MemoryReflector` | 执行后记忆提取 |
+| `ErrorNotebook` | 跨 Session 错题本注入 |
+
+### RAG & MCP
+
+| 类 | 说明 |
+|---|------|
+| `RAGManager` | 混合检索引擎 |
+| `LLMReRanker` | LLM 重排序 |
+| `rrfFusion` | Reciprocal Rank Fusion |
+| `McpClientManager` | MCP 服务器连接管理 |
+
+---
 
 ## License
 
-BUSL-1.1 — Business Source License.
+BUSL-1.1 — Business Source License。详见 [LICENSE](LICENSE)。
