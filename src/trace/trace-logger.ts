@@ -396,6 +396,32 @@ export class TraceLogger implements AgentHooks {
     this.addEvent("thought", "Thought", { thought });
   }
 
+  onCompressionStart(currentTokens: number, maxTokens: number, messageCount: number): void {
+    this.addEvent("compression_start", "Context Compression", {
+      currentTokens,
+      maxTokens,
+      messageCount,
+      usagePercent: maxTokens > 0 ? ((currentTokens / maxTokens) * 100).toFixed(1) + "%" : "—",
+    });
+  }
+
+  onCompressionEnd(
+    beforeTokens: number,
+    afterTokens: number,
+    tokensSaved: number,
+    details?: import("../compression/interface").CompressionDetails,
+  ): void {
+    this.addEvent("compression_end", "Compression Complete", {
+      beforeTokens,
+      afterTokens,
+      tokensSaved,
+      compressionRatio: beforeTokens > 0
+        ? ((tokensSaved / beforeTokens) * 100).toFixed(1) + "%"
+        : "0%",
+      details: details ?? null,
+    });
+  }
+
   onPlanCreated(plan: string[]): void {
     this.addEvent("plan_created", "Plan Created", { plan });
   }
@@ -583,6 +609,17 @@ export class TraceLogger implements AgentHooks {
   .event-type-finish .event-dot { border-color: #3fb950; background: #238636; }
   .event-type-subagent_spawn .event-dot { border-color: #79c0ff; background: #1f6feb; }
   .event-type-subagent_result .event-dot { border-color: #3fb950; background: #238636; }
+  .event-type-compression_start .event-dot { border-color: #39d2c0; background: #0fb89a; }
+  .event-type-compression_end .event-dot { border-color: #39d2c0; background: #0fb89a; }
+
+  /* ── Compression detail styling ── */
+  ul.compression-steps { list-style: none; padding: 0; margin: 8px 0 0; }
+  ul.compression-steps li { padding: 3px 0; color: #8b949e; font-size: 13px; }
+  .summary-preview { font-style: italic; color: #8b949e; font-size: 12px; max-width: 400px; white-space: pre-wrap; }
+
+  /* ── Removed tool-result messages ── */
+  .msg-removed-tool { opacity: 0.45; text-decoration: line-through; font-style: italic; }
+  .msg-removed-tool::before { content: "❌ "; }
 
   .event-type-llm_error .event-body { border-color: #f85149; }
   .event-type-tool_error .event-body { border-color: #f85149; }
@@ -893,6 +930,63 @@ ${eventCards}
         }
         break;
       }
+      case "compression_start": {
+        const badge = `<span class="badge badge-tokens">${this.fmtNum(event.data.currentTokens as number)} / ${this.fmtNum(event.data.maxTokens as number)} tok (${event.data.usagePercent ?? "—"})</span>`;
+        headerBadge = badge;
+        detail = `<div class="detail-section">
+          <h4>Compression Triggered</h4>
+          <table class="kv-table">
+            <tr><th>Current Tokens</th><td>${this.fmtNum(event.data.currentTokens as number)}</td></tr>
+            <tr><th>Max Tokens</th><td>${this.fmtNum(event.data.maxTokens as number)}</td></tr>
+            <tr><th>Usage</th><td>${event.data.usagePercent ?? "—"}</td></tr>
+            <tr><th>Messages</th><td>${event.data.messageCount ?? "—"}</td></tr>
+          </table>
+        </div>`;
+        break;
+      }
+      case "compression_end": {
+        const saved = event.data.tokensSaved as number;
+        const ratio = event.data.compressionRatio as string;
+        const badge = `<span class="badge badge-cost">saved ${this.fmtNum(saved)} tok (${ratio})</span>`;
+        headerBadge = badge;
+
+        const details = event.data.details as Record<string, unknown> | undefined;
+        const steps = (details?.stepsApplied as string[]) ?? [];
+        const stepLabels: Record<string, string> = {
+          step1: "🪓 Truncate large tool results",
+          step2: "📦 Archive old turns (preserve user requests)",
+          step3: "🧹 Clear stale read-type tool results",
+          step4: "📝 LLM summarization of older turns",
+        };
+        const stepRows = steps.map(s => `<li>${stepLabels[s] ?? s}</li>`).join("");
+
+        const extraRows: string[] = [];
+        if (details?.turnsArchived != null) {
+          extraRows.push(`<tr><th>Turns Archived</th><td>${details.turnsArchived} (${details.archivedRequests ?? "?"} user requests preserved)</td></tr>`);
+        }
+        if (details?.staleToolsRemoved != null) {
+          extraRows.push(`<tr><th>Stale Tools Removed</th><td>${details.staleToolsRemoved}</td></tr>`);
+        }
+        if (details?.summaryTurns != null && Number(details.summaryTurns) > 0) {
+          extraRows.push(`<tr><th>Turns Summarised</th><td>${details.summaryTurns}</td></tr>`);
+          if (details?.summaryPreview) {
+            const preview = this.escapeHtml(String(details.summaryPreview));
+            extraRows.push(`<tr><th>Summary Preview</th><td class="summary-preview">${preview}…</td></tr>`);
+          }
+        }
+
+        detail = `<div class="detail-section">
+          <h4>Compression Result</h4>
+          <table class="kv-table">
+            <tr><th>Before</th><td>${this.fmtNum(event.data.beforeTokens as number)} tokens</td></tr>
+            <tr><th>After</th><td>${this.fmtNum(event.data.afterTokens as number)} tokens</td></tr>
+            <tr><th>Saved</th><td>${this.fmtNum(saved)} tokens (${ratio})</td></tr>
+            ${extraRows.join("")}
+          </table>
+          ${steps.length > 0 ? `<h4>Steps Applied</h4><ul class="compression-steps">${stepRows}</ul>` : ""}
+        </div>`;
+        break;
+      }
     }
 
     return `    <div class="${cls}">
@@ -951,6 +1045,8 @@ ${eventCards}
       case "finish": return "🏁";
       case "subagent_spawn": return "🚀";
       case "subagent_result": return "📬";
+      case "compression_start": return "🗜️";
+      case "compression_end": return "📦";
     }
   }
 

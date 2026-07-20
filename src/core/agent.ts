@@ -950,9 +950,29 @@ export abstract class Agent {
 
   /**
    * Pre-iteration maintenance: compress context window if needed.
+   *
+   * Fires {@link AgentHooks.onCompressionStart} and
+   * {@link AgentHooks.onCompressionEnd} around the compression step so
+   * tracers / loggers can record the event.
    */
   protected async checkAndCompress(): Promise<void> {
-    await this.contextManager.checkAndCompress(this.llm);
+    const model = this.llm?.model;
+    if (!this.contextManager.shouldCompress(model)) return;
+
+    const beforeTokens = this.contextManager.getCurrentTokens(model);
+    const state = this.contextManager.getState();
+
+    for (const h of this.hooks) {
+      h.onCompressionStart?.(beforeTokens, state.maxTokens, state.messageCount);
+    }
+
+    const { tokensSaved, details } = await this.contextManager.compress(this.llm);
+
+    const afterTokens = this.contextManager.getCurrentTokens(model);
+
+    for (const h of this.hooks) {
+      h.onCompressionEnd?.(beforeTokens, afterTokens, tokensSaved, details);
+    }
   }
 
   /** Reload preferences from disk if manually edited between runs. */

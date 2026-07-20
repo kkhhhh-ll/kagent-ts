@@ -114,7 +114,7 @@ export class ContextManager {
    * @param llm Optional LLM provider for Step 4 (summarization).
    *            If omitted, only steps 1-3 are applied.
    */
-  async compress(llm?: LLMProvider): Promise<{ tokensSaved: number }> {
+  async compress(llm?: LLMProvider): Promise<{ tokensSaved: number; details: import("../compression/interface").CompressionDetails }> {
     const model = llm?.model;
     const result = await this.compressor.compress(
       this.messages,
@@ -126,7 +126,7 @@ export class ContextManager {
     if (result.applied) {
       this._isCompressed = true;
     }
-    return { tokensSaved: result.tokensSaved };
+    return { tokensSaved: result.tokensSaved, details: result.details };
   }
 
   /**

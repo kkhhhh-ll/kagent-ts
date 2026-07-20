@@ -13,7 +13,9 @@ export type AgentTraceEventType =
   | "plan_revised"
   | "finish"
   | "subagent_spawn"
-  | "subagent_result";
+  | "subagent_result"
+  | "compression_start"
+  | "compression_end";
 
 /**
  * A single trace event in the agent's execution timeline.

@@ -2,6 +2,7 @@ import { LLMResponse } from "../llm/interface";
 import { LLMNetworkError } from "../llm/errors";
 import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
+import { CompressionDetails } from "../compression/interface";
 
 /**
  * Lifecycle hooks for agent execution.
@@ -82,6 +83,30 @@ export interface AgentHooks {
 
   /** Called when the plan is revised mid-execution. */
   onPlanRevised?: (plan: string[]) => void;
+
+  // ─── Compression ─────────────────────────────────────────────────────
+
+  /**
+   * Called before context compression begins.
+   * @param currentTokens Current token count that triggered compression.
+   * @param maxTokens     The context window's max token capacity.
+   * @param messageCount  Number of messages in the context window.
+   */
+  onCompressionStart?: (currentTokens: number, maxTokens: number, messageCount: number) => void;
+
+  /**
+   * Called after context compression completes.
+   * @param beforeTokens Token count before compression.
+   * @param afterTokens  Token count after compression.
+   * @param tokensSaved  Estimated tokens saved (0 if compression had no effect).
+   * @param details      Per-step breakdown of what was removed (for trace rendering).
+   */
+  onCompressionEnd?: (
+    beforeTokens: number,
+    afterTokens: number,
+    tokensSaved: number,
+    details: CompressionDetails,
+  ) => void;
 
   // ─── Final ───────────────────────────────────────────────────────────
 

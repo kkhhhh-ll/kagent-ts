@@ -168,6 +168,7 @@ export { ProgressiveCompressor } from "./compression/progressive-compressor";
 export type {
   CompressionStrategy,
   CompressionResult,
+  CompressionDetails,
 } from "./compression/interface";
 export type { CompressionConfig } from "./compression/types";
 

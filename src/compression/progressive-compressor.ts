@@ -5,7 +5,7 @@ import { countTokens } from "../utils/token-counter";
 import { LLMProvider } from "../llm/interface";
 import { Logger, ConsoleLogger } from "../logging/logger";
 
-// ─── Configuration ──────────────────────────────────────────────────────────
+import { CompressionDetails } from "./interface";
 
 const TOOL_TOTAL_BYTE_LIMIT = 200 * 1024;  // Step 1: 200 KB
 const KEEP_BYTES = 2048;                    // Step 1: keep 2 KB
@@ -59,10 +59,11 @@ export class ProgressiveCompressor {
     systemMessage: MessageData | null,
     llm?: LLMProvider,
     model?: string,
-  ): Promise<{ messages: MessageData[]; tokensSaved: number; applied: boolean }> {
+  ): Promise<{ messages: MessageData[]; tokensSaved: number; applied: boolean; details: CompressionDetails }> {
     const beforeTokens = this.tokenCount(messages, systemMessage, model);
     let result = messages;
     let applied = false;
+    const details: CompressionDetails = { stepsApplied: [] };
     const t = this.config.compressionThreshold;
     const triggerToken = t < 1
       ? Math.round(this.config.maxTokens * (1 - t))
@@ -70,32 +71,49 @@ export class ProgressiveCompressor {
 
     // ── Step 1: Truncate large tool results ────────────────────────────
     const after1 = this.step1TruncateToolResults(result);
-    if (after1 !== result) { applied = true; result = after1; }
+    if (after1 !== result) {
+      applied = true; result = after1;
+      details.stepsApplied.push("step1");
+    }
     if (this.tokenCount(result, systemMessage, model) < triggerToken) {
-      return this.finalize(result, beforeTokens, systemMessage, model, applied);
+      return this.finalize(result, beforeTokens, systemMessage, model, applied, details);
     }
 
     // ── Step 2: Drop old turns beyond keepTurns ────────────────────────
     const turnStartsForStep2 = computeTurnStarts(result);
-    const after2 = this.step2DropOldTurns(result, turnStartsForStep2);
-    if (after2 !== result) { applied = true; result = after2; }
+    const s2 = this.step2DropOldTurns(result, turnStartsForStep2);
+    if (s2.result !== result) {
+      applied = true; result = s2.result;
+      details.stepsApplied.push("step2");
+      details.turnsArchived = s2.turnsArchived;
+      details.archivedRequests = s2.archivedRequests;
+    }
     if (this.tokenCount(result, systemMessage, model) < triggerToken) {
-      return this.finalize(result, beforeTokens, systemMessage, model, applied);
+      return this.finalize(result, beforeTokens, systemMessage, model, applied, details);
     }
 
     // ── Step 3: Drop stale tool results ────────────────────────────────
-    const after3 = this.step3DropStaleToolResults(result);
-    if (after3 !== result) { applied = true; result = after3; }
+    const s3 = this.step3DropStaleToolResults(result);
+    if (s3.result !== result) {
+      applied = true; result = s3.result;
+      details.stepsApplied.push("step3");
+      details.staleToolsRemoved = s3.staleToolsRemoved;
+    }
     if (this.tokenCount(result, systemMessage, model) < triggerToken) {
-      return this.finalize(result, beforeTokens, systemMessage, model, applied);
+      return this.finalize(result, beforeTokens, systemMessage, model, applied, details);
     }
 
     // ── Step 4: LLM summarization ──────────────────────────────────────
     if (llm) {
       try {
         const turnStartsForStep4 = computeTurnStarts(result);
-        const after4 = await this.step4LlmSummarize(result, systemMessage, llm, turnStartsForStep4);
-        if (after4 !== result) { applied = true; result = after4; }
+        const s4 = await this.step4LlmSummarize(result, systemMessage, llm, turnStartsForStep4);
+        if (s4.result !== result) {
+          applied = true; result = s4.result;
+          details.stepsApplied.push("step4");
+          details.summaryTurns = s4.summaryTurns;
+          details.summaryPreview = s4.summaryPreview;
+        }
       } catch (err: unknown) {
         this.logger.warn(
           "Compression",
@@ -106,7 +124,7 @@ export class ProgressiveCompressor {
       }
     }
 
-    return this.finalize(result, beforeTokens, systemMessage, model, applied);
+    return this.finalize(result, beforeTokens, systemMessage, model, applied, details);
   }
 
   private finalize(
@@ -115,12 +133,14 @@ export class ProgressiveCompressor {
     systemMessage: MessageData | null,
     model: string | undefined,
     applied: boolean,
-  ): { messages: MessageData[]; tokensSaved: number; applied: boolean } {
+    details: CompressionDetails,
+  ): { messages: MessageData[]; tokensSaved: number; applied: boolean; details: CompressionDetails } {
     const afterTokens = this.tokenCount(messages, systemMessage, model);
     return {
       messages,
       tokensSaved: applied ? Math.max(0, beforeTokens - afterTokens) : 0,
       applied,
+      details,
     };
   }
 
@@ -209,11 +229,15 @@ export class ProgressiveCompressor {
    * A "turn" is a user message + all subsequent assistant/tool messages
    * until the next user message.
    */
-  private step2DropOldTurns(messages: MessageData[], turnStarts: number[]): MessageData[] {
-    if (turnStarts.length <= this.config.keepTurns) return messages;
+  private step2DropOldTurns(
+    messages: MessageData[],
+    turnStarts: number[],
+  ): { result: MessageData[]; turnsArchived: number; archivedRequests: number } {
+    const empty = { result: messages, turnsArchived: 0, archivedRequests: 0 };
+    if (turnStarts.length <= this.config.keepTurns) return empty;
 
     const cutoffIdx = turnStarts[turnStarts.length - this.config.keepTurns];
-    if (cutoffIdx <= 0) return messages;
+    if (cutoffIdx <= 0) return empty;
 
     const dropped = turnStarts.length - this.config.keepTurns;
 
@@ -243,7 +267,11 @@ export class ProgressiveCompressor {
       timestamp: Date.now(),
     };
 
-    return [marker, ...messages.slice(cutoffIdx)];
+    return {
+      result: [marker, ...messages.slice(cutoffIdx)],
+      turnsArchived: dropped,
+      archivedRequests: oldUserMessages.length,
+    };
   }
 
   // ─── Step 3: Drop stale tool results ──────────────────────────────────────
@@ -253,10 +281,12 @@ export class ProgressiveCompressor {
    * tools (results that can be reproduced by re-running the tool).
    * Sub-agent results (`<subagent-result>`) are preserved.
    */
-  private step3DropStaleToolResults(messages: MessageData[]): MessageData[] {
+  private step3DropStaleToolResults(
+    messages: MessageData[],
+  ): { result: MessageData[]; staleToolsRemoved: number } {
     const now = Date.now();
     const maxAge = this.config.toolResultMaxAgeMs;
-    let changed = false;
+    let staleToolsRemoved = 0;
     const result = messages.map((m) => {
       if (m.role !== Role.Tool) return m;
       if (!m.timestamp) return m;
@@ -270,7 +300,7 @@ export class ProgressiveCompressor {
       const age = now - m.timestamp;
       if (age < maxAge) return m;
 
-      changed = true;
+      staleToolsRemoved++;
       return {
         ...m,
         content: `[Tool "${m.name ?? "unknown"}" result (${Math.round(age / 60000)} min ago) removed. ` +
@@ -278,7 +308,9 @@ export class ProgressiveCompressor {
       };
     });
 
-    return changed ? result : messages;
+    return staleToolsRemoved > 0
+      ? { result, staleToolsRemoved }
+      : { result: messages, staleToolsRemoved: 0 };
   }
 
   // ─── Step 4: LLM summarization of older turns ──────────────────────────
@@ -301,14 +333,15 @@ export class ProgressiveCompressor {
     _systemMessage: MessageData | null,
     llm: LLMProvider,
     turnStarts: number[],
-  ): Promise<MessageData[]> {
+  ): Promise<{ result: MessageData[]; summaryTurns: number; summaryPreview: string }> {
     const keep = this.config.summaryKeepTurns ?? 10;
+    const empty = { result: messages, summaryTurns: 0, summaryPreview: "" };
 
     // Guard: nonsensical values would break the split logic
-    if (keep < 1) return messages;
+    if (keep < 1) return empty;
 
     // Not enough turns to split — nothing to summarize
-    if (turnStarts.length <= keep) return messages;
+    if (turnStarts.length <= keep) return empty;
 
     // Split: older turns → summarise, recent turns → keep verbatim
     const recentStartIdx = turnStarts[turnStarts.length - keep];
@@ -342,7 +375,11 @@ export class ProgressiveCompressor {
         timestamp: Date.now(),
       };
 
-      return [summary, ...recentMessages];
+      return {
+        result: [summary, ...recentMessages],
+        summaryTurns: oldTurns,
+        summaryPreview: response.content.slice(0, 200),
+      };
     } catch {
       // If summarization fails, fall back to simple truncation with a marker
       this.logger.warn("Compression", "Step 4 LLM call failed; falling back to simple truncation.");
@@ -354,7 +391,7 @@ export class ProgressiveCompressor {
           `Some earlier context may be missing. Continue to the best of your ability.]`,
         timestamp: Date.now(),
       };
-      return [marker, ...recentMessages];
+      return { result: [marker, ...recentMessages], summaryTurns: 0, summaryPreview: "" };
     }
   }
 }
