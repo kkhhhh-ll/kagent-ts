@@ -36,6 +36,13 @@ export interface ContextConfig {
   toolResultMaxAgeMs: number;
 
   /**
+   * Number of recent turns to keep verbatim in Step 4 (LLM summarization).
+   * Turns older than this are compressed into a summary; turns within this
+   * window are preserved in full. Default: 10.
+   */
+  summaryKeepTurns: number;
+
+  /**
    * Compression strategy configuration.
    */
   compression?: Partial<CompressionConfig>;

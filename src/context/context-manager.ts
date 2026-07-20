@@ -28,6 +28,7 @@ export class ContextManager {
       compressionThreshold: config?.compressionThreshold ?? 20000,
       keepTurns: config?.keepTurns ?? 40,
       toolResultMaxAgeMs: config?.toolResultMaxAgeMs ?? 60 * 60 * 1000,
+      summaryKeepTurns: config?.summaryKeepTurns ?? 10,
       compression: config?.compression,
     };
 
@@ -113,7 +114,7 @@ export class ContextManager {
    * @param llm Optional LLM provider for Step 4 (summarization).
    *            If omitted, only steps 1-3 are applied.
    */
-  async compress(llm?: LLMProvider): Promise<{ removedCount: number }> {
+  async compress(llm?: LLMProvider): Promise<{ tokensSaved: number }> {
     const model = llm?.model;
     const result = await this.compressor.compress(
       this.messages,
@@ -125,7 +126,7 @@ export class ContextManager {
     if (result.applied) {
       this._isCompressed = true;
     }
-    return { removedCount: result.removedCount };
+    return { tokensSaved: result.tokensSaved };
   }
 
   /**
@@ -145,16 +146,16 @@ export class ContextManager {
       `threshold at ${this.triggerTokens()}.`,
     );
 
-    const { removedCount } = await this.compress(llm);
+    const { tokensSaved } = await this.compress(llm);
 
     const afterTokens = this.getCurrentTokens(model);
     this.logger.info(
       "Context",
       `Compression done: ${beforeTokens} → ${afterTokens} tokens ` +
-      `(${removedCount > 0 ? `removed ~${removedCount} messages` : "no messages removed"}).`,
+      `(${tokensSaved > 0 ? `saved ~${tokensSaved} tokens` : "no tokens saved"}).`,
     );
 
-    return removedCount > 0;
+    return tokensSaved > 0;
   }
 
   /**

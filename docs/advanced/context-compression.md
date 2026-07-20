@@ -23,7 +23,8 @@ import { ContextManager } from 'kagent-ts'
 const contextManager = new ContextManager({
   maxTokens: 128000,              // 上下文窗口最大 Token 数
   compressionThreshold: 0.8,      // 80% 阈值触发压缩
-  keepTurns: 20,                  // 保留最近 N 轮对话
+  keepTurns: 20,                  // Step 2: 保留最近 N 轮对话
+  summaryKeepTurns: 10,           // Step 4: 保留最近 N 轮原文（其他压缩为摘要）
   toolResultMaxAgeMs: 300000,    // 工具结果最大保留时间 (5 分钟)
 })
 ```
@@ -44,35 +45,63 @@ const contextManager = new ContextManager({
 完整内容保存在: .kagent-context/tool-output-1719000000.txt
 ```
 
-### 第 2 步: 删除旧轮次
+### 第 2 步: 压缩旧轮次（保留用户提问）
 
-超过 `keepTurns` 的消息轮次被移除：
+超过 `keepTurns` 的消息轮次中，**保留所有用户消息**，删除对应的 assistant 和 tool 消息：
 
 ```
-[轮次 1-50 (旧)]  → 删除
-[轮次 51-70 (最近 20 轮)] → 保留
+轮次 1-50 (旧):
+  User: "帮我分析项目结构"        → 保留
+  Assistant: "好的，我读取了..."    → 删除
+  Tool (read_file): "文件内容..."   → 删除
+  User: "重构这个模块"             → 保留
+  Assistant: "我来重构..."          → 删除
+  ...
+
+轮次 51-70 (最近 20 轮) → 完全保留
 ```
 
-### 第 3 步: 清除可重新执行的读取型工具结果
+同时注入提醒标记，告知 LLM：如果当前任务与这些历史请求相关，**必须重新执行**，不可依赖已删除的结果。
 
-读文件、搜索等工具的结果可以被重新获取，因此优先清除：
+### 第 3 步: 清除过期的读取型工具结果
+
+读文件、搜索等工具的结果可以被重新获取，过期的优先清除：
 
 ```
 ReadFileTool 结果   → 优先清除 (可以重新读取)
-BashTool 结果       → 优先清除 (可以重新执行)
+GrepTool 结果       → 优先清除 (可以重新搜索)
 WriteFileTool 结果  → 保留 (副作用不可逆)
 ```
 
-### 第 4 步: LLM 摘要
+### 第 4 步: LLM 摘要（保留最近 10 轮原文）
 
-当有 LLM Provider 可用时，将旧对话压缩为摘要：
+当有 LLM Provider 可用时，将**旧轮次**（最近 N 轮之前的部分）压缩为摘要，
+**最近 N 轮**（默认 10 轮）则完整保留原文：
 
 ```
 [旧对话 30 轮]
   ↓ LLM 摘要
-"之前的对话包括: 用户要求分析项目结构，Agent 读取了 15 个文件，
+"之前的对话摘要: 用户要求分析项目结构，Agent 读取了 15 个文件，
 发现了 3 个关键模块，讨论了架构问题..."
+  ↓
+[最近 10 轮对话原文] → 完整保留
 ```
+
+摘要聚焦于：
+
+1. 用户的主要请求和意图
+
+2. 关键技术概念和决策
+
+3. 涉及的文件和代码
+
+4. 错误和修复记录
+
+5. 问题解决过程
+
+6. 待完成任务
+
+7. 当前工作状态（中断时的上下文）
 
 ## 在 Agent 中使用
 
@@ -81,7 +110,8 @@ const contextManager = new ContextManager({
   maxTokens: 100000,
   compressionThreshold: 0.75,
   keepTurns: 15,
-  toolResultMaxAgeMs: 180000,  // 3 分钟
+  summaryKeepTurns: 10,           // Step 4 保留最近 N 轮原文
+  toolResultMaxAgeMs: 180000,     // 3 分钟
 })
 
 const agent = new ReActAgent({

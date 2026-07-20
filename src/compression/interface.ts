@@ -6,8 +6,8 @@ import { MessageData } from "../messages/types";
 export interface CompressionResult {
   /** The compressed/conserved messages. */
   messages: MessageData[];
-  /** Number of messages that were removed. */
-  removedCount: number;
+  /** Estimated tokens saved by compression (0 if not applied). */
+  tokensSaved: number;
   /** Whether compression was actually applied. */
   applied: boolean;
 }
