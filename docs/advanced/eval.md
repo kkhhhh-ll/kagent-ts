@@ -92,7 +92,10 @@ const benchmark = new Benchmark({
     { name: 'code-search', input: '查找所有未使用的导入' },
     { name: 'file-ops', input: '统计每个目录的 TypeScript 文件数量' },
   ],
-  baselinePath: './.kagent-benchmarks/benchmark-xxx.json',  // 与上次结果对比
+
+  // baselinePath: "latest" → 自动取上次 run 生成的文件
+  // 也可以指具体路径: baselinePath: './.kagent-benchmarks/benchmark-xxx.json'
+  baselinePath: "latest",
 
   // 全部可选，默认值如下：
   passRateRegressionThreshold: 0.05,    // 通过率 ≥5pp 下降 → 回归
@@ -104,16 +107,18 @@ const benchmark = new Benchmark({
 // run() 执行所有用例，自动对比基线并持久化结果
 const result = await benchmark.run()
 
+// CI exit code: result.hasRegressions → exit(1)
+console.log(result.hasRegressions ? '❌ 有回归' : '✅ 无回归')
 console.log(`通过率: ${(result.summary.passRate * 100).toFixed(1)}%`)
-console.log(`平均用例耗时: ${result.summary.avgCaseDurationMs}ms`)
 
 // 退化 / 改进检测
 for (const r of result.summary.regressions) {
   console.log(`⚠️  退化: ${r.target} — ${r.metric} 从 ${r.baseline} 变为 ${r.current}`)
 }
-for (const i of result.summary.improvements) {
-  console.log(`✅ 进步: ${i.target} — ${i.metric} 从 ${i.baseline} 变为 ${i.current}`)
-}
+
+// 报告: Markdown（人看） / JSON（CI 消费）
+console.log(benchmark.generateReport(result))                          // markdown
+console.log(benchmark.generateReport(result, { format: "json" }))      // JSON
 ```
 
 ### 回归检测维度
@@ -139,6 +144,7 @@ for (const i of result.summary.improvements) {
 interface BenchmarkResult {
   summary: BenchmarkSummary
   cases: EvalResult[]
+  hasRegressions: boolean       // 任一退化 → true，CI 直接 process.exit(1)
 }
 
 interface BenchmarkSummary {
@@ -160,6 +166,72 @@ interface Regression {
   current: number | string    // 当前值
   description: string         // 描述
 }
+```
+
+### 报告输出
+
+```ts
+// Markdown — 人类可读，贴 PR 里
+benchmark.generateReport(result)
+
+// JSON — CI 消费
+benchmark.generateReport(result, { format: "json" })
+```
+
+### CI 注解输出
+
+`ciAnnotations()` 自动检测 CI 环境，输出原生注解格式：
+
+| 环境 | 输出格式 | 效果 |
+|------|---------|------|
+| GitHub Actions（`GITHUB_ACTIONS=true`） | `::error` / `::warning` / `::notice` 指令 | PR diff 行内标注 |
+| GitLab CI（`GITLAB_CI=true`） | Code Quality JSON | MR widget 展示 |
+| 本地 / 其他 | 纯文本退化列表 | stdout 可读 |
+
+```ts
+// 自动检测
+console.log(benchmark.ciAnnotations(result));
+
+// 显式指定
+console.log(benchmark.ciAnnotations(result, "github"));
+console.log(benchmark.ciAnnotations(result, "gitlab"));
+```
+
+### CI Pipeline 集成
+
+```yaml
+# .gitlab-ci.yml
+agent-benchmark:
+  stage: test
+  script:
+    - npx tsx scripts/benchmark.mjs > gl-code-quality-report.json
+  artifacts:
+    paths:
+      - gl-code-quality-report.json      # GitLab Code Quality widget
+      - .kagent-benchmarks/              # 下次 run 的 baseline
+    when: always
+  allow_failure: false                   # 回归 → pipeline ❌ → 阻塞合入
+```
+
+```js
+// scripts/benchmark.mjs
+import { Benchmark, ReActAgent, ... } from "kagent-ts";
+
+const b = new Benchmark({
+  name: "agent-regression",
+  agentFactory: (e) => new ReActAgent({ llm: provider, tools, hooks: [e] }),
+  cases: [...],
+  baselinePath: "latest",     // 自动取上次 CI artifact
+  outputDir: ".kagent-benchmarks",
+});
+
+const result = await b.run();
+
+// 输出 Code Quality JSON → GitLab 自动展示在 MR 上
+console.log(b.ciAnnotations(result));
+
+// 有回归 → 非零退出 → pipeline 变红
+process.exit(result.hasRegressions ? 1 : 0);
 ```
 
 > **RAG 检索质量评估**：推荐使用 [RAGAS](https://docs.ragas.io/) 等成熟工具离线评估，框架不再内置。
@@ -201,10 +273,11 @@ const benchmark = new Benchmark({
     { name: 'grep-any', input: '查找所有使用 any 类型的文件', expectedTools: ['grep_search'] },
     { name: 'count-files', input: '统计 src/ 下 .ts 文件数', expectedOutput: '.ts' },
   ],
-  baselinePath: './benchmark-baseline.json',
+  baselinePath: 'latest',   // 自动取上次 run 的结果对比
 })
 
 const benchmarkResult = await benchmark.run()
+console.log(benchmarkResult.hasRegressions ? '❌ 有回归' : '✅ 无回归')
 console.log(`通过率: ${(benchmarkResult.summary.passRate * 100).toFixed(1)}%`)
 for (const r of benchmarkResult.summary.regressions) {
   console.log(`⚠️  ${r.description}`)

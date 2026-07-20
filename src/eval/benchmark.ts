@@ -22,8 +22,11 @@ export interface BenchmarkConfig {
 
   /**
    * Path to a baseline JSON file from a previous run.
-   * When set, results are compared against this baseline and
-   * regressions / improvements are flagged.
+   *
+   * - A file path → loads that specific file
+   * - `"latest"` → auto-discovers the most recent `benchmark-*.json`
+   *   in `outputDir`
+   * - Omitted → no baseline comparison
    */
   baselinePath?: string;
 
@@ -73,6 +76,15 @@ const DEFAULT_PASS_RATE_THRESHOLD = 0.05;
 const DEFAULT_FAILURE_COUNT_THRESHOLD = 2;
 const DEFAULT_LATENCY_FACTOR = 1.5;
 const DEFAULT_LATENCY_MIN_ABSOLUTE_MS = 1000;
+
+/** Simple djb2 hash — deterministic fingerprint for GitLab Code Quality issues. */
+function hashFingerprint(s: string): string {
+  let hash = 5381;
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0; // |0 forces 32-bit int
+  }
+  return (hash >>> 0).toString(16); // unsigned hex
+}
 
 /**
  * Benchmark — runs evaluation cases against an agent, compares with
@@ -128,7 +140,8 @@ export class Benchmark {
       }
     }
 
-    const result: BenchmarkResult = { summary, cases: results };
+    const hasRegressions = summary.regressions.length > 0;
+    const result: BenchmarkResult = { summary, cases: results, hasRegressions };
 
     // Persist for future baseline use
     this.persistResult(result);
@@ -137,9 +150,19 @@ export class Benchmark {
   }
 
   /**
-   * Generate a Markdown comparison report.
+   * Generate a comparison report.
+   *
+   * @param result      Benchmark run result.
+   * @param opts.format `"markdown"` (default) or `"json"` (CI-consumable).
    */
-  generateReport(result: BenchmarkResult): string {
+  generateReport(
+    result: BenchmarkResult,
+    opts?: { format?: "markdown" | "json" },
+  ): string {
+    if (opts?.format === "json") {
+      return JSON.stringify(result, null, 2);
+    }
+
     const s = result.summary;
     const passRate = (s.passRate * 100).toFixed(1);
 
@@ -407,9 +430,16 @@ export class Benchmark {
 
   /**
    * Load baseline results from disk.
+   *
+   * When `baselinePath` is `"latest"`, auto-discovers the most recent
+   * `benchmark-*.json` file in `outputDir`.
    */
   private loadBaseline(): BenchmarkResult | null {
     if (!this.config.baselinePath) return null;
+
+    if (this.config.baselinePath === "latest") {
+      return this.loadLatestBaseline();
+    }
 
     try {
       const raw = fs.readFileSync(path.resolve(this.config.baselinePath), "utf-8");
@@ -417,6 +447,173 @@ export class Benchmark {
     } catch {
       return null;
     }
+  }
+
+  /** Scan outputDir for the most recent benchmark-*.json file. */
+  private loadLatestBaseline(): BenchmarkResult | null {
+    try {
+      const files = fs.readdirSync(this.outputDir)
+        .filter((f) => f.startsWith("benchmark-") && f.endsWith(".json"))
+        .map((f) => ({
+          name: f,
+          mtime: fs.statSync(path.join(this.outputDir, f)).mtimeMs,
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (files.length === 0) return null;
+
+      const raw = fs.readFileSync(path.join(this.outputDir, files[0].name), "utf-8");
+      return JSON.parse(raw) as BenchmarkResult;
+    } catch {
+      return null;
+    }
+  }
+
+  // ─── CI Annotations ─────────────────────────────────────────────────────
+
+  /**
+   * Generate CI-native annotations for regression / improvement results.
+   *
+   * Auto-detects the CI environment from well-known env vars:
+   *   - `GITHUB_ACTIONS` → GitHub workflow commands (`::error` / `::warning`)
+   *   - `GITLAB_CI`      → GitLab Code Quality JSON
+   *   - Neither          → plain-text regression list (fallback)
+   *
+   * Pass an explicit `format` to override auto-detection.
+   *
+   * **GitHub usage (in CI script):**
+   * ```sh
+   * echo "$(node benchmark.mjs)"  # annotations appear inline in PR diff
+   * ```
+   *
+   * **GitLab usage:**
+   * ```sh
+   * node benchmark.mjs > gl-code-quality-report.json
+   * # Then upload as artifact in .gitlab-ci.yml
+   * ```
+   */
+  ciAnnotations(
+    result: BenchmarkResult,
+    format?: "github" | "gitlab",
+  ): string {
+    const fmt = format ?? this.detectCI();
+
+    switch (fmt) {
+      case "github":
+        return this.githubAnnotations(result);
+      case "gitlab":
+        return this.gitlabAnnotations(result);
+      default: {
+        // Fallback for non-CI environments — list regressions as plain text
+        const lines: string[] = [];
+        if (result.hasRegressions) {
+          lines.push("REGRESSIONS:");
+          for (const r of result.summary.regressions) {
+            lines.push(`  ${r.target} — ${r.metric}: ${r.baseline} → ${r.current} (${r.description})`);
+          }
+        }
+        if (result.summary.improvements.length > 0) {
+          lines.push("IMPROVEMENTS:");
+          for (const i of result.summary.improvements) {
+            lines.push(`  ${i.target} — ${i.metric}: ${i.baseline} → ${i.current}`);
+          }
+        }
+        if (lines.length === 0) {
+          lines.push("No regressions or improvements detected.");
+        }
+        return lines.join("\n");
+      }
+    }
+  }
+
+  /** Auto-detect CI provider from environment variables. */
+  private detectCI(): "github" | "gitlab" | null {
+    if (process.env.GITHUB_ACTIONS === "true") return "github";
+    if (process.env.GITLAB_CI === "true") return "gitlab";
+    return null;
+  }
+
+  /**
+   * GitHub Actions workflow commands.
+   *
+   * Prints `::error` / `::warning` / `::notice` messages that appear
+   * inline in PR diffs and the Actions UI.
+   *
+   * @see https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions
+   */
+  private githubAnnotations(result: BenchmarkResult): string {
+    const lines: string[] = [];
+
+    // Regressions → ::error (fail the check)
+    for (const r of result.summary.regressions) {
+      const file = r.target !== "overall" ? r.target.split("/")[0] : "benchmark";
+      const title = r.metric;
+      const msg = `${title}: ${r.baseline} → ${r.current}. ${r.description}`;
+      lines.push(`::error file=${file},title=${title}::${msg}`);
+    }
+
+    // Improvements → ::notice
+    for (const i of result.summary.improvements) {
+      const file = i.target !== "overall" ? i.target.split("/")[0] : "benchmark";
+      const title = i.metric;
+      const msg = `${title}: ${i.baseline} → ${i.current}`;
+      lines.push(`::notice file=${file},title=${title}::${msg}`);
+    }
+
+    // Per-case failures → ::warning (still passed overall but individual cases failed)
+    for (const c of result.cases) {
+      if (!c.passed) {
+        const failSummary = c.failures.join("; ");
+        lines.push(`::warning file=${c.caseName},title=case-failed::${c.caseName}: ${failSummary}`);
+      }
+    }
+
+    if (lines.length === 0) {
+      lines.push(`::notice::Benchmark "${result.summary.name}": no regressions. Pass rate ${(result.summary.passRate * 100).toFixed(1)}%.`);
+    }
+
+    return lines.join("\n");
+  }
+
+  /**
+   * GitLab Code Quality JSON.
+   *
+   * Output conforms to the GitLab Code Quality report format so it can
+   * be ingested as an artifact.
+   *
+   * @see https://docs.gitlab.com/ee/ci/testing/code_quality.html
+   */
+  private gitlabAnnotations(result: BenchmarkResult): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const issues: Array<Record<string, unknown>> = [];
+
+    for (const r of result.summary.regressions) {
+      issues.push({
+        description: `${r.metric}: ${r.baseline} → ${r.current}. ${r.description}`,
+        severity: "critical",
+        fingerprint: hashFingerprint(`regression-${r.target}-${r.metric}`),
+        location: {
+          path: r.target !== "overall" ? r.target.split("/")[0] : "benchmark",
+          lines: { begin: 1 },
+        },
+      });
+    }
+
+    for (const c of result.cases) {
+      if (!c.passed) {
+        issues.push({
+          description: `${c.caseName}: ${c.failures.join("; ")}`,
+          severity: "major",
+          fingerprint: hashFingerprint(`case-failed-${c.caseName}`),
+          location: {
+            path: c.caseName,
+            lines: { begin: 1 },
+          },
+        });
+      }
+    }
+
+    return JSON.stringify(issues, null, 2);
   }
 
   /**

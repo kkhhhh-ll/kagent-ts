@@ -210,4 +210,6 @@ export interface BenchmarkResult {
   summary: BenchmarkSummary;
   /** Per-case results. */
   cases: EvalResult[];
+  /** True if ANY regression was detected (convenience for CI exit code). */
+  hasRegressions: boolean;
 }
