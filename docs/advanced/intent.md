@@ -24,14 +24,16 @@ Agent 框架有三种行为控制方式：
   │     ├── scenarios[]   → 多标签任务场景（0–N 个）
   │     └── complexity    → "simple" / "moderate" / "complex"
   │
-  ├── matchInputSkills(input)                 ← 关键词/名字匹配（< 1ms）
+  ├── matchInputContext(input)                ← BM25 检索 + 记忆检索（< 1.5ms）
   │     ├── 命中 Skill → activate → rebuildSystemPrompt → LLM 即刻可见
-  │     └── 未命中 → LLM 仍可通过 `skill` 工具手动激活
+  │     ├── 命中 Memory → 完整内容注入 System Prompt
+  │     └── 未命中 → LLM 仍可通过 `skill` / `recall` 工具手动激活
   │
   └── LLM 自主决策                             ← Token 开销
         ├── 看到 auto-activated skills 已在 System Prompt 中
+        ├── 看到 BM25 匹配的记忆完整内容已注入
         ├── 看到 available skills → 调用 `skill` 工具
-        └── 看到 available subagents → 调用 `spawn_subagent` 工具
+        └── 看到 remaining memories → 调用 `recall` 工具
 ```
 
 全部在 Agent 基类中完成，三个 Agent 类型（ReAct / PlanSolve / Fusion）行为一致。
@@ -187,52 +189,39 @@ if (this.inputSignals.wantsRemember) {
 
 当 Agent 连续失败 ≥ 2 次后最终成功时，框架自动触发 Precipitation（保存来之不易的解决方案）。MemoryReflection 不受此条件触发——记忆提取与工具失败无关。
 
-## Skill 关键词匹配
+## Skill 与 Memory BM25 检索
 
-### 匹配规则
+### 检索方式
 
-两阶段匹配，均在 LLM 调用前完成：
+Agent 在每次 `run()` 启动时使用 **BM25 关键词检索**（`matchInputContext()`）自动匹配相关 Skill 和 Memory：
 
-**阶段 1：名字匹配**。将 Skill 名拆分为 token（按 `-` / `_` / 空格），所有 token 都必须以**完整词**形式出现在输入中。
+- **Skill 索引**：首次运行时预加载所有 Skill 的 systemPrompt，建立 BM25 索引。后续运行复用缓存（除非 `reloadFromDirectory()` 检测到新 Skill 文件）
+- **Memory 索引**：每次 `run()` 重建（记忆可通过 `remember` 工具动态增删）
 
-```
-Skill: "code-reviewer" → tokens: ["code", "reviewer"]
-输入: "帮我审查代码" → "reviewer" 不在输入中 → 不匹配
-输入: "code review please" → 两个 token 都在 → 匹配 ✅
-```
+BM25 使用**双阈值过滤**：
+- **比值阈值**：得分低于最高分 10% 的结果被舍弃
+- **绝对阈值**：得分低于 1.5 的结果被舍弃（排除常见词误匹配）
 
-**阶段 2：关键词匹配**。Skill 的 `keywords` 数组中任意一个关键词以完整词形式出现在输入中 → 匹配。
+### keywords 字段
 
-```
-Skill: { name: "deploy-to-prod", keywords: ["deploy", "release", "production"] }
-输入: "部署到生产环境" → "production" 没有精确命中，"deploy" 和 "release" 也没有 → 不匹配
-输入: "deploy to production" → "deploy" 命中 ✅
-```
-
-### 词边界保护
-
-单字关键词使用正则词边界匹配，避免假阳性：
+Skill 的 `keywords` 字段被纳入 BM25 索引文本，用于跨语言匹配：
 
 ```
-关键词: "code"
-输入: "unicode support" → "code" 不是独立词（在 "unicode" 中）→ 不匹配 ✅
-输入: "review this code" → "code" 是独立词 → 匹配 ✅
+Skill: "test-writer"  keywords: ["测试", "单元测试"]
+查询: "帮我写几个单元测试"
+  → BM25 tokenize: [帮] [我] [写] [几] [个] [单元测试] ← 命中 keywords "单元测试"
+  → score: 6.90 → 自动激活 ✅
 ```
-
-多词短语不做词边界检查（短语本身即边界）。
 
 ### 匹配后行为
 
-匹配到的 Skill 立即被 activate → 完整 System Prompt 注入 → LLM 不需要调用 `skill` 工具：
-
 ```
-用户输入 → matchSkills() 命中 "code-reviewer"
-  → skillManager.activate("code-reviewer")     // 加载完整 prompt
-  → rebuildSystemPrompt()                        // 注入 System Prompt
-  → LLM 调用时就已经看到 code-reviewer 的指令
+用户输入 → matchInputContext()
+  ├─ BM25 检索 Skills → activate → rebuildSystemPrompt → LLM 即刻可见
+  └─ BM25 检索 Memories → 完整内容注入 System Prompt → LLM 即刻可见
 ```
 
-未匹配的 Skill 仍然走渐进式披露路径——`buildAvailableSkillsHint()` 列出名字和描述，LLM 需要时调用 `skill` 工具激活。
+未匹配的 Skill 和 Memory 仍走渐进式披露路径——`buildAvailableSkillsHint()` 和 `buildMemoryPrompt()` 列出剩余项，LLM 按需调用 `skill` / `recall` 工具。
 
 ## 场景驱动的错题本注入
 

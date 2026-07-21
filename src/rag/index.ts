@@ -6,6 +6,8 @@ export { ChromaVectorStore } from "./chroma-store";
 export type { ChromaVectorStoreConfig } from "./chroma-store";
 export { InMemoryKeywordIndex } from "./keyword-index";
 export type { BM25Result } from "./keyword-index";
+export { Retriever } from "./retriever";
+export type { RetrievedSkill, RetrievedMemory } from "./retriever";
 export { rrfFusion, chunkKey } from "./rrf";
 export type { RankedResult, RRFFusionResult } from "./rrf";
 export { LLMReRanker } from "./llm-reranker";

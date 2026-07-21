@@ -202,7 +202,7 @@ export { SubAgentManager, SubAgentLoader } from "./subagent/index";
 export type { SubAgentDefinition, SubAgentResult } from "./subagent/index";
 
 // RAG — retrieval-augmented generation
-export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore, InMemoryKeywordIndex, LLMReRanker, CrossEncoderReRanker, rrfFusion, chunkKey } from "./rag/index";
+export { RAGManager, OpenAIEmbeddingProvider, InMemoryVectorStore, ChromaVectorStore, InMemoryKeywordIndex, LLMReRanker, CrossEncoderReRanker, rrfFusion, chunkKey, Retriever } from "./rag/index";
 export type {
   EmbeddingProvider,
   VectorStore,
@@ -218,6 +218,8 @@ export type {
   ReRanker,
   LLMReRankerConfig,
   CrossEncoderReRankerConfig,
+  RetrievedSkill,
+  RetrievedMemory,
 } from "./rag/index";
 
 // MCP (Model Context Protocol) — dynamic tool discovery

@@ -255,7 +255,7 @@ queued → cancelled (从等待队列中移除)
 | 限制         | 说明                                                              |
 | ------------ | ----------------------------------------------------------------- |
 | 无子代理递归 | `subAgentsDir=""`，不会自动注册子代理                            |
-| 无意向识别   | `skipAutoTools=true`，不跑 `detectInputSignals` / `matchInputSkills` |
+| 无意向识别   | `skipAutoTools=true`，不跑 `detectInputSignals` / `matchInputContext` |
 | 无侧效工具   | 不注册 `remember`、`recall`、`skill`、`list_errors`               |
 | 工具白名单   | 只能使用 AGENT.md 中声明的工具（精确匹配 + 通配符 + filter）      |
 

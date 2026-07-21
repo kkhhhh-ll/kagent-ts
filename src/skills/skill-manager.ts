@@ -152,6 +152,31 @@ export class SkillManager {
     return Array.from(this.registry.values());
   }
 
+  /**
+   * Pre-load all file-based skill system prompts WITHOUT activating them.
+   *
+   * This is used by the BM25 retriever to index skills with their full
+   * content (name + description + systemPrompt) before any skills are
+   * activated. Without this, file-based skills only contribute `name`
+   * and `description` to the BM25 index.
+   *
+   * Safe to call multiple times — already-loaded skills are skipped.
+   */
+  preloadAllSystemPrompts(): void {
+    for (const [name, skill] of this.registry) {
+      const loader = this.fileLoaders.get(name);
+      if (loader && !this.loadedFileSkills.has(name)) {
+        try {
+          skill.systemPrompt = loader.loadSystemPrompt(name);
+          this.loadedFileSkills.add(name);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.warn("Skills", `Failed to preload "${name}" system prompt: ${message}`);
+        }
+      }
+    }
+  }
+
   // ─── Activation / Deactivation ───────────────────────────────────────
 
   /**

@@ -223,7 +223,7 @@ async function safeRun(userInput: string) {
 | **Project Rules** | `wrapUserAuthored` + `detectInjectionSignatures` + `buildUserContentInjectionWarning` | System Prompt |
 | **Preferences** | `wrapUserAuthored` + `detectInjectionSignatures` + `buildUserContentInjectionWarning` | System Prompt |
 | **Skills 内容** | `wrapUserAuthored` + `detectInjectionSignatures` + `buildUserContentInjectionWarning` | System Prompt |
-| **Memory 索引** (`buildPromptHint`) | `wrapUntrusted` + `detectInjectionSignatures` + `buildInjectionWarning` | System Prompt |
+| **Memory 内容** (`buildMemoryPrompt`) | `wrapUntrusted` + `detectInjectionSignatures` + `buildInjectionWarning` | System Prompt |
 | **错题本** (`buildRulesPrompt`) | `wrapUntrusted` + `detectInjectionSignatures` + `buildInjectionWarning` | System Prompt |
 
 ## 最佳实践

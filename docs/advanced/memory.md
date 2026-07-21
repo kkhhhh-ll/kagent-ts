@@ -126,21 +126,33 @@ const agent = new ReActAgent({
 
 `supersedes` 中的记忆会被自动移除，确保旧约定不会在未来的会话中与新约定冲突。如果新旧记忆使用相同的 `name`，框架会自动覆盖（upsert），无需额外指定 `supersedes`。
 
-### System Prompt 自动注入
+### System Prompt 自动注入（BM25 检索）
 
-`MemoryManager.buildPromptHint()` 生成紧凑的记忆索引，可注入到 system prompt 中，让 LLM 在每次会话开始时了解已有的记忆：
+Agent 在每次 `run()` 启动时，使用 **BM25 关键词检索** 自动匹配与当前查询最相关的记忆，并采用**两级披露**策略注入 System Prompt：
 
-```ts
-const hint = memory.buildPromptHint()
-// 输出类似：
-// ## Long-Term Memories (3 entries — use the `recall` tool to load full content)
-// - use-kebab-case (`rule`)
-// - api-base-url (`project`)
-// - prefer-functional-components (`rule`)
+```
+用户输入: "用 pnpm 装 React Router"
+  → BM25 检索 → 命中 "use-pnpm-workspaces" (score: 5.17)
+  → Tier 1: 注入完整内容（LLM 无需调用 recall）
+  → Tier 2: 注入剩余记忆的名称索引（LLM 可按需 recall）
 ```
 
-> **安全提示：** `buildPromptHint()` 和 `recall` 工具返回的内容均由框架自动进行安全防护：
-> - **记忆索引** — 自动包裹 `wrapUntrusted` + 注入签名扫描
+**Tier 1 — 相关记忆（BM25 自动匹配）**：得分最高的 ≤5 条记忆的完整 Markdown 内容直接注入，LLM 无需手动调用 `recall` 工具。
+
+**Tier 2 — 全部记忆索引**：未被 BM25 匹配的记忆以紧凑的名称列表展示，LLM 可通过 `recall` 工具按需加载。
+
+BM25 使用**双阈值过滤**防止噪音注入：
+- **比值阈值**：得分低于最高分 10% 的结果被舍弃
+- **绝对阈值**：得分低于 1.5 的结果被舍弃（确保只命中稀罕词，排除 `for`、`the` 等常见词）
+
+```ts
+// 内部集成，无需手动调用
+// Agent.run() → matchInputContext() → retriever.retrieveMemories(input, 5) → buildMemoryPrompt()
+```
+
+> **安全提示：** `buildMemoryPrompt()` 和 `recall` 工具返回的内容均由框架自动进行安全防护：
+> - **BM25 检索的记忆** — 自动包裹 `wrapUntrusted` + 注入签名扫描
+> - **记忆索引** — 同上
 > - **`recall` 工具** — 自动使用 `wrapAndScan`（注入扫描 + 边界包裹）
 >
 > 因为记忆是 LLM 写的，可能留下注入文本，下次运行时污染 system prompt。这些防护防止了自我污染。
@@ -212,7 +224,7 @@ type: rule
   - 从未被 `recall` 过的记忆优先淘汰
   - 同一批未使用的记忆中，`lastRecalledAt` 最早的先删
   - 同一时间戳时按插入顺序（先插入的先删）
-- 每次调用 `recall` 工具时，对应记忆的 `lastRecalledAt` 会自动更新
+- 每次调用 `recall` 工具 **或 BM25 自动检索命中**时，对应记忆的 `lastRecalledAt` 会自动更新
 - 单个记忆文件大小无硬性限制，但建议保持简洁
 
 ## 最佳实践

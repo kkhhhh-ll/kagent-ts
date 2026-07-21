@@ -169,7 +169,7 @@ export class PlanSolveAgent extends Agent {
 
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
-    this.matchInputSkills(input);
+    this.matchInputContext(input);
 
     // ── Create user message ─────────────────────────────────────────
     const userMessage = Message.user(input);
@@ -662,7 +662,7 @@ export class PlanSolveAgent extends Agent {
 
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
-    this.matchInputSkills(input);
+    this.matchInputContext(input);
 
     const userMessage = Message.user(input);
     this.contextManager.addMessage(userMessage.toDict());

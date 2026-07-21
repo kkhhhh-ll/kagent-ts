@@ -4,7 +4,7 @@ import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
 import { Role } from "../messages/types";
 import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION, RAG_KNOWLEDGE_BASE_HINT } from "./system-prompts";
-import { wrapAndScan } from "../security/boundaries";
+import { wrapAndScan, wrapUntrusted, detectInjectionSignatures, buildInjectionWarning } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
@@ -14,6 +14,7 @@ import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { validateToolArgs } from "../tools/tool-validator";
 import { SkillManager } from "../skills/skill-manager";
 import { MemoryManager } from "../memory/memory-manager";
+import { Retriever } from "../rag/retriever";
 import { ProjectRules } from "../rules/project-rules";
 import { SessionManager } from "../session/session-manager";
 import {
@@ -44,8 +45,9 @@ import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
-import { detectSignals, matchSkills } from "../intent";
-import type { UserSignals, SkillMatch } from "../intent";
+import { detectSignals } from "../intent";
+import type { UserSignals } from "../intent";
+import type { RetrievedSkill, RetrievedMemory } from "../rag/retriever";
 import type { ErrorNotebook } from "../reflection/error-notebook";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -565,8 +567,14 @@ export abstract class Agent {
   /** Signals detected from the current run's user input. */
   protected inputSignals: UserSignals = { wantsRemember: false, riskLevel: "none", scenarios: [], complexity: "simple" };
 
-  /** Skills auto-activated by keyword/name matching (before LLM involvement). */
-  protected autoActivatedSkills: SkillMatch[] = [];
+  /** Skills auto-activated by BM25 retrieval (before LLM involvement). */
+  protected autoActivatedSkills: RetrievedSkill[] = [];
+
+  /** Memories retrieved by BM25 for the current query (full content injected). */
+  protected retrievedMemories: RetrievedMemory[] = [];
+
+  /** BM25 retriever for memories and skills (separate indexes). */
+  protected retriever: Retriever = new Retriever();
 
   /** Error notebook for scenario-bound mistake injection. */
   protected notebook?: ErrorNotebook;
@@ -887,6 +895,78 @@ export abstract class Agent {
   }
 
   /**
+   * Build the memory section of the system prompt.
+   *
+   * Two-tier disclosure:
+   * 1. BM25-retrieved memories (top-5) — full content injected directly so
+   *    the LLM doesn't need to call `recall`.
+   * 2. Remaining memories — name-only index so the LLM can `recall` any
+   *    that the BM25 top-5 missed.
+   *
+   * Falls back to the full name-only index when no query-specific
+   * retrieval has been done yet (e.g., initial system prompt build).
+   */
+  private buildMemoryPrompt(): string {
+    const retrieved = this.retrievedMemories;
+    const all = this.memoryManager.getAll();
+
+    if (all.length === 0) return "";
+
+    // Build a set of retrieved memory names for exclusion from the index
+    const retrievedNames = new Set(retrieved.map((r) => r.memory.name));
+
+    const parts: string[] = [];
+
+    // Tier 1: Full content of BM25-retrieved memories
+    if (retrieved.length > 0) {
+      const content = retrieved
+        .map((r) => {
+          const m = r.memory;
+          const badge = m.type === "rule" ? "📜 Rule"
+            : m.type === "preference" ? "💬 Preference"
+            : "📋 Project";
+          return `### ${badge}: ${m.name}\n*${m.description}*\n\n${m.content}`;
+        })
+        .join("\n\n");
+      parts.push(`## Relevant Memories (auto-loaded for this task — ${retrieved.length} retrieved via BM25)\n\n${content}`);
+    }
+
+    // Tier 2: Name-only index of remaining memories
+    const remaining = all.filter((m) => !retrievedNames.has(m.name));
+    if (remaining.length > 0) {
+      const rules = remaining.filter((m) => m.type === "rule");
+      const projects = remaining.filter((m) => m.type === "project");
+      const prefs = remaining.filter((m) => m.type === "preference");
+
+      const sections: string[] = [];
+      if (rules.length > 0) {
+        sections.push("📜 Rules", ...rules.map((e) => `- ${e.name}`));
+      }
+      if (projects.length > 0) {
+        sections.push("📋 Project", ...projects.map((e) => `- ${e.name}`));
+      }
+      if (prefs.length > 0) {
+        sections.push("💬 Preferences (observed habits — soft guidance)", ...prefs.map((e) => `- ${e.name}`));
+      }
+
+      parts.push(
+        `## All Memories (${remaining.length} more — use \`recall\` to load full content)\n` +
+        sections.join("\n"),
+      );
+    }
+
+    // Memory content is LLM-authored (via `remember` tool or MemoryReflector).
+    // Wrap as untrusted data and scan for injection signatures before injecting
+    // back into the system prompt — prevents accidental prompt poisoning.
+    const body = parts.join("\n\n");
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildInjectionWarning(patterns, "memory index");
+    const wrapped = wrapUntrusted("memory-index", body);
+
+    return "\n\n" + warning + wrapped;
+  }
+
+  /**
    * Build the full system prompt by concatenating all sections in priority
    * order: core prompt → rules → preferences → memories → skills. Empty
    * sections are silently skipped. Subclasses append extra content by
@@ -906,7 +986,7 @@ export abstract class Agent {
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.projectRules.buildPrompt(),
       this.preferenceManager.buildPrompt(),
-      this.memoryManager.buildPromptHint(),
+      this.buildMemoryPrompt(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
       this.ragConfig ? RAG_KNOWLEDGE_BASE_HINT : "",
@@ -989,6 +1069,7 @@ export abstract class Agent {
     if (!this.skillsDir) return false;
     const added = this.skillManager.reloadFromDirectory(this.skillsDir);
     if (added.length > 0) {
+      this.retriever.invalidateSkillIndex();
       this.rebuildSystemPrompt();
       return true;
     }
@@ -2001,38 +2082,58 @@ export abstract class Agent {
   }
 
   /**
-   * Match skills by keyword/name against user input (zero LLM cost).
+   * BM25-retrieve relevant skills and memories for the current user input.
    *
-   * Matched skills have their full system prompt loaded and stored on
-   * `this.autoActivatedSkills`. The system prompt builder should
-   * include them so the LLM never needs to call the `skill` tool
-   * for obviously-relevant skills.
+   * Skills and memories are indexed separately — skills once (cached),
+   * memories every run (they can change via the `remember` tool).
+   *
+   * Top matches have their full content injected into the system prompt,
+   * so the LLM never needs to call `skill` or `recall` for obvious hits.
    *
    * Called once at the start of every `run()`.
    */
-  protected matchInputSkills(input: string): void {
-    if (!this.skillManager) return;
+  protected matchInputContext(input: string): void {
+    // ── Skills: BM25 retrieval ──────────────────────────────────────────
+    if (this.skillManager) {
+      const skills = this.skillManager.getAll();
+      if (skills.length > 0) {
+        // Pre-load system prompts so BM25 indexes the full skill content
+        // (file-based skills lazily load systemPrompt on activation)
+        this.skillManager.preloadAllSystemPrompts();
+        this.retriever.indexSkills(skills);
+        this.autoActivatedSkills = this.retriever.retrieveSkills(input, 5);
 
-    const skills = this.skillManager.getAll();
-    if (skills.length === 0) return;
+        for (const m of this.autoActivatedSkills) {
+          this.skillManager.activate(m.skill.name);
+          const reloaded = this.skillManager.get(m.skill.name);
+          if (reloaded) m.skill = reloaded;
+        }
 
-    this.autoActivatedSkills = matchSkills(input, skills);
-
-    // Activate matched skills to load full system prompts
-    for (const m of this.autoActivatedSkills) {
-      this.skillManager.activate(m.skill.name);
-      const reloaded = this.skillManager.get(m.skill.name);
-      if (reloaded) m.skill = reloaded;
+        if (this.autoActivatedSkills.length > 0) {
+          this.logger.info(
+            "Retriever",
+            `BM25-matched ${this.autoActivatedSkills.length} skill(s): ${this.autoActivatedSkills.map((m) => m.skill.name).join(", ")}`,
+          );
+        }
+      }
     }
 
-    if (this.autoActivatedSkills.length > 0) {
-      this.logger.info(
-        "Intent",
-        `Auto-activated ${this.autoActivatedSkills.length} skill(s): ${this.autoActivatedSkills.map((m) => m.skill.name).join(", ")}`,
-      );
-      // Rebuild system prompt so auto-activated skills take effect immediately
-      this.rebuildSystemPrompt();
+    // ── Memories: BM25 retrieval ────────────────────────────────────────
+    const allMemories = this.memoryManager.getAll();
+    if (allMemories.length > 0) {
+      this.retriever.indexMemories(allMemories);
+      this.retrievedMemories = this.retriever.retrieveMemories(input, 5);
+      // Touch retrieved memories so LRU eviction preserves actively-used entries
+      for (const r of this.retrievedMemories) {
+        this.memoryManager.touch(r.memory.name);
+      }
+    } else {
+      this.retrievedMemories = [];
     }
+
+    // Always rebuild — even when nothing matched, the system prompt
+    // needs to be cleared of any retrieved memories from the previous run.
+    this.rebuildSystemPrompt();
   }
 
   // ─── Answer Verification ────────────────────────────────────────────────

@@ -125,7 +125,7 @@ export class ReActAgent extends Agent {
 
     if (!this.skipAutoTools) {
       this.detectInputSignals(input);
-      this.matchInputSkills(input);
+      this.matchInputContext(input);
     }
 
     // ── Create user message ──────────────────────────────────────────
@@ -445,7 +445,7 @@ export class ReActAgent extends Agent {
 
     if (!this.skipAutoTools) {
       this.detectInputSignals(input);
-      this.matchInputSkills(input);
+      this.matchInputContext(input);
     }
 
     const userMessage = Message.user(input);

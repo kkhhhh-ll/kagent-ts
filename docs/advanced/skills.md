@@ -1,6 +1,6 @@
 # Skill 渐进式技能
 
-kagent-ts 的 Skill 系统实现了**渐进式披露**（Progressive Disclosure）模式：技能的元数据在 Agent 启动时注册，但完整内容（系统提示词）只在需要时才加载。同时支持**关键词自动激活**——与用户输入匹配的 Skill 在 LLM 调用前就已注入 System Prompt。
+kagent-ts 的 Skill 系统实现了**渐进式披露**（Progressive Disclosure）模式：技能的元数据在 Agent 启动时注册，但完整内容（系统提示词）只在需要时才加载。同时支持**BM25 自动激活**——与用户输入相关的 Skill 在 LLM 调用前就已注入 System Prompt。
 
 ## 为什么需要渐进式加载？
 
@@ -54,45 +54,49 @@ keywords: ["review", "code", "quality", "lint"]
 - 改进建议
 ```
 
-> **keywords 字段**：`keywords` 支持 JSON 数组 `["review", "code"]` 或逗号分隔字符串 `"review, code"`。关键词在用户输入中命中时，Skill 自动激活，无需 LLM 调用 `skill` 工具。
+> **keywords 字段**：`keywords` 支持 JSON 数组 `["review", "code"]` 或逗号分隔字符串 `"review, code"`。关键词会被纳入 BM25 索引文本，确保中文查询能命中英文 Skill（例：`"单元测试"` → `test-writer` 通过关键词 `"测试"` 匹配）。
 
 ### 渐进式加载的两阶段
 
 ```
-阶段 1: Agent 启动 → scan()  → 只读 frontmatter（name, description, keywords）
+阶段 1: Agent 启动 → scan()    → 只读 frontmatter（name, description, keywords）
+                                → 预加载 systemPrompt（BM25 索引用）
                                 → 注入 Available Skills 提示
 
 阶段 2: 需要时    → activate() → 加载 body + reference docs → 注入 System Prompt
          触发条件:
-           - 关键词/名字匹配 → 自动激活（零 LLM 开销）
+           - BM25 检索 → 自动激活（零 LLM 开销）
            - LLM 调用 `skill` 工具 → 按需激活
 ```
 
-## 关键词自动激活
+## BM25 自动激活
 
-当用户输入中的词匹配 Skill 的 `name` 或 `keywords` 时，Skill 在 LLM 调用前自动激活，完整 prompt 已注入 System Prompt，LLM 不需要额外调用工具。
-
-### 名字匹配
-
-Skill 名按 `-` / `_` 拆分为 token，所有 token 必须以完整词形式出现在输入中（词边界匹配，避免 "code" 匹配 "unicode"）：
+Agent 在每次 `run()` 启动时，使用 **BM25 关键词检索** 自动匹配与当前用户输入最相关的 Skill。系统预加载所有 Skill 的完整内容（name + description + keywords + systemPrompt）到 BM25 索引中，查询时返回得分最高的 ≤5 个 Skill。
 
 ```
-Skill: "code-reviewer" → tokens: ["code", "reviewer"]
-输入: "code review please"  → 两个 token 都在 → 匹配 ✅
-输入: "review the unicode"  → "code" 不匹配 → 不匹配
+用户输入: "帮我写几个单元测试"
+  → BM25 检索 Skills   → 命中 "test-writer" (score: 6.90)  ← 关键词 "单元测试" 命中
+  → BM25 检索 Memories → 无结果
+  → matchInputContext() → activate("test-writer")
+  → rebuildSystemPrompt() → Skill 完整 prompt 已注入
 ```
 
-### 关键词匹配
+### 为什么用 BM25 而非关键词匹配
 
-任意一个 `keywords` 数组中的关键词以完整词形式出现即可匹配：
+- **自动覆盖**：Skill 的 name、description、keywords、systemPrompt 全部参与检索，无需 Skill 作者手动覆盖所有可能的用户表述
+- **跨语言支持**：在 `keywords` 中添加 CJK 关键词即可匹配中文查询（例：`keywords: ["测试", "单元测试"]` → 匹配 "帮我写几个单元测试"）
+- **分数过滤**：双阈值（比值 + 绝对最低 1.5）确保只在有实质关联时才激活，避免常见词导致的误匹配
 
-```
-Skill: { keywords: ["deploy", "release", "production"] }
-输入: "deploy to production" → "deploy" 命中 ✅
-输入: "部署到 production"    → "production" 命中 ✅
-```
+### 与旧版关键词匹配的对比
 
-匹配到的 Skill 会被 `activate()`，然后 `rebuildSystemPrompt()` 将其完整 prompt 注入 System Prompt。
+| | 旧版（关键词匹配） | 新版（BM25） |
+|---|---|---|
+| 匹配方式 | name 分词 + keywords 精确子串 | BM25 全文检索 |
+| 跨语言 | 仅靠手动 keywords | keywords 字段纳入索引，自动生效 |
+| 误匹配 | `"code"` 匹配 `"unicode"`（需词边界保护） | IDF 自动压低常见词权重 |
+| Skill 作者负担 | 必须写全 keywords | keywords 可选，内容已参与检索 |
+
+匹配到的 Skill 会被 `activate()`，然后 `rebuildSystemPrompt()` 将其完整 prompt 注入 System Prompt。未匹配的 Skill 仍通过 `buildAvailableSkillsHint()` 列出，LLM 可按需调用 `skill` 工具手动激活。
 
 ## 配置 Skill Manager
 
@@ -154,9 +158,11 @@ interface SkillStatus {
    → 扫描 SKILL.md frontmatter → 注册 name + description + keywords
 
 2. Agent.reloadDynamicResources() → 重新扫描目录，获取新增 Skill
+   → retriever.invalidateSkillIndex() → 下次 run() 时重建 BM25 索引
 
-3. Agent.matchInputSkills(input) → 关键词/名字匹配 → activate 命中的 Skill
-   → rebuildSystemPrompt() → 自动激活的 Skill 已注入
+3. Agent.matchInputContext(input) → preloadAllSystemPrompts()（首次）
+   → retriever.indexSkills()（首次，后续缓存）→ BM25 检索
+   → activate 命中的 Skill → rebuildSystemPrompt()
 
 4. buildAvailableSkillsHint() → 列出未激活 Skill 的名字和描述
 
