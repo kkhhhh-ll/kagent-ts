@@ -97,6 +97,9 @@ const wrapped = wrapUserAuthored('Project Rules', rulesContent)
 ```
 
 **Agent 已自动对以下内容调用此保护**，无需手动配置：
+- Project Rules（`wrapUserAuthored` + 注入扫描）
+- Skill 内容（`wrapUserAuthored` + 注入扫描）
+- Preferences（`wrapUserAuthored` + 注入扫描）
 
 ## 第 4 层: 签名模式扫描
 
@@ -187,7 +190,6 @@ async function safeRun(userInput: string) {
     tools: [],
     // 以下内容会被自动加固后注入 system prompt:
     rulesPath: './RULES.md',                            // → wrapUserAuthored + 注入扫描
-    preferenceManager: new 
   })
 
   return await agent.run(userInput)
@@ -195,6 +197,18 @@ async function safeRun(userInput: string) {
 ```
 
 ## 自动防护清单
+
+以下内容由 Agent 自动加固，无需手动调用：
+
+| 数据来源 | 防护方式 |
+|---------|---------|
+| 工具输出 | `wrapAndScan()` — 注入扫描 + 边界包裹 |
+| 子代理结果 | `wrapAndScan()` — 同上 |
+| Memory 召回 | `wrapAndScan()` — 同上 |
+| Web 抓取 | `detectInjectionSignatures()` + `buildInjectionWarning()` |
+| Project Rules | `wrapUserAuthored()` + 注入扫描 |
+| Skill 内容 | `wrapUserAuthored()` + 注入扫描 |
+| Preferences | `wrapUserAuthored()` + 注入扫描 |
 
 ## 最佳实践
 

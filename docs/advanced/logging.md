@@ -85,6 +85,13 @@ logger.info("MyAgent", "任务开始", { taskId: "123" });
 
 方法 → console 映射：
 
+| 方法 | console 调用 |
+|------|-------------|
+| `debug()` | `console.debug()` |
+| `info()` | `console.info()` |
+| `warn()` | `console.warn()` |
+| `error()` | `console.error()` |
+
 ### SilentLogger
 
 丢弃所有日志消息。每个方法都是纯空函数体，零运行时开销。适用于测试或需要完全静默的环境：
@@ -185,6 +192,18 @@ class PinoLoggerAdapter implements Logger {
 ## 框架内部的日志标签
 
 各模块使用的 `tag` 前缀，方便日志过滤：
+
+| 模块 | Tag |
+|------|-----|
+| Agent 基类 | `Agent`, `ReActAgent`, `FusionAgent` 等 |
+| LLM Provider | `OpenAIProvider`, `AnthropicProvider`, `FallbackProvider` |
+| 工具系统 | `ToolRegistry`, `CircuitBreaker`, `ToolValidator` |
+| 会话管理 | `SessionManager` |
+| 上下文压缩 | `ContextManager`, `ProgressiveCompressor` |
+| Git Worktree | `GitWorktreeManager` |
+| MCP 协议 | `McpClientManager` |
+| RAG 知识库 | `RAGManager`, `Retriever` |
+| 子代理 | `SubAgentManager` |
 
 ## 下一步
 

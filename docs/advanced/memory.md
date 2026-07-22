@@ -188,7 +188,8 @@ const agent = new ReActAgent({
 
 `MemoryReflector` Fork 一个独立的子 Agent，拥有只读工具（`read_file`、`grep_search`），会审查对话历史并提取值得跨 session 保留的规则和项目事实。已有的同名记忆会自动跳过。
 
-详见 
+详见 [Fork — Agent 派生](/core/fork)。
+
 ## 关联记忆
 
 记忆文件之间可以相互引用：
@@ -230,5 +231,5 @@ type: rule
 
 ## 下一步
 
-- - [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
+- [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
 - [AgentConfig](/guide/configuration) — 通过 `memoryReflection: "post-hoc"` 在 Agent 执行后自动触发记忆提取

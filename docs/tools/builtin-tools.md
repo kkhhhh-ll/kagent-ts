@@ -4,7 +4,23 @@ kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执
 
 ## 工具列表总览
 
+| 工具 | 类别 | 审批 |
 |------|------|:---:|
+| `read_file` | 文件操作 | - |
+| `write_file` | 文件操作 | ✅ |
+| `edit_file` | 文件操作 | ✅ |
+| `grep_search` | 搜索 | - |
+| `glob_search` | 搜索 | - |
+| `bash` | Shell | ✅ |
+| `web_fetch` | 网络 | - |
+| `search_knowledge` | 知识检索 | - |
+| `list_knowledge_documents` | 知识检索 | - |
+| `skill` | 知识/记忆 | - |
+| `remember` | 知识/记忆 | - |
+| `recall` | 知识/记忆 | - |
+| `list_subagents` | 子代理 | - |
+| `spawn_subagent` | 子代理 | - |
+| `list_errors` | 诊断 | - |
 
 ## 注册方式
 

@@ -65,6 +65,10 @@ interface CompressionConfig {
 
 ```ts
 type CompressionStrategy =
+  | "truncate_large_outputs"
+  | "compress_old_turns"
+  | "clear_expired_readonly_results"
+  | "llm_summarize"
 
 interface CompressionResult {
   appliedStrategies: CompressionStrategy[]

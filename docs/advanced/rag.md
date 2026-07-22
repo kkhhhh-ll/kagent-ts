@@ -184,6 +184,12 @@ class CohereReRanker implements ReRanker {
 
 ### 精排方案对比
 
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| Cross-Encoder（默认） | 精度高，本地运行 | 需下载 ~100MB 模型 |
+| LLMReRanker | 零本地模型，复用已有 LLM | 较慢（网络往返），计 token 费 |
+| 外部 API（Cohere 等） | 专业服务，效果好 | 需额外 API 费用 |
+
 ## 向量存储
 
 ### InMemoryVectorStore（默认）
@@ -280,6 +286,9 @@ class MyEmbeddingProvider implements EmbeddingProvider {
 ## LLM 可用工具
 
 配置 RAG 后，Agent 自动注册两个工具：
+
+- **`search_knowledge`** — 语义搜索知识库，返回最相关的文档片段和分数
+- **`list_knowledge_documents`** — 列出知识库中已索引的所有文档
 
 ## 与子代理共享
 

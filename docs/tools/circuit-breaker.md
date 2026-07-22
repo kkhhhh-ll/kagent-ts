@@ -79,7 +79,7 @@ Circuit Breaker 与 `ToolErrorTracker` 协同工作：
 - `ToolErrorTracker` 在内存中记录每次失败 → 分析 → 恢复的完整生命周期
 - `"circuit_half_open"` 事件类型用于记录半熔断状态
 - `list_errors` 工具允许 LLM 在会话中实时查询当前错误状态
-- 跨会话的错误学习由 [
+- 跨会话的错误学习由 [Memory 记忆](/advanced/memory) 系统负责。
 
 ## 完整示例
 

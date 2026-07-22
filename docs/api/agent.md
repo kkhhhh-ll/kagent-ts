@@ -15,24 +15,15 @@ interface ReActAgentConfig extends AgentConfig {
   /** 最大迭代次数 (默认: 10) */
   maxIterations?: number
 
-  /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
-
-  /** 
-
-  /** 反思子 Agent 最大迭代次数 (默认: 6) */
-
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" 
+  memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" 
+  precipitation?: "off" | "post-hoc"
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
-
-  /** 
-  notebook?: 
 }
 ```
 
@@ -63,24 +54,15 @@ interface PlanSolveAgentConfig extends AgentConfig {
   /** 连续失败 N 次后触发自动 replan (默认: 2, 设为 0 禁用) */
   replanThreshold?: number
 
-  /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
-
-  /** 
-
-  /** 反思子 Agent 最大迭代次数 (默认: 6) */
-
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" 
+  memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" 
+  precipitation?: "off" | "post-hoc"
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
-
-  /** 
-  notebook?: 
 }
 ```
 
@@ -200,15 +182,13 @@ interface AgentConfig {
   logger?: Logger                                   // 日志实例（默认: ConsoleLogger）
 
   // ── 生命周期钩子 ──
-  hooks?: AgentHooks 
+  hooks?: AgentHooks | AgentHooks[]
   // ── 人工审批 (HITL) ──
   onToolApproval?: ApprovalCallback                 // 工具审批回调
   approvalTimeoutMs?: number                        // 审批超时 (ms)
-  approvalTimeoutStrategy?: "deny" 
+  approvalTimeoutStrategy?: "deny" | "approve"      // 超时策略
   // ── 并行执行 ──
   enableParallelToolExecution?: boolean             // 启用并行工具调用
-
-  // ── 用户配置 ──
 
   // ── 记忆 ──
   memoryDir?: string                                // 记忆存储目录 (默认: ".k-memory")
@@ -233,8 +213,9 @@ interface AgentConfig {
 
   /**
    * 子 Agent 的生命周期钩子。
-   * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks    */
-  subAgentHooks?: AgentHooks 
+   * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks | AgentHooks[]
+   */
+  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
   /**
    * 子 Agent 专用 LLM Provider。
    * 不设置时：如果 llm 是 ModelRouter，则走 forSubAgent()；否则复用主 llm。
@@ -253,18 +234,18 @@ interface AgentConfig {
 
   // ── 后处理 ──
   /** 技能沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off"   /** 沉淀子 Agent 最大迭代次数 */
+  precipitation?: "off" | "post-hoc"
+  /** 沉淀子 Agent 最大迭代次数 */
   precipitationMaxIterations?: number
   /** 技能沉淀专用 LLM Provider（不设置时自动走 ModelRouter.forPrecipitation() 或复用 llm） */
   precipitationLLM?: LLMProvider
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off"   /** 记忆提取子 Agent 最大迭代次数 */
+  memoryReflection?: "off" | "post-hoc"
+  /** 记忆提取子 Agent 最大迭代次数 */
   memoryReflectionMaxIterations?: number
   /** 记忆提取专用 LLM Provider（不设置时自动走 ModelRouter.forMemory() 或复用 llm） */
   memoryReflectorLLM?: LLMProvider
-
-  /** 
 
   // ── Token 预算 ──
   tokenBudgetConfig?: TokenBudgetConfig             // Token 消耗限制
@@ -310,60 +291,8 @@ interface AgentHooks {
 
 ---
 
-## 
-
-```ts
-import {  } from 'kagent-ts'
-
-const verifier = new (config: Config)
-```
-
-### Config
-
-```ts
-interface Config {
-  /** LLM Provider 实例（必填） */
-  llm: LLMProvider
-
-  /** 验证子 Agent 最大 ReAct 迭代次数 (默认: 3) */
-  maxIterations?: number
-
-  /** 验证及格线 0-100 (默认: 70) */
-  threshold?: number
-
-  /** 日志实例 */
-  logger?: Logger
-
-  /** 生命周期钩子，传入 Fork 子 Agent */
-  hooks?: AgentHooks }
-```
-
-### 方法
-
-```ts
-/** Fork 子 Agent 验证答案，返回结构化验证结果 */
-verify(input: VerificationInput): Promise<VerificationResult>
-```
-
-### 相关类型
-
-```ts
-interface VerificationInput {
-  userQuery: string    // 原始用户问题
-  answer: string       // 待验证的答案
-}
-
-interface VerificationResult {
-  valid: boolean       // 是否通过验证
-  score: number        // 质量评分 0-100
-  issues: string[]     // 具体问题列表
-  assessment: string   // 简要评估说明
-}
-```
-
 ## 下一步
 
 - [API - LLM](/api/llm) — LLM Provider API
 - [API - Tools](/api/tools) — Tool 系统 API
 - [API - Messages](/api/messages) — Message 类型 API
-- 

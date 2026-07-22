@@ -17,7 +17,13 @@ createLLMProvider()         # 工厂函数 (自动检测 Provider 类型)
 
 ## 快速选择
 
+| 场景 | 推荐 Provider |
 |-----------|------|
+| OpenAI 兼容 | `OpenAIProvider` |
+| Claude 系列 | `AnthropicProvider` |
+| 主备切换 | `FallbackProvider` |
+| 限流控制 | `RateLimitedProvider` |
+| 多模型路由 | `ModelRouter` |
 
 ## 通用接口
 

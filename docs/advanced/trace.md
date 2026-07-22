@@ -48,7 +48,17 @@ interface TraceLoggerConfig {
 
 `TraceLogger` 实现了 `AgentHooks` 接口，记录以下事件：
 
+| 事件 | 说明 |
 |------|----------|
+| `onLLMStart` | LLM 调用开始 |
+| `onLLMEnd` | LLM 调用结束（含 token 用量） |
+| `onToolStart` | 工具调用开始 |
+| `onToolEnd` | 工具调用结束（含耗时） |
+| `onThought` | LLM 推理步骤 |
+| `onPlanCreated` | 计划创建（PlanSolve/Fusion） |
+| `onPlanRevised` | 计划修订 |
+| `onFinish` | Agent 执行完成 |
+| `onChunk` | 流式输出块 |
 
 ## HTML 输出
 
@@ -130,4 +140,4 @@ await agent.run('分析整个项目')
 ## 下一步
 
 - [Eval 评估](/advanced/eval) — 结合 Trace 进行定量评估
-- - [生命周期钩子](/core/hooks) — 自定义钩子实现
+- [生命周期钩子](/core/hooks) — 自定义钩子实现

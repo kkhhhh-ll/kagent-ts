@@ -89,19 +89,13 @@ interface PlanSolveAgentConfig extends AgentConfig {
    */
   replanThreshold?: number
 
-  /** 答案验证模式 (默认: "off") — 阻塞式 */
-
-  /** 
-
-  /** 反思子 Agent 最大迭代次数 (默认: 4) */
-
   /** 记忆提取模式 (默认: "off") */
-  memoryReflection?: "off" 
+  memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** 技能沉淀模式 (默认: "off") */
-  precipitation?: "off" 
+  precipitation?: "off" | "post-hoc"
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 }
@@ -137,11 +131,17 @@ interface PlanSolveAgentConfig extends AgentConfig {
 
 Plan-Solve Agent 支持两种响应格式，解析器按优先级依次尝试：
 
+| 格式 | 解析优先级 | 兼容性 |
 |--------|------|------|
+| JSON 格式（`{"revised_plan": [...]}`） | 最高 | Claude、GPT-4 等强模型 |
+| 方括号标记格式（`[Revised Plan]`） | 次高 | DeepSeek 等弱模型 |
 
 **方括号标记列表：**
 
+| 标记 | 含义 |
 |------|------|
+| `[Thought]` | 推理思考 |
+| `[Revised Plan]` | 修订后的计划步骤 |
 
 如果模型只输出 `[Thought]` 而没有其他标记，解析器会将其作为最终答案返回。这确保弱模型（不严格遵守格式）也能正常结束循环。
 

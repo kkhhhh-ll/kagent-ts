@@ -103,6 +103,11 @@ Dispatching 2 node(s):
 
 各阶段说明：
 
+- **Phase 1: Decompose** — 将用户请求分解为 DAG 任务图
+- **Round / Dispatch** — 拓扑排序后并行调度子 Agent 执行
+- **Synthesize** — 综合所有节点输出
+- **Adapt** — 检查遗漏，动态追加新节点
+
 ## 配置参数
 
 ```ts
@@ -294,6 +299,8 @@ const agent = new OrchestratorAgent({
 ```
 
 ### 适用范围
+
+模型降级感知适用于所有 Orchestrator 阶段（Decompose / Synthesize / Adapt / ForceSynthesize），不依赖任何额外配置。只要 `llm` 是 `FallbackProvider`，降级事件就会被自动追踪并注入到后续阶段的 prompt 中。
 
 ## 完整示例
 

@@ -89,7 +89,12 @@ Agent 在每次 `run()` 启动时，使用 **BM25 关键词检索** 自动匹配
 
 ### 与旧版关键词匹配的对比
 
+| 特性 | 旧版：关键词匹配 | 新版：BM25 检索 |
 |---|---|---|
+| 检索方式 | 简单的关键词包含匹配 | BM25 统计检索 |
+| 召回范围 | 仅 keywords 字段 | name + description + keywords + systemPrompt |
+| 跨语言 | 不支持 | 通过在 keywords 中添加 CJK 词支持 |
+| 分数过滤 | 无（命中即激活） | 双阈值过滤（比值 + 绝对最低） |
 
 匹配到的 Skill 会被 `activate()`，然后 `rebuildSystemPrompt()` 将其完整 prompt 注入 System Prompt。未匹配的 Skill 仍通过 `buildAvailableSkillsHint()` 列出，LLM 可按需调用 `skill` 工具手动激活。
 
@@ -193,4 +198,4 @@ await agent.run('怎么部署这个项目？')
 
 - [Intent Recognition 意图识别](/advanced/intent) — 信号检测 + Skill 关键词匹配
 - [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能（含关键词）
-- - [Memory 记忆](/advanced/memory) — 长期记忆管理
+- [Memory 记忆](/advanced/memory) — 长期记忆管理

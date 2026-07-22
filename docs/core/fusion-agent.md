@@ -28,15 +28,20 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
   ↓
 Final Answer
   ↓
-[VERIFY] (可选，post-hoc — 阻塞):
-  ├── 
+[VERIFY] (可选，阻塞式):
+  ├── Fork 子 Agent 验证答案质量
   ├── score < threshold → 注入反馈 → 一次 LLM 修正
   └── 返回验证/修正后的答案
   ↓ (答案返回给用户)
   ↓ (后台 fire-and-forget，不阻塞)
-[REFLECT] (可选，post-hoc):
-  ├──  反思整个会话
-  └── 记录到 
+[MEMORY] (可选，post-hoc):
+  ├── MemoryReflector 提取长期记忆
+  └── 写入 MemoryManager (.k-memory/)
+  ↓
+[PRECIPITATE] (可选，post-hoc):
+  ├── PrecipitateAgent 提取可复用技能
+  ├── 写入 SKILL.md 文件
+  └── 对比已有 Skills 去重
   ↓
 [MEMORY] (可选，post-hoc):
   ├── MemoryReflector 提取长期记忆
@@ -64,9 +69,10 @@ const agent = new FusionAgent({
   ],
 
   // ── 路由策略 ──
-  routing: 'auto',            // "auto" 
+  routing: 'auto',            // "auto" | "force-plan" | "force-react"
   // ── 计划确认 ──
-  planConfirmation: 'always',  // "always"   // onPlanConfirm: async (plan, reason) => { return true },
+  planConfirmation: 'always',  // "always" | "auto" | "never"
+  // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── Post-hoc 子系统 ──
   // ── 沉淀配置 ──
@@ -81,16 +87,16 @@ const agent = new FusionAgent({
 ```ts
 interface FusionAgentConfig extends AgentConfig {
   // ── 路由策略 ──
-  routing?: 'auto'   // "auto":        LLM 自动分类任务复杂度 (多一次 LLM 调用)
-  // "force-plan":  始终走 Plan → Execute 流程
-  // "force-react": 始终走 ReAct 直接执行
+  /** "auto": LLM 自动分类 | "force-plan": 始终 Plan → Execute | "force-react": 始终 ReAct */
+  routing?: 'auto' | 'force-plan' | 'force-react'
 
   // ── 路由 LLM ──
   routeLLM?: LLMProvider
   // 复杂度分类专用 LLM。不设置时自动走 ModelRouter.forLightweight() 或复用 llm
 
   // ── 计划确认 ──
-  planConfirmation?: 'always'   onPlanConfirm?: PlanConfirmCallback
+  planConfirmation?: 'always' | 'auto' | 'never'
+  onPlanConfirm?: PlanConfirmCallback
   // "always": 始终先让用户确认计划（默认）
   // "auto":   仅当检测到高风险操作（delete, drop, force push 等）时请求确认
   // "never":  直接执行，不确认
@@ -105,7 +111,8 @@ interface FusionAgentConfig extends AgentConfig {
   replanThreshold?: number              // (默认: 2，设为 0 禁用)
 
   // ── 沉淀配置 ──
-  precipitation?: 'off'   precipitationMaxIterations?: number   // (默认: 15)
+  precipitation?: 'off' | 'post-hoc'
+  precipitationMaxIterations?: number   // (默认: 15)
 }
 ```
 
@@ -140,15 +147,12 @@ const agent = new FusionAgent({
 
 Fusion Agent 内置四个 post-hoc 子系统。**Verification 是阻塞式的**，在 answer 返回前验证/修正；其余三个在 answer 返回后 fire-and-forget，失败不影响主流程。
 
-### 
+### 反思（Reflection）
 
-```ts
-```
-
-执行完成后，Fork 一个 `` 对整个会话进行反思：
+执行完成后，Fork 一个 `ReflectionForkAgent` 对整个会话进行反思：
 
 - 分类问题: `reasoning_error`, `tool_misuse`, `missed_optimization`, `incomplete_answer`, `hallucination`, `context_mismanagement`
-- 记录到 
+- 记录到 Error Notebook 供后续会话参考
 
 ### 记忆提取
 
@@ -169,7 +173,7 @@ precipitation: 'post-hoc'  // 开启
 - 踩坑后成功（`consecutiveFailures >= 2`）：框架自动检测
 - 用户说"记住"：输入关键词匹配
 
-详见 [Precipitation 沉淀](/advanced/precipitation)、
+详见 [Precipitation 沉淀](/advanced/precipitation)。
 ## 计划确认
 
 通过 `planConfirmation` 和 `onPlanConfirm` 实现人机协作：
@@ -189,7 +193,10 @@ const agent = new FusionAgent({
 
 在 `"auto"` 模式下，当计划中包含**高风险操作**（`delete`, `drop`, `force push`, `rm -rf` 等）时，自动请求用户确认。**低风险操作**（`deploy`, `release`, `migrate`, `reset`）不会触发确认——这些被视为常规操作。
 
+| 操作 | 风险级别 | 说明 |
 |----------|-----------|----------|
+| `delete`, `drop`, `force push`, `rm -rf` | 高风险 | 始终触发确认 |
+| `deploy`, `release`, `migrate`, `reset` | 低风险 | 不触发确认 |
 
 如果用户说 `"deploy the app but don't delete old files"`，`"delete"` 所在的句子含否定标记 `"don't"`，被排除。`"deploy"` 属于低风险，不触发确认。最终 `riskLevel = "low"` → 不确认。
 
@@ -250,5 +257,5 @@ for await (const chunk of agent.stream('请分析项目代码质量')) {
 ## 下一步
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理并行编排
-- - [Memory 记忆](/advanced/memory) — 长期记忆系统
+- [Memory 记忆](/advanced/memory) — 长期记忆系统
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量

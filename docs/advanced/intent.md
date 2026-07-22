@@ -6,7 +6,11 @@ Intent Recognition 系统在 Agent 执行前对用户输入做**零 LLM 开销**
 
 Agent 框架有三种行为控制方式：
 
+| 方式 | 特点 | 成本 |
 |------|------|---------|
+| 配置开关 | 确定性，但死板 | 零 |
+| 意图识别 | 正则匹配，零 LLM 开销 | 零 |
+| LLM 决策 | 灵活，但昂贵 | Token + 延迟 |
 
 配置开关是死的（mode: "off" → 永不触发），LLM 决策是贵的（每次都要消耗 Token 和等待 LLM 响应）。意图识别填补了中间地带——**当用户输入已经包含了明确信号时，零成本做出反应**。
 
@@ -55,7 +59,11 @@ interface UserSignals {
 
 `riskLevel` 替代了旧版的 `hasRiskyOps: boolean`，提供三级风险：
 
+| 级别 | 含义 | 触发条件 |
 |------|--------|------|
+| `"none"` | 无风险 | 无风险关键词，或被否定排除 |
+| `"low"` | 低风险 | 低风险关键词（deploy, release 等） |
+| `"high"` | 高风险 | 高风险关键词（delete, drop, rm -rf 等） |
 
 #### 否定感知
 
@@ -94,7 +102,11 @@ Latin（英文）和 CJK（中日韩）分词采用不同策略：
 - **CJK**：`String.includes()` 子串匹配（CJK 无空格分词，`\b` 对非 `\w` 字符无效）
 - 同时收录简繁体变体（`阅读` + `閱讀`，`写` + `寫` 等）
 
+| 策略 | 说明 | 示例 |
 |------|-----------|-----------|
+| Latin | `\b` 词首锚定 + 词干匹配 | `fix` → `fixes`, `fixing` |
+| CJK | `String.includes()` 子串 | `修复` → `修复bug`, `请修复` |
+| 简繁体 | 同时收录变体 | `阅读` + `閱讀` |
 
 ### 复杂度预估
 
@@ -102,11 +114,20 @@ Latin（英文）和 CJK（中日韩）分词采用不同策略：
 
 **评分因子**（每满足一项 +1 分）：
 
+| 因子 | 说明 |
 |------|------|
+| 多文件/目录 | 输入涉及 3 个以上文件或目录 |
+| 多步骤 | 输入包含多个动词/动作 |
+| 代码修改 | 要求修改或编写代码 |
+| 关键词 | 包含 "refactor", "migrate", "architecture" 等 |
 
 **阈值**：
 
-|------|--------|------|
+| 分数 | 复杂度 |
+|------|--------|
+| 0-1 | `"simple"` |
+| 2-3 | `"moderate"` |
+| 4+ | `"complex"` |
 
 ```ts
 detectSignals("read auth.ts").complexity     // "simple"
@@ -120,7 +141,11 @@ detectSignals("Refactor the entire auth system. Migrate from JWT to session-base
 
 ### 触发规则
 
-|------|---------|------|
+| 信号 | 触发的行为 |
+|------|---------|
+| `wantsRemember` | 强制 Precipitation + MemoryReflection |
+| `riskLevel: "high"` | Fusion planConfirmation 自动请求确认 |
+| `scenarios` | 注入场景匹配的 Skill / Error Notebook 条目 |
 
 ### wantsRemember vs mode 配置
 
@@ -134,7 +159,10 @@ if (this.inputSignals.wantsRemember) {
 }
 ```
 
+| mode | `wantsRemember = true` | `wantsRemember = false` |
 |------|--------|---------------|
+| `"post-hoc"` | 触发两种 | 触发两种 |
+| `"off"` | 触发两种 | 不触发 |
 
 ### hard-won success（踩坑后成功）
 
@@ -174,9 +202,9 @@ Skill: "test-writer"  keywords: ["测试", "单元测试"]
 
 未匹配的 Skill 和 Memory 仍走渐进式披露路径——`buildAvailableSkillsHint()` 和 `buildMemoryPrompt()` 列出剩余项，LLM 按需调用 `skill` / `recall` 工具。
 
-## 场景驱动的
+## 场景驱动的 Error Notebook
 
-检测到的场景不仅用于分类，还直接影响
+检测到的场景不仅用于分类，还直接影响 Error Notebook 的条目注入：
 
 ```ts
 // Agent 基类 buildSystemPrompt() 中：
@@ -184,7 +212,6 @@ this.notebook.buildScenarioPrompt(this.inputSignals.scenarios, 5, 1);
 // 传入多标签场景 → 匹配任一场景的错题条目都会被注入 System Prompt
 ```
 
-详见 
 ## 配置
 
 意图识别无需额外配置，Agent 基类自动执行。相关配置项：
@@ -236,4 +263,4 @@ PrecipitateAgent 自动沉淀时也会生成关键词。
 
 - [Skills 渐进式技能](/advanced/skills) — Skill 定义、关键词、自动激活
 - [Precipitation 沉淀](/advanced/precipitation) — 自动提取技能并生成关键词
-- - [Fusion Agent](/core/fusion-agent) — `planConfirmation` 如何使用 `riskLevel`
+- [Fusion Agent](/core/fusion-agent) — `planConfirmation` 如何使用 `riskLevel`

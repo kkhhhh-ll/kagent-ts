@@ -58,8 +58,6 @@ interface AgentConfig {
   // ── 子 Agent 专用 LLM Provider（默认复用 llm）──
   subAgentLLM?: LLMProvider
 
-  // ── 
-
   // ── 记忆提取专用 LLM Provider（默认复用 llm）──
   memoryReflectorLLM?: LLMProvider
 
@@ -206,7 +204,11 @@ const agent = new ReActAgent({
 
 ## 环境变量
 
+| 变量名 | 说明 |
 |--------|------|
+| `OPENAI_API_KEY` | OpenAI API 密钥 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
+| `OPENAI_BASE_URL` | OpenAI API 自定义 Base URL |
 
 ## 下一步
 

@@ -101,7 +101,11 @@ const agent = new FusionAgent({
 
 ## 可用模型
 
+| 模型 | 说明 |
 |---------|------|
+| `claude-opus-4-8` | 最强模型，适合复杂任务 |
+| `claude-sonnet-4-6` | 性能与速度均衡 |
+| `claude-haiku-4-5` | 轻量快速，适合简单任务 |
 
 ## 下一步
 

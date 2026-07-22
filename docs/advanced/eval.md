@@ -125,7 +125,18 @@ console.log(benchmark.generateReport(result, { format: "json" }))      // JSON
 
 10 个检测维度，benchmark 结束后自动对比 baseline：
 
+| 维度 | 检测内容 | 阈值 |
 |------|---------|------|
+| 通过率退化 | case 通过率下降 | ≥ 5pp |
+| 失败数增长 | 单 case 失败数增长 | ≥ 2 |
+| 延迟恶化 | P50/P99 延迟增长 | > 1.5x 且 ≥ 1s |
+| 工具调用数 | 工具调用次数变化 | ± 30% |
+| 熔断触发 | Circuit Breaker 触发次数 | 新增 |
+| 空响应 | 连续空/极短响应 | 新增 |
+| Token 消耗 | Token 使用量变化 | > 2x |
+| 迭代次数 | 平均迭代次数变化 | ± 50% |
+| 错误分布 | 新增错误类型 | 新增 |
+| 计划步骤 | Plan-Solve 步骤数变化 | ± 50% |
 
 ### 结果结构
 
@@ -169,7 +180,11 @@ benchmark.generateReport(result, { format: "json" })
 
 `ciAnnotations()` 自动检测 CI 环境，输出原生注解格式：
 
+| CI 平台 | 输出格式 | 说明 |
 |------|---------|------|
+| GitHub Actions | `::warning` / `::error` 命令 | 自动检测 |
+| GitLab CI | Code Quality JSON | `gl-code-quality-report.json` |
+| 通用 | 纯文本警告 | 降级输出 |
 
 ```ts
 // 自动检测

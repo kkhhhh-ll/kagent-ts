@@ -17,6 +17,7 @@ const router = new ModelRouter({
     model: 'gpt-4o-mini',
   }),
 
+  reflection: new OpenAIProvider({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o',
   }),
@@ -29,6 +30,7 @@ const router = new ModelRouter({
     model: 'gpt-4o-mini',
   }),
 
+  verification: new AnthropicProvider({
     apiKey: process.env.ANTHROPIC_API_KEY!,
     model: 'claude-haiku-4-5-20251001',
   }),
@@ -41,7 +43,15 @@ const router = new ModelRouter({
 
 ## 路由类型
 
+| 路由 | 用途 | 默认值 |
 |------|------|----------|
+| `main` | 主循环（必填） | - |
+| `subAgent` | 子代理 | `main` |
+| `reflection` | 反思 | `main` |
+| `memory` | 记忆提取 | `main` |
+| `precipitation` | 技能沉淀 | `main` |
+| `verification` | 答案验证 | `main` |
+| `lightweight` | 轻量任务 | `main` |
 
 ## 配置参数
 
@@ -130,12 +140,17 @@ const agent = new FusionAgent({
 
 所有自动解析的路由：
 
+| 任务 | 路由方法 | 说明 |
 |------|-------------|--------------|
+| 主循环 | `main` | 必填，直接使用 |
+| 子代理 | `forSubAgent()` | 自动检测 ModelRouter |
+| 复杂度分类 | `forLightweight()` | FusionAgent routing: "auto" |
+| 技能沉淀 | `forPrecipitation()` | 自动检测 ModelRouter |
+| 记忆提取 | `forMemory()` | 自动检测 ModelRouter |
 
 ## 与 Reflection / Memory 集成
 
-Reflection（
-无需额外的 Hook：
+Reflection 和 Memory 子系统可通过 `ModelRouter` 自动路由到专用模型，无需额外的 Hook：
 
 ```ts
 const router = new ModelRouter({
@@ -151,7 +166,7 @@ const agent = new ReActAgent({
 })
 ```
 
-Memory 提取可通过 `memoryReflectorLLM` 指定独立模型；
+Memory 提取可通过 `memoryReflectorLLM` 指定独立模型；Reflection 同理可通过 `reflectionLLM` 配置。
 
 ## 结合 Fallback
 
@@ -186,5 +201,5 @@ const router = new ModelRouter({
 
 - [Token Budget](/llm/token-budget) — 控制会话 Token 消耗
 - [Fallback Provider](/llm/fallback) — 主备自动切换
-- - [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
+- [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
 - [Sub-Agent 子代理](/advanced/subagents) — 子代理的详细配置

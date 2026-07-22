@@ -163,7 +163,7 @@ const agent = new ReActAgent({
 
 详见 [Trace 追踪](/advanced/trace)。
 
-### 
+### MemoryReflection Hook
 
 AgentConfig 直接开启，无需额外的 Hook：
 
@@ -177,7 +177,8 @@ const agent = new ReActAgent({
 两个子系统都是 post-hoc（执行后）模式，在 Agent 返回 answer 之前自动触发，
 best-effort，失败不影响主流程。
 
-详见 
+详见 [Memory 记忆](/advanced/memory) 和 [Precipitation 沉淀](/advanced/precipitation)。
+
 ### ToolCallEvaluator
 
 `ToolCallEvaluator` 用于收集工具调用指标：

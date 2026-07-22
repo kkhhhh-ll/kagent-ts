@@ -29,8 +29,6 @@ import {
   PrecipitateAgent,
   // Intent
   detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt,
-  // Verification
-  ,
   // MCP
   McpClientManager, McpConnectionError,
   // RAG
@@ -40,10 +38,6 @@ import {
   SubAgentManager, SubAgentLoader,
   // Memory
   MemoryManager,
-  // Reflection
-  , 
-  // Preferences & Rules
-
   // Git
   GitWorktreeManager, GitWorktreeError,
   // Security
@@ -64,7 +58,14 @@ import {
 
 ## 模块导航
 
+| 模块 | 说明 | 链接 |
 |------|------|------|
+| Agent | ReAct / Plan-Solve / Fusion / Orchestrator | [API - Agent](/api/agent) |
+| LLM | OpenAI / Anthropic / Fallback / Rate Limiter / Model Router | [API - LLM](/api/llm) |
+| Tools | ToolRegistry / CircuitBreaker / Validation / Filters | [API - Tools](/api/tools) |
+| Messages | Message / Role / ToolCall 类型 | [API - Messages](/api/messages) |
+| Session | SessionManager / Checkpoint 持久化 | [API - Session](/api/session) |
+| Context | ContextManager / ProgressiveCompressor | [API - Context](/api/context) |
 
 ## 主要类型一览
 
@@ -110,15 +111,15 @@ type BreakerState / BreakerStatus / CircuitBreakerConfig
 // 意图识别
 type UserSignals / SkillMatch
 
-type VerificationResult / VerificationInput
-type Config
-
 // 反思 & 记忆 & 沉淀
-type Config / ReflectionInput / ReflectionFinding
+type ReflectionFinding
 type 
 type MemoryReflectorConfig / MemoryReflectionInput / ExtractedMemory
 type Memory / MemoryType
 type PrecipitateAgentConfig / PrecipitationInput / SkillCandidate
+
+// 意图识别
+type UserSignals / SkillMatch
 
 // 会话
 type SessionState / SessionStatus / AgentType
@@ -147,7 +148,9 @@ type Regression / Improvement / BenchmarkSummary / BenchmarkResult
 type TraceLoggerConfig / AgentTraceEvent / AgentTraceEventType
 
 // 偏好 & 规则
-type Preferences / 
+type Preferences / Rule
+
+```
 ```
 
 ## 下一步

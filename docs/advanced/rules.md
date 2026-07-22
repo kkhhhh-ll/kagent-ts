@@ -2,8 +2,6 @@
 
 项目规则（Project Rules）是用户显式编写的项目级约束和约定，Agent 在每次对话开始时自动加载并遵循。不同于 [Memory](/advanced/memory)（由 LLM 发现和写入），Rules 完全由用户掌控。
 
-## 与 Preferences 的区别
-
 ## 默认目录结构
 
 Agent 默认从 `.kagent/rules/` 目录加载规则，每个 `.md` 文件作为一个规则 section：
@@ -91,4 +89,3 @@ class ProjectRules {
 
 - [Memory 记忆](/advanced/memory) — LLM 自动发现和写入的长期记忆
 - [安全防护](/advanced/security) — 了解规则注入的安全防御机制
-- 

@@ -23,7 +23,8 @@ interface Tool {
 interface ToolResult {
   success: boolean
   content: string
-  severity: "success"   errorCode: ToolErrorCode
+  severity: "success" | "retryable" | "fatal"
+  errorCode: ToolErrorCode
 }
 
 enum ToolErrorCode {
@@ -51,7 +52,8 @@ toolSuccess(content: string): ToolResult
 toolError(
   errorCode: ToolErrorCode,
   content: string,
-  severity?: "retryable" ): ToolResult
+  severity?: "retryable" | "fatal"
+): ToolResult
 ```
 
 ---
@@ -70,7 +72,8 @@ const registry = new ToolRegistry()
 class ToolRegistry {
   register(tool: Tool): void
   registerMany(tools: Tool[]): void
-  getTool(name: string): Tool   getTools(): Tool[]
+  getTool(name: string): Tool | undefined
+  getTools(): Tool[]
   remove(name: string): boolean
   removeMany(names: string[]): void
   has(name: string): boolean
@@ -78,7 +81,9 @@ class ToolRegistry {
   get toolNames(): string[]
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
   filter(filter: ToolFilter): ToolRegistry
-  getErrorTracker(): ToolErrorTracker   getBreakerStatus(name: string): BreakerStatus   getAllBreakerStatuses(): BreakerStatus[]
+  getErrorTracker(): ToolErrorTracker
+  getBreakerStatus(name: string): BreakerStatus
+  getAllBreakerStatuses(): BreakerStatus[]
   resetBreaker(name: string): void
   resetAllBreakers(): void
 }
@@ -168,7 +173,7 @@ class ToolOutputTruncator {
 
 会话内的工具失败链追踪（纯内存，无持久化）。用于支撑 `list_errors` 工具的实时查询。
 
-> **注意**：跨会话的错误学习和规则注入请使用 [
+> **注意**：跨会话的错误学习和规则注入请使用 [Memory 记忆](/advanced/memory) 系统。
 
 ```ts
 import { ToolErrorTracker, categorizeError } from 'kagent-ts'
@@ -193,7 +198,8 @@ class ToolErrorTracker {
 
 ```ts
 interface TraceEvent {
-  type: "failure"   timestamp: string
+  type: "failure" | "recovery" | "analysis"
+  timestamp: string
   error?: string
   attemptNumber?: number
   retriesRemaining?: number

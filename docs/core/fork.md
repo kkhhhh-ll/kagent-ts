@@ -4,7 +4,12 @@
 
 ## 为什么用 Fork？
 
+| 特性 | Fork | Sub-Agent |
 |---|---|---|
+| 启动方式 | 函数调用 `forkAgent()` | SubAgentManager.spawn() |
+| 隔离级别 | 无（内联执行） | 独立 Agent 实例 |
+| 工具集 | 强制只读白名单 | 可配置 |
+| 适用场景 | 轻量后处理 | 复杂子任务 |
 
 Fork 适合**确定性的、小范围的**任务——比如后处理分析、数据提取、格式转换。它不依赖 LLM 决策，由代码控制，确定性强。
 
@@ -119,7 +124,11 @@ if (options.tools && options.tools.length > 0) {
 
 **三道防线**：
 
-|------|------|------|
+| 防线 | 说明 |
+|------|------|
+| ① 白名单过滤 | 运行时强制只允许 `read_file` / `grep_search` |
+| ② Fork 无写入工具 | 即使绕过白名单，fork 实例也没有注册写工具 |
+| ③ 只读约束 | Fork Agent 的 prompt 明确约束为只读角色 |
 
 即使白名单被绕过（如有人伪造了名为 `read_file` 的写工具），防线 ② 和 ③ 仍提供额外保护层。
 
@@ -188,7 +197,11 @@ const result = await forkAgent(input, {
 
 生成的 HTML trace 文件分为三个独立区域：
 
+| 区域 | 内容 | 标记 |
 |------|------|------|
+| 主 Agent Timeline | 主循环的 LLM/工具调用 | - |
+| 🍴 Fork Traces | Fork 子任务的完整时间线 | `kind: "fork"` |
+| 🤖 Sub-Agent Traces | 子 Agent 的完整时间线 | `kind: "subagent"` |
 
 Fork 和 Sub-Agent 在 trace HTML 中**分区域展示**，不会混在一起。Fork 标记 `kind: "fork"`，Sub-Agent 标记 `kind: "subagent"`。
 

@@ -245,6 +245,11 @@ queued → cancelled (从等待队列中移除)
 
 子代理被构造时自动应用以下限制：
 
+- **独立上下文**：不继承主 Agent 的对话历史
+- **受限工具**：仅能使用 AGENT.md 中声明的工具
+- **无子代理**：子代理不能再 spawn 子代理（防止无限递归）
+- **安全隔离**：`safeForSubAgent: false` 的 hook 自动过滤
+
 ## 类型定义
 
 ```ts
@@ -265,9 +270,12 @@ interface SubAgentResult {
   durationMs: number             // 执行时长（ms）
 }
 
-type RunStatus = "queued" 
+type RunStatus = "queued" | "running" | "completed" | "error" | "cancelled"
+
 type CancelResult =
-    ```
+  | { cancelled: true; wasRunning: boolean }
+  | { cancelled: false; reason: "not_found" | "already_completed" }
+```
 
 ## 异步执行流程
 
@@ -393,7 +401,8 @@ const agent = new ReActAgent({
 
 - **静态对象**：所有子 Agent 共享同一套 hook
 - **数组**：传入多个 hook
-- **工厂函数**：`(name: string, runId: string) => AgentHooks 
+- **工厂函数**：`(name: string, runId: string) => AgentHooks | AgentHooks[]`
+
 ### 安全防护
 
 标记了 `safeForSubAgent: false` 的 hook 会被 `SubAgentManager` 自动过滤：
@@ -409,7 +418,7 @@ const unsafeHook = {
 
 ## Sub-Agent vs Fork
 
-如果不需要完整工具集或工作区隔离，考虑使用更轻量的 [Fork](/core/fork)：
+如果不需要完整工具集或工作区隔离，考虑使用更轻量的 [Fork](/core/fork)。
 
 ## 下一步
 
