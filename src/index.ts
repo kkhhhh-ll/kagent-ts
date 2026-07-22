@@ -256,7 +256,7 @@ export type {
 } from "./reflection/memory-reflector";
 // Intent — user signal detection + skill keyword matching
 export { detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt } from "./intent";
-export type { UserSignals, SkillMatch, AgentScenario, RiskLevel, TaskComplexity } from "./intent";
+export type { UserSignals, SkillMatch, RiskLevel } from "./intent";
 
 // Precipitation — post-execution skill extraction
 export { PrecipitateAgent } from "./precipitation/precipitate-agent";

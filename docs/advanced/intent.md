@@ -1,6 +1,6 @@
 # Intent Recognition 意图识别
 
-Intent Recognition 系统在 Agent 执行前对用户输入做**零 LLM 开销**的信号检测和关键词匹配，提取三类信息：**风险等级、任务场景、复杂度预估**，同时决定哪些 Skill 应该提前激活。
+Intent Recognition 系统在 Agent 执行前对用户输入做**零 LLM 开销**的信号检测和关键词匹配，提取两类信息：**记住意图、风险等级**，同时决定哪些 Skill 应该提前激活。
 
 ## 为什么需要？
 
@@ -20,9 +20,7 @@ Agent 框架有三种行为控制方式：
 用户输入 → Agent.run()
   ├── detectInputSignals(input)               ← 正则匹配（< 1ms）
   │     ├── wantsRemember → 强制触发 Precipitation + MemoryReflection
-  │     ├── riskLevel     → "none" / "low" / "high"（否定感知）
-  │     ├── scenarios[]   → 多标签任务场景（0–N 个）
-  │     └── complexity    → "simple" / "moderate" / "complex"
+  │     └── riskLevel     → "none" / "low" / "high"（否定感知）
   │
   ├── matchInputContext(input)                ← BM25 检索 + 记忆检索（< 1.5ms）
   │     ├── 命中 Skill → activate → rebuildSystemPrompt → LLM 即刻可见
@@ -43,15 +41,11 @@ Agent 框架有三种行为控制方式：
 ### 信号类型
 
 ```ts
-export type RiskLevel = "none" 
-export type TaskComplexity = "simple" 
-export type AgentScenario =
+export type RiskLevel = "none" | "low" | "high";
 
 interface UserSignals {
   wantsRemember: boolean;       // 用户明确要求记住/保存
   riskLevel: RiskLevel;         // 风险分级（否定感知）
-  scenarios: AgentScenario[];   // 多标签任务场景（0–N 个）
-  complexity: TaskComplexity;   // 基于表面特征的任务复杂度预估
 }
 ```
 
@@ -81,71 +75,12 @@ detectSignals("don't delete files. Drop the table.").riskLevel // "high" — 只
 
 否定是**句子级别**的——只有同一句中的风险关键词被排除。
 
-### 任务场景（多标签）
-
-`scenarios` 从旧的单个 `scenario: AgentScenario 
-```ts
-// 单个场景
-detectSignals("debug the auth bug").scenarios
-// → ["debugging"]
-
-// 多个场景——先匹配先赢的时代结束了
-detectSignals("find the bug in auth.ts and fix it, then deploy").scenarios
-// → ["debugging", "file-search", "code-write", "deployment"]
-```
-
-#### 匹配策略
-
-Latin（英文）和 CJK（中日韩）分词采用不同策略：
-
-- **Latin**：`(?:^|\s)` 词首锚定正则，词干匹配（`bug` 匹配 `bugs`，`writ` 匹配 `writes`/`writing`，`creat` 匹配 `creates`/`creating`）
-- **CJK**：`String.includes()` 子串匹配（CJK 无空格分词，`\b` 对非 `\w` 字符无效）
-- 同时收录简繁体变体（`阅读` + `閱讀`，`写` + `寫` 等）
-
-| 策略 | 说明 | 示例 |
-|------|-----------|-----------|
-| Latin | `\b` 词首锚定 + 词干匹配 | `fix` → `fixes`, `fixing` |
-| CJK | `String.includes()` 子串 | `修复` → `修复bug`, `请修复` |
-| 简繁体 | 同时收录变体 | `阅读` + `閱讀` |
-
-### 复杂度预估
-
-`complexity` 基于输入的表面特征进行累计评分，为零 LLM 成本的任务复杂度预估：
-
-**评分因子**（每满足一项 +1 分）：
-
-| 因子 | 说明 |
-|------|------|
-| 多文件/目录 | 输入涉及 3 个以上文件或目录 |
-| 多步骤 | 输入包含多个动词/动作 |
-| 代码修改 | 要求修改或编写代码 |
-| 关键词 | 包含 "refactor", "migrate", "architecture" 等 |
-
-**阈值**：
-
-| 分数 | 复杂度 |
-|------|--------|
-| 0-1 | `"simple"` |
-| 2-3 | `"moderate"` |
-| 4+ | `"complex"` |
-
-```ts
-detectSignals("read auth.ts").complexity     // "simple"
-detectSignals("Look at auth.ts, user.ts, config.ts. Fix the types. Write tests.")
-  .complexity  // "moderate"
-detectSignals("Refactor the entire auth system. Migrate from JWT to session-based...")
-  .complexity  // "complex"
-```
-
-> **注意**：`complexity` 目前仅作为前瞻性信号，尚未用于路由决策。未来可用于自动选择 Agent 范式（简单任务 → ReAct，复杂任务 → Plan-Solve/Fusion）。
-
 ### 触发规则
 
 | 信号 | 触发的行为 |
 |------|---------|
 | `wantsRemember` | 强制 Precipitation + MemoryReflection |
 | `riskLevel: "high"` | Fusion planConfirmation 自动请求确认 |
-| `scenarios` | 注入场景匹配的 Skill / Error Notebook 条目 |
 
 ### wantsRemember vs mode 配置
 
@@ -202,16 +137,6 @@ Skill: "test-writer"  keywords: ["测试", "单元测试"]
 
 未匹配的 Skill 和 Memory 仍走渐进式披露路径——`buildAvailableSkillsHint()` 和 `buildMemoryPrompt()` 列出剩余项，LLM 按需调用 `skill` / `recall` 工具。
 
-## 场景驱动的 Error Notebook
-
-检测到的场景不仅用于分类，还直接影响 Error Notebook 的条目注入：
-
-```ts
-// Agent 基类 buildSystemPrompt() 中：
-this.notebook.buildScenarioPrompt(this.inputSignals.scenarios, 5, 1);
-// 传入多标签场景 → 匹配任一场景的错题条目都会被注入 System Prompt
-```
-
 ## 配置
 
 意图识别无需额外配置，Agent 基类自动执行。相关配置项：
@@ -232,18 +157,6 @@ this.notebook.buildScenarioPrompt(this.inputSignals.scenarios, 5, 1);
 1. 向 `UserSignals` 接口添加新字段
 2. 添加匹配逻辑到 `detectSignals()` 函数
 3. 在对应 Agent 的 `run()` 中消费新信号
-
-### 添加新场景
-
-在 `SCENARIO_PATTERNS` 数组中添加新条目：
-
-```ts
-{
-  latin: ["keyword1", "stem2"],
-  cjk: ["关键词1", "關鍵詞1"],
-  scenario: "new-scenario",
-}
-```
 
 ### Skill 添加关键词
 

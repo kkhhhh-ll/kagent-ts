@@ -10,8 +10,6 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
 [Intent] 信号检测 + Skill 关键词匹配（零 LLM 开销）
   ├── wantsRemember → 强制触发沉淀/记忆
   ├── riskLevel    → "none" / "low" / "high"（否定感知）
-  ├── scenarios[]  → 多标签任务场景
-  ├── complexity   → 复杂度预估
   └── 匹配到 Skill → 自动激活注入 System Prompt
   ↓
 [ROUTE] 复杂度分类:

@@ -488,7 +488,7 @@ export abstract class Agent {
   protected memoryReflectorLLM?: LLMProvider;
 
   /** Signals detected from the current run's user input. */
-  protected inputSignals: UserSignals = { wantsRemember: false, riskLevel: "none", scenarios: [], complexity: "simple" };
+  protected inputSignals: UserSignals = { wantsRemember: false, riskLevel: "none" };
 
   /** Skills auto-activated by BM25 retrieval (before LLM involvement). */
   protected autoActivatedSkills: RetrievedSkill[] = [];
@@ -1949,7 +1949,7 @@ export abstract class Agent {
     }
     this.logger.info(
       "Intent",
-      `Signals detected — risk: ${this.inputSignals.riskLevel}, scenarios: [${this.inputSignals.scenarios.join(", ") || "none"}], complexity: ${this.inputSignals.complexity}`,
+      `Signals detected — risk: ${this.inputSignals.riskLevel}, wantsRemember: ${this.inputSignals.wantsRemember}`,
     );
   }
 
