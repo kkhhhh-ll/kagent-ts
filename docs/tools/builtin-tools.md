@@ -4,23 +4,7 @@ kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执
 
 ## 工具列表总览
 
-| 工具 | 说明 | 是否需要审批 |
 |------|------|:---:|
-| `ReadFileTool` | 读取文件内容 | |
-| `WriteFileTool` | 写入文件 | |
-| `EditFileTool` | 精确字符串替换编辑 | |
-| `GrepSearchTool` | 正则内容搜索 (ripgrep) | |
-| `GlobSearchTool` | 文件名模式匹配 | |
-| `BashTool` | 执行 Shell 命令 | ⚠️ |
-| `WebFetchTool` | 抓取 URL 内容 | |
-| `SkillTool` | 激活渐进式 Skill | |
-| `SearchKnowledgeTool` | 语义搜索 RAG 知识库 | |
-| `ListKnowledgeDocumentsTool` | 列出已索引的文档 | |
-| `RememberTool` | 写入长期记忆 | |
-| `RecallTool` | 检索长期记忆 | |
-| `ListSubagentsTool` | 列出可用子代理 | |
-| `SpawnSubagentTool` | 派发子代理任务 | |
-| `ListErrorsTool` | 列出工具错误追踪 | |
 
 ## 注册方式
 

@@ -63,8 +63,7 @@ agent.cancel()
 
 ```ts
 const result = agent.cancelSubAgent('code-analyzer_3_1720000000000')
-// { cancelled: true, wasRunning: true } | { cancelled: false, reason: "not_found" }
-```
+// { cancelled: true, wasRunning: true } ```
 
 ### `reset(): void`
 

@@ -16,28 +16,23 @@ interface ReActAgentConfig extends AgentConfig {
   maxIterations?: number
 
   /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
-  verification?: "off" | "post-hoc"
 
-  /** 错题本反思模式 (默认: "off") — fire-and-forget */
-  reflection?: "off" | "post-hoc"
+  /** 
 
   /** 反思子 Agent 最大迭代次数 (默认: 6) */
-  reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" | "post-hoc"
-
+  memoryReflection?: "off" 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 
-  /** ErrorNotebook 实例（可选，不传自动创建） */
-  notebook?: ErrorNotebook
+  /** 
+  notebook?: 
 }
 ```
 
@@ -69,28 +64,23 @@ interface PlanSolveAgentConfig extends AgentConfig {
   replanThreshold?: number
 
   /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
-  verification?: "off" | "post-hoc"
 
-  /** 错题本反思模式 (默认: "off") — fire-and-forget */
-  reflection?: "off" | "post-hoc"
+  /** 
 
   /** 反思子 Agent 最大迭代次数 (默认: 6) */
-  reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" | "post-hoc"
-
+  memoryReflection?: "off" 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 
-  /** ErrorNotebook 实例（可选，不传自动创建） */
-  notebook?: ErrorNotebook
+  /** 
+  notebook?: 
 }
 ```
 
@@ -109,34 +99,28 @@ const agent = new FusionAgent(config: FusionAgentConfig)
 ```ts
 interface FusionAgentConfig extends AgentConfig {
   /** 路由策略 (默认: "auto") */
-  routing?: "auto" | "force-plan" | "force-react"
-
+  routing?: "auto" 
   /** 复杂度分类专用 LLM Provider（不设置时自动走 ModelRouter.forLightweight()） */
   routeLLM?: LLMProvider
 
   /** 计划确认模式 (默认: "always") */
-  planConfirmation?: "always" | "auto" | "never"
-
+  planConfirmation?: "always" 
   /** 计划确认回调 */
   onPlanConfirm?: PlanConfirmCallback
 
   /** 答案验证模式 (默认: "off") — 继承自 AgentConfig，阻塞式 */
-  verification?: "off" | "post-hoc"
 
-  /** 错题本反思模式 (默认: "off") — fire-and-forget */
-  reflection?: "off" | "post-hoc"
+  /** 
 
   /** 反思子 Agent 最大迭代次数 (默认: 6) */
-  reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" | "post-hoc"
-
+  memoryReflection?: "off" 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
-  /** ErrorNotebook 实例，用于持久化反思结果（可选，不传自动创建） */
-  notebook?: ErrorNotebook
+  /** 
+  notebook?: 
 
   /** 最大迭代次数 (默认: 15) */
   maxIterations?: number
@@ -148,8 +132,7 @@ interface FusionAgentConfig extends AgentConfig {
   replanThreshold?: number
 
   /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 }
@@ -187,8 +170,7 @@ interface OrchestratorAgentConfig extends AgentConfig {
   maxRetriesPerNode?: number
 
   /** 失败处理策略 (默认: "retry-subtree") */
-  failureStrategy?: "retry-subtree" | "retry-all" | "continue"
-}
+  failureStrategy?: "retry-subtree" }
 ```
 
 ---
@@ -218,19 +200,15 @@ interface AgentConfig {
   logger?: Logger                                   // 日志实例（默认: ConsoleLogger）
 
   // ── 生命周期钩子 ──
-  hooks?: AgentHooks | AgentHooks[]
-
+  hooks?: AgentHooks 
   // ── 人工审批 (HITL) ──
   onToolApproval?: ApprovalCallback                 // 工具审批回调
   approvalTimeoutMs?: number                        // 审批超时 (ms)
-  approvalTimeoutStrategy?: "deny" | "allow"       // 超时策略 (默认: "deny")
-
+  approvalTimeoutStrategy?: "deny" 
   // ── 并行执行 ──
   enableParallelToolExecution?: boolean             // 启用并行工具调用
 
   // ── 用户配置 ──
-  preferencesPath?: string                          // 偏好文件路径 (默认: ".kagent/preferences.md")
-  rulesPath?: string                                // 规则文件/目录路径 (默认: ".kagent/rules/")
 
   // ── 记忆 ──
   memoryDir?: string                                // 记忆存储目录 (默认: ".k-memory")
@@ -255,10 +233,8 @@ interface AgentConfig {
 
   /**
    * 子 Agent 的生命周期钩子。
-   * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks | AgentHooks[]。
-   */
-  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
-
+   * 支持静态对象、数组或工厂函数 (name, runId) => AgentHooks    */
+  subAgentHooks?: AgentHooks 
   /**
    * 子 Agent 专用 LLM Provider。
    * 不设置时：如果 llm 是 ModelRouter，则走 forSubAgent()；否则复用主 llm。
@@ -276,31 +252,19 @@ interface AgentConfig {
   skillsDir?: string                                // 技能文件目录
 
   // ── 后处理 ──
-  /** 答案验证模式 (默认: "off") — 阻塞式：验证不通过则自动修正 */
-  verification?: "off" | "post-hoc"
-  /** 验证子 Agent 最大迭代次数 (默认: 3) */
-  verificationMaxIterations?: number
-  /** 验证及格线 0-100 (默认: 70) */
-  verificationThreshold?: number
-  /** 答案验证专用 LLM Provider（不设置时自动走 ModelRouter.forVerification() 或复用 llm） */
-  verificationLLM?: LLMProvider
-
   /** 技能沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 */
+  precipitation?: "off"   /** 沉淀子 Agent 最大迭代次数 */
   precipitationMaxIterations?: number
   /** 技能沉淀专用 LLM Provider（不设置时自动走 ModelRouter.forPrecipitation() 或复用 llm） */
   precipitationLLM?: LLMProvider
 
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
-  memoryReflection?: "off" | "post-hoc"
-  /** 记忆提取子 Agent 最大迭代次数 */
+  memoryReflection?: "off"   /** 记忆提取子 Agent 最大迭代次数 */
   memoryReflectionMaxIterations?: number
   /** 记忆提取专用 LLM Provider（不设置时自动走 ModelRouter.forMemory() 或复用 llm） */
   memoryReflectorLLM?: LLMProvider
 
-  /** 错题本反思专用 LLM Provider（不设置时自动走 ModelRouter.forReflection() 或复用 llm） */
-  reflectionLLM?: LLMProvider
+  /** 
 
   // ── Token 预算 ──
   tokenBudgetConfig?: TokenBudgetConfig             // Token 消耗限制
@@ -316,7 +280,7 @@ type ApprovalCallback = (
 ) => Promise<boolean>
 ```
 
-> **注意**：`maxIterations`、`reflection`、`reflectionMaxIterations`、`notebook` 等 Agent 特有字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中。`verification`、`precipitation`、`memoryReflection` 及其 LLM 配置在 `AgentConfig` 基类中，所有 Agent 共享。
+> **注意**：`maxIterations` 等 Agent 特有字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中。`precipitation`、`memoryReflection` 及其 LLM 配置在 `AgentConfig` 基类中，所有 Agent 共享。
 
 ---
 
@@ -346,18 +310,18 @@ interface AgentHooks {
 
 ---
 
-## VerifyAgent
+## 
 
 ```ts
-import { VerifyAgent } from 'kagent-ts'
+import {  } from 'kagent-ts'
 
-const verifier = new VerifyAgent(config: VerifyAgentConfig)
+const verifier = new (config: Config)
 ```
 
-### VerifyAgentConfig
+### Config
 
 ```ts
-interface VerifyAgentConfig {
+interface Config {
   /** LLM Provider 实例（必填） */
   llm: LLMProvider
 
@@ -371,8 +335,7 @@ interface VerifyAgentConfig {
   logger?: Logger
 
   /** 生命周期钩子，传入 Fork 子 Agent */
-  hooks?: AgentHooks | AgentHooks[]
-}
+  hooks?: AgentHooks }
 ```
 
 ### 方法
@@ -403,4 +366,4 @@ interface VerificationResult {
 - [API - LLM](/api/llm) — LLM Provider API
 - [API - Tools](/api/tools) — Tool 系统 API
 - [API - Messages](/api/messages) — Message 类型 API
-- [Verification 答案验证](/advanced/verification) — 完整文档
+- 

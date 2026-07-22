@@ -45,13 +45,6 @@ reqLog.error("HTTP", "Request failed", { status: 500 });
 
 `LogLevel` 枚举定义了四个级别（按严重程度递增）：
 
-| 级别 | 值 | 含义 |
-| --- | --- | --- |
-| `DEBUG` | 0 | 详细诊断信息，生产环境通常关闭 |
-| `INFO` | 1 | Agent 生命周期和进度信息 |
-| `WARN` | 2 | 非致命问题，运维人员应关注 |
-| `ERROR` | 3 | 致命或接近致命的问题 |
-
 使用时通过 `minLevel` 控制输出最低级别——只有 `level >= minLevel` 的消息才会输出：
 
 ```ts
@@ -91,13 +84,6 @@ logger.info("MyAgent", "任务开始", { taskId: "123" });
 ```
 
 方法 → console 映射：
-
-| 方法 | console 方法 |
-| --- | --- |
-| `debug()` | `console.debug()` |
-| `info()` | `console.log()` |
-| `warn()` | `console.warn()` |
-| `error()` | `console.error()` |
 
 ### SilentLogger
 
@@ -146,8 +132,7 @@ class PinoLogger implements Logger {
     this.bindings = bindings
   }
 
-  private merge(context?: Record<string, unknown>): Record<string, unknown> | undefined {
-    if (Object.keys(this.bindings).length === 0) return context
+  private merge(context?: Record<string, unknown>): Record<string, unknown>     if (Object.keys(this.bindings).length === 0) return context
     return { ...this.bindings, ...context }
   }
 
@@ -200,21 +185,6 @@ class PinoLoggerAdapter implements Logger {
 ## 框架内部的日志标签
 
 各模块使用的 `tag` 前缀，方便日志过滤：
-
-| 模块 | Tag |
-| --- | --- |
-| Session | `"SessionManager"` |
-| Circuit Breaker | `"CircuitBreaker"` |
-| Tool Registry | `"ToolRegistry"` |
-| MCP | `"McpClientManager"` |
-| Context | `"ContextManager"` |
-| Compression | `"ProgressiveCompressor"` |
-| Git Worktree | `"GitWorktreeManager"` |
-| SubAgent | `"SubAgentManager"` |
-| Memory | `"MemoryManager"` |
-| Skills | `"SkillManager"` |
-| RAG | `"RAGManager"` |
-| Fork Agent | `"ForkAgent"` |
 
 ## 下一步
 

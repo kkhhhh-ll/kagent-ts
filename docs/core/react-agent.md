@@ -24,14 +24,14 @@ Observation (观察): 解析工具返回的结果
   ├── 否 → 回到 Thought (下一轮迭代)
   └── 是 → Final Answer (最终答案)
   ↓
-[VERIFY] (可选): Fork VerifyAgent 验证答案正确性
+[VERIFY] (可选): 
   ├── 通过 → 返回答案
   └── 不通过 → 注入反馈 → 一次 LLM 修正 → 返回修正后答案
   ↓ (答案返回给用户)
   ↓ (后台 fire-and-forget, 不阻塞)
 [REFLECT] (可选, post-hoc):
-  ├── ReflectionAgent Fork — 错题本反思
-  └── 持久化 → ErrorNotebook (.error-notebook/)
+  ├── 
+  └── 持久化 → 
   ↓
 [MEMORY] (可选, post-hoc):
   ├── MemoryReflector Fork — 记忆提取
@@ -97,28 +97,23 @@ interface ReActAgentConfig extends AgentConfig {
   maxIterations?: number
 
   /** 答案验证模式 (默认: "off") — 阻塞式 */
-  verification?: "off" | "post-hoc"
 
-  /** 错题本反思模式 (默认: "off") — fire-and-forget */
-  reflection?: "off" | "post-hoc"
+  /** 
 
   /** 反思子 Agent 最大迭代次数 (默认: 6) */
-  reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") */
-  memoryReflection?: "off" | "post-hoc"
-
+  memoryReflection?: "off" 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** 技能沉淀模式 (默认: "off") */
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 
-  /** ErrorNotebook 实例，用于持久化反思结果（可选，不传自动创建） */
-  notebook?: ErrorNotebook
+  /** 
+  notebook?: 
 }
 ```
 
@@ -126,8 +121,7 @@ interface ReActAgentConfig extends AgentConfig {
 
 ReAct Agent 内置以下保护机制：
 
-- **答案验证**: 开启 `verification: "post-hoc"` 后，答案在返回前自动 Fork 独立 Agent 验证正确性与完整性
-- **空响应检测**: 连续 3 次空/极短响应（< 5 字符）后自动终止
+- **答案验证**: 开启 `- **空响应检测**: 连续 3 次空/极短响应（< 5 字符）后自动终止
 - **Token 截断处理**: 当 LLM 响应被 `max_tokens` 截断时，Agent 会注入续写提示
 - **自动 Checkpoint**: 每个迭代步骤后自动保存会话检查点
 - **网络错误恢复**: 网络中断时自动保存 `interrupted` 状态的检查点

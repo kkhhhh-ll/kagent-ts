@@ -58,8 +58,7 @@ console.log(answer)
 ```ts
 interface SessionState {
   sessionId: string
-  agentType: 'react' | 'plan-solve' | 'fusion' | 'orchestrator'
-  status: SessionStatus
+  agentType: 'react'   status: SessionStatus
   systemPrompt: string
   messages: MessageData[]
   planState?: PlanSolveSessionState
@@ -70,8 +69,7 @@ interface SessionState {
   metadata?: Record<string, unknown>
 }
 
-type SessionStatus = "active" | "interrupted" | "completed" | "cancelled"
-```
+type SessionStatus = "active" ```
 
 ## SessionManager API
 
@@ -118,13 +116,12 @@ interface PlanSolveSessionState {
 
 ```ts
 interface FusionSessionState {
-  complexity: "simple" | "complex"
-  routed: boolean
+  complexity: "simple"   routed: boolean
   currentPlan: string[]
   hasPlan: boolean
   completedSteps: number
   consecutiveFailures: number
-  reflectionEnabled: boolean
+
 }
 ```
 
@@ -185,5 +182,4 @@ async function runWithRetry() {
 ## 下一步
 
 - [上下文管理](/advanced/context-compression) — 控制长对话的 Token 使用
-- [Reflection 反思](/advanced/reflection) — 执行后的自我反思
-- [Trace 追踪](/advanced/trace) — 生成执行追踪日志
+- - [Trace 追踪](/advanced/trace) — 生成执行追踪日志

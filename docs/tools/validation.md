@@ -44,7 +44,7 @@ const myTool: Tool = {
     additionalProperties: false,
   },
   async execute(args) {
-    // args 已经通过验证
+
     // ...
   },
 }

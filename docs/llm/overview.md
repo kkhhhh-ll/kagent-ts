@@ -17,15 +17,7 @@ createLLMProvider()         # 工厂函数 (自动检测 Provider 类型)
 
 ## 快速选择
 
-| 你需要... | 使用 |
 |-----------|------|
-| 连接 OpenAI (GPT-4o, GPT-4, etc.) | `OpenAIProvider` |
-| 连接 Anthropic (Claude Sonnet, Opus, etc.) | `AnthropicProvider` |
-| 自动检测 Provider 类型 | `createLLMProvider()` |
-| 主 Provider 失败时自动切换 | `FallbackProvider` |
-| 限制 API 调用频率 | `RateLimitedProvider` |
-| 不同任务用不同模型 | `ModelRouter` |
-| 控制会话 Token 消耗 | `TokenBudget` |
 
 ## 通用接口
 

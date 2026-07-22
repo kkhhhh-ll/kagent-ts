@@ -236,7 +236,6 @@ restored.restoreSessionState(state)
 
 > **注意**：恢复前如果当前实例已有 worktree，`restoreSessionState()` 会输出警告并清空现有注册表。建议先调用 `cleanup()` 清理磁盘资源。
 
-
 ## Orchestrator 集成
 
 在 [Orchestrator Agent](/core/orchestrator-agent) 中，worktree 隔离可以通过配置直接启用，无需手动调用 `GitWorktreeManager`：

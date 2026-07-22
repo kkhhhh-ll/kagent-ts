@@ -65,10 +65,6 @@ interface CompressionConfig {
 
 ```ts
 type CompressionStrategy =
-  | "truncate_large_outputs"     // 第 1 步: 截断大型输出
-  | "drop_old_turns"             // 第 2 步: 删除旧轮次
-  | "clear_aged_read_results"    // 第 3 步: 清除可重现结果
-  | "llm_summarize"              // 第 4 步: LLM 摘要
 
 interface CompressionResult {
   appliedStrategies: CompressionStrategy[]

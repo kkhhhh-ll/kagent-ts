@@ -67,11 +67,7 @@ export interface PlanSolveAgentConfig extends AgentConfig {
   /** Max iterations for the memory reflection sub-agent. Default: 5. */
   memoryReflectionMaxIterations?: number;
 
-  /** Error reflection mode. Default: "off". */
-  reflection?: "off" | "post-hoc";
 
-  /** Max iterations for the reflection sub-agent. Default: 6. */
-  reflectionMaxIterations?: number;
 
 }
 
@@ -101,8 +97,7 @@ export class PlanSolveAgent extends Agent {
   private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
-  private reflectionMode: "off" | "post-hoc";
-  private reflectionMaxIterations: number;
+
 
 
   /** The current plan steps (empty until the plan is created). */
@@ -141,8 +136,7 @@ export class PlanSolveAgent extends Agent {
     this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
-    this.reflectionMode = config.reflection ?? "off";
-    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
+
 
     // Build the full system prompt once all sections are ready
     this.rebuildSystemPrompt();
@@ -205,8 +199,6 @@ export class PlanSolveAgent extends Agent {
       shouldReflectMemory = true;
     }
 
-    // Determine if error reflection should run
-    const shouldReflect = this.reflectionMode === "post-hoc";
 
     // ── Main Plan-Solve loop ────────────────────────────────────────
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -473,40 +465,27 @@ export class PlanSolveAgent extends Agent {
         if (this.checkpointingEnabled) {
           this.saveCheckpoint("completed");
         }
-        // ── Answer verification (blocking, runs before returning) ──────
-        let verifiedAnswer = parsed.answer;
-        if (this.verificationMode === "post-hoc") {
-          try {
-            verifiedAnswer = await this.runVerification(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
-          }
-        }
+        // ── Answer verification removed ───────────────────────────
+        const answer = parsed.answer;
 
-        this.fireOnFinish(verifiedAnswer);
+        this.fireOnFinish(answer);
 
         // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
         if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
             this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
-        // ── Error reflection (fire-and-forget, post-hoc) ───────────────
-        if (shouldReflect) {
-          this.trackBackground(this.runReflection(input, verifiedAnswer)).catch((err: unknown) =>
-            this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
 
-        return verifiedAnswer;
+        return answer;
       }
 
       // ── Initial plan creation ───────────────────────────────────
@@ -689,8 +668,6 @@ export class PlanSolveAgent extends Agent {
       shouldReflectMemory = true;
     }
 
-    // Determine if error reflection should run
-    const shouldReflect = this.reflectionMode === "post-hoc";
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       this._abortController = new AbortController();
@@ -941,38 +918,25 @@ export class PlanSolveAgent extends Agent {
           yield parsed.answer;
         }
 
-        // ── Answer verification (blocking, runs before returning) ──
-        let verifiedAnswer = parsed.answer;
-        if (this.verificationMode === "post-hoc") {
-          try {
-            verifiedAnswer = await this.runVerification(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
-          }
-        }
+        // ── Answer verification removed ───────────────────────────
+        const answer = parsed.answer;
 
-        this.fireOnFinish(verifiedAnswer);
+        this.fireOnFinish(answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
         if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
-          this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
             this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
-        // ── Error reflection (fire-and-forget, post-hoc) ───────────────
-        if (shouldReflect) {
-          this.trackBackground(this.runReflection(input, verifiedAnswer)).catch((err: unknown) =>
-            this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
 
         yield "\n\n[DONE]";
         return;
@@ -1194,59 +1158,4 @@ export class PlanSolveAgent extends Agent {
     }
   }
 
-  // ─── Error Reflection ──────────────────────────────────────────────
-
-  /**
-   * Dispatch error reflection based on mode.
-   * Fire-and-forget — failures are logged but never affect the answer.
-   */
-  private async runReflection(input: string, answer: string): Promise<void> {
-    if (this.reflectionMode === "off") return;
-    if (this.reflectionMode === "post-hoc") {
-      await this.reflectPostHoc(input, answer);
-    }
-  }
-
-  /**
-   * Fork a ReflectionAgent to review the session for errors and
-   * persist findings to the ErrorNotebook.
-   */
-  private async reflectPostHoc(input: string, answer: string): Promise<void> {
-    const { ReflectionAgent } = await import("../reflection/reflection-agent.js");
-    const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
-
-    // Auto-create notebook if not provided
-    const notebook = this.notebook ?? new NB();
-
-    try {
-      const reflector = new ReflectionAgent({
-        llm: this.reflectionLLM ?? this.llm,
-        notebook,
-        maxIterations: this.reflectionMaxIterations,
-        hooks: this.hooks,
-      });
-
-      const entries = await reflector.reflect({
-        userQuery: input,
-        finalAnswer: answer,
-        conversation: this.contextManager.getContextMessages(),
-        sessionId: this.getSessionId(),
-        scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
-        errorTraces: this.errorTracker?.getAllTraces(),
-        complexity: this.inputSignals.complexity,
-      });
-
-      if (entries.length > 0) {
-        this.logger.info(
-          "Reflection",
-          `Recorded ${entries.length} finding(s) to the error notebook.`,
-        );
-      }
-    } catch (err: unknown) {
-      this.logger.warn(
-        "Reflection",
-        `Post-hoc reflection failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
 }

@@ -47,8 +47,7 @@ class ToolRegistry {
   registerMany(tools: Tool[]): void
 
   /** 按名称查找工具 */
-  getTool(name: string): Tool | undefined
-
+  getTool(name: string): Tool 
   /** 获取所有工具 */
   getTools(): Tool[]
 

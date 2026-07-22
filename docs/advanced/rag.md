@@ -82,8 +82,7 @@ interface RAGConfig {
 
   /** Re-rank 精排器（默认: CrossEncoderReRanker，本地 BGE-Reranker ONNX 模型）。
    *  传 null 显式禁用精排；也可传 LLMReRanker 使用 LLM 打分。 */
-  reRanker?: ReRanker | null
-}
+  reRanker?: ReRanker }
 ```
 
 ## 检索模式
@@ -185,16 +184,6 @@ class CohereReRanker implements ReRanker {
 
 ### 精排方案对比
 
-| 维度 | CrossEncoderReRanker（默认） | LLMReRanker | 外部 API |
-| --- | --- | --- | --- |
-| **原理** | Cross-Encoder（query+doc 联合编码） | LLM prompt 打分 | 专用 rerank 模型 |
-| **速度** | 快（本地 ONNX 推理） | 慢（网络往返） | 快（专用服务） |
-| **成本** | 免费 | LLM token 计费 | API 按调用计费 |
-| **精度** | 高（专为 rerank 训练） | 中高 | 高 |
-| **首次使用** | 下载 ONNX 模型（~100 MB） | 无 | 需要 API key |
-| **离线可用** | ✅ | ❌ | ❌ |
-| **适用场景** | 通用，默认推荐 | 不想下载模型 / 已有 LLM | 高吞吐生产环境 |
-
 ## 向量存储
 
 ### InMemoryVectorStore（默认）
@@ -232,12 +221,6 @@ class MyVectorStore implements VectorStore {
 
 ## 支持的文档格式
 
-| 格式 | 说明 |
-| ---- | ---- |
-| `.md` | Markdown 文件 |
-| `.txt` | 纯文本文件 |
-| `.json` | JSON 文件（按纯文本处理） |
-
 - 扫描 `documentsDir` **递归遍历子目录**
 - 跳过以 `.` 开头的文件和目录
 - 跳过超过 5 MiB 的文件
@@ -246,13 +229,6 @@ class MyVectorStore implements VectorStore {
 ## 文本切分策略
 
 切分器按**优先级从高到低**查找切分边界，确保不会在句子中间截断：
-
-| 优先级 | 分隔符 | 示例 |
-| ------ | ------ | ---- |
-| 1 | 段落边界 | `\n\n`（空行） |
-| 2 | 句子结束 | `。！？. ! ?` |
-| 3 | 子句停顿 | `，；、, ; :` |
-| 4 | 兜底硬切 | 按 chunkSize 截断 |
 
 ### Chunk 重叠
 
@@ -279,12 +255,6 @@ const provider = new OpenAIEmbeddingProvider({
 })
 ```
 
-| 模型 | 维度 |
-| ---- | ---- |
-| `text-embedding-3-small` | 1536 |
-| `text-embedding-3-large` | 3072 |
-| `text-embedding-ada-002` | 1536 |
-
 ### 自定义 Provider
 
 实现 `EmbeddingProvider` 接口即可接入本地模型或其他服务：
@@ -310,11 +280,6 @@ class MyEmbeddingProvider implements EmbeddingProvider {
 ## LLM 可用工具
 
 配置 RAG 后，Agent 自动注册两个工具：
-
-| 工具名 | 描述 |
-| ------ | ---- |
-| `search_knowledge` | 语义搜索知识库。参数：`query`（自然语言查询）。返回 top-K 个最相关的 chunk，含源文件路径和相似度分数。 |
-| `list_knowledge_documents` | 列出知识库中所有已索引的文档路径。无参数。 |
 
 ## 与子代理共享
 

@@ -29,14 +29,14 @@ Fusion Agent 是框架中最灵活、最智能的 Agent 范式。它融合了 Re
 Final Answer
   ↓
 [VERIFY] (可选，post-hoc — 阻塞):
-  ├── VerifyAgent Fork — 验证正确性 / 完整性
+  ├── 
   ├── score < threshold → 注入反馈 → 一次 LLM 修正
   └── 返回验证/修正后的答案
   ↓ (答案返回给用户)
   ↓ (后台 fire-and-forget，不阻塞)
 [REFLECT] (可选，post-hoc):
-  ├── ReflectionAgent 反思整个会话
-  └── 记录到 ErrorNotebook
+  ├──  反思整个会话
+  └── 记录到 
   ↓
 [MEMORY] (可选，post-hoc):
   ├── MemoryReflector 提取长期记忆
@@ -64,19 +64,11 @@ const agent = new FusionAgent({
   ],
 
   // ── 路由策略 ──
-  routing: 'auto',            // "auto" | "force-plan" | "force-react"
-
+  routing: 'auto',            // "auto" 
   // ── 计划确认 ──
-  planConfirmation: 'always',  // "always" | "auto" | "never" (默认: "always")
-  // onPlanConfirm: async (plan, reason) => { return true },
+  planConfirmation: 'always',  // "always"   // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── Post-hoc 子系统 ──
-  verification: 'post-hoc',          // "off" | "post-hoc" — 答案验证（阻塞式）
-  verificationThreshold: 75,         // 验证及格线 0-100 (默认: 70)
-  reflection: 'post-hoc',          // "off" | "post-hoc" — 错题本反思（fire-and-forget）
-  memoryReflection: 'post-hoc',    // "off" | "post-hoc" — 记忆提取（fire-and-forget）
-  // notebook: new ErrorNotebook(), // 可选，不传自动创建
-
   // ── 沉淀配置 ──
   skillsDir: './skills',               // 技能存储目录
   precipitation: 'post-hoc',           // "off" | "post-hoc"
@@ -89,8 +81,7 @@ const agent = new FusionAgent({
 ```ts
 interface FusionAgentConfig extends AgentConfig {
   // ── 路由策略 ──
-  routing?: 'auto' | 'force-plan' | 'force-react'
-  // "auto":        LLM 自动分类任务复杂度 (多一次 LLM 调用)
+  routing?: 'auto'   // "auto":        LLM 自动分类任务复杂度 (多一次 LLM 调用)
   // "force-plan":  始终走 Plan → Execute 流程
   // "force-react": 始终走 ReAct 直接执行
 
@@ -99,25 +90,14 @@ interface FusionAgentConfig extends AgentConfig {
   // 复杂度分类专用 LLM。不设置时自动走 ModelRouter.forLightweight() 或复用 llm
 
   // ── 计划确认 ──
-  planConfirmation?: 'always' | 'auto' | 'never'  // (默认: "always")
-  onPlanConfirm?: PlanConfirmCallback
+  planConfirmation?: 'always'   onPlanConfirm?: PlanConfirmCallback
   // "always": 始终先让用户确认计划（默认）
   // "auto":   仅当检测到高风险操作（delete, drop, force push 等）时请求确认
   // "never":  直接执行，不确认
 
-  // ── 答案验证 ──
-  verification?: 'off' | 'post-hoc'     // (默认: "off") — 阻塞式
-  verificationThreshold?: number        // 及格线 0-100 (默认: 70)
-  verificationMaxIterations?: number    // (默认: 3)
-
-  // ── Post-hoc 反思 ──
-  reflection?: 'off' | 'post-hoc'       // 错题本反思 (默认: "off")
-  reflectionMaxIterations?: number      // (默认: 6)
-  notebook?: ErrorNotebook              // 可选，不传自动创建
-
   // ── 记忆提取 ──
-  memoryReflection?: 'off' | 'post-hoc' // (默认: "off")
-  memoryReflectionMaxIterations?: number// (默认: 5)
+  memoryReflection?: 'off' | 'post-hoc'           // (默认: "off")
+  memoryReflectionMaxIterations?: number           // (默认: 5)
 
   // ── 循环控制 ──
   maxIterations?: number                // (默认: 15)
@@ -125,8 +105,7 @@ interface FusionAgentConfig extends AgentConfig {
   replanThreshold?: number              // (默认: 2，设为 0 禁用)
 
   // ── 沉淀配置 ──
-  precipitation?: 'off' | 'post-hoc'    // (默认: "off")
-  precipitationMaxIterations?: number   // (默认: 15)
+  precipitation?: 'off'   precipitationMaxIterations?: number   // (默认: 15)
 }
 ```
 
@@ -161,16 +140,15 @@ const agent = new FusionAgent({
 
 Fusion Agent 内置四个 post-hoc 子系统。**Verification 是阻塞式的**，在 answer 返回前验证/修正；其余三个在 answer 返回后 fire-and-forget，失败不影响主流程。
 
-### 错题本反思
+### 
 
 ```ts
-reflection: 'post-hoc'  // 开启
 ```
 
-执行完成后，Fork 一个 `ReflectionAgent` 对整个会话进行反思：
+执行完成后，Fork 一个 `` 对整个会话进行反思：
 
 - 分类问题: `reasoning_error`, `tool_misuse`, `missed_optimization`, `incomplete_answer`, `hallucination`, `context_mismanagement`
-- 记录到 ErrorNotebook 供后续学习
+- 记录到 
 
 ### 记忆提取
 
@@ -191,8 +169,7 @@ precipitation: 'post-hoc'  // 开启
 - 踩坑后成功（`consecutiveFailures >= 2`）：框架自动检测
 - 用户说"记住"：输入关键词匹配
 
-详见 [Precipitation 沉淀](/advanced/precipitation)、[Reflection 反思](/advanced/reflection) 和 [Memory 记忆](/advanced/memory)。
-
+详见 [Precipitation 沉淀](/advanced/precipitation)、
 ## 计划确认
 
 通过 `planConfirmation` 和 `onPlanConfirm` 实现人机协作：
@@ -212,11 +189,7 @@ const agent = new FusionAgent({
 
 在 `"auto"` 模式下，当计划中包含**高风险操作**（`delete`, `drop`, `force push`, `rm -rf` 等）时，自动请求用户确认。**低风险操作**（`deploy`, `release`, `migrate`, `reset`）不会触发确认——这些被视为常规操作。
 
-| 风险等级 | 关键词示例 | auto 行为 |
 |----------|-----------|----------|
-| `"high"` | `delete`, `drop`, `destroy`, `purge`, `format`, `truncate`, `rm -rf`, `force push`, `hard reset` | **触发确认** |
-| `"low"` | `deploy`, `release`, `publish`, `ship`, `migrate`, `reset` | **不触发确认** |
-| `"none"` | 无风险关键词或全部被否定（如 `"不要删除"`） | 不触发确认 |
 
 如果用户说 `"deploy the app but don't delete old files"`，`"delete"` 所在的句子含否定标记 `"don't"`，被排除。`"deploy"` 属于低风险，不触发确认。最终 `riskLevel = "low"` → 不确认。
 
@@ -237,8 +210,7 @@ const agent = new FusionAgent({
 
   routing: 'auto',
   planConfirmation: 'always',
-  reflection: 'post-hoc',
-  memoryReflection: 'post-hoc',
+    memoryReflection: 'post-hoc',
   maxIterations: 20,
 })
 
@@ -278,6 +250,5 @@ for await (const chunk of agent.stream('请分析项目代码质量')) {
 ## 下一步
 
 - [Orchestrator Agent](/core/orchestrator-agent) — 多代理并行编排
-- [Reflection 反思](/advanced/reflection) — 深入了解反思机制
-- [Memory 记忆](/advanced/memory) — 长期记忆系统
+- - [Memory 记忆](/advanced/memory) — 长期记忆系统
 - [Eval 评估](/advanced/eval) — 评估 Agent 执行质量

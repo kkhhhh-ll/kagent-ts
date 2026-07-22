@@ -125,18 +125,7 @@ console.log(benchmark.generateReport(result, { format: "json" }))      // JSON
 
 10 个检测维度，benchmark 结束后自动对比 baseline：
 
-| 维度 | 检测逻辑 | 粒度 |
 |------|---------|------|
-| passRate | 通过率下降 ≥ threshold | 整体 |
-| PASS→FAIL 翻转 | 上个版本通过、当前版本失败 | 单 case |
-| failureCount | 单 case 失败数增加 ≥ threshold | 单 case |
-| avgDuration | 平均耗时 > baseline × factor 且绝对增量 ≥ minAbs | 整体 |
-| per-tool P50 | 同上，per-tool 粒度 | 单 case / 单工具 |
-| per-tool P99 | 同上 | 单 case / 单工具 |
-| per-tool successRate | 工具成功率下降 ≥ passRateThreshold | 单 case / 单工具 |
-| per-tool avgRetries | 平均重试增加 ≥ failureCountThreshold | 单 case / 单工具 |
-| per-tool circuitBreaker | 熔断次数增加 ≥ 1 | 单 case / 单工具 |
-| FAIL→PASS 改进 | 上个版本失败、当前版本通过 | 单 case |
 
 ### 结果结构
 
@@ -162,9 +151,7 @@ interface BenchmarkSummary {
 interface Regression {
   target: string              // 退化项（工具名 / 指标名 / 用例名）
   metric: string              // 变化的指标
-  baseline: number | string   // 基线值
-  current: number | string    // 当前值
-  description: string         // 描述
+  baseline: number   current: number   description: string         // 描述
 }
 ```
 
@@ -182,11 +169,7 @@ benchmark.generateReport(result, { format: "json" })
 
 `ciAnnotations()` 自动检测 CI 环境，输出原生注解格式：
 
-| 环境 | 输出格式 | 效果 |
 |------|---------|------|
-| GitHub Actions（`GITHUB_ACTIONS=true`） | `::error` / `::warning` / `::notice` 指令 | PR diff 行内标注 |
-| GitLab CI（`GITLAB_CI=true`） | Code Quality JSON | MR widget 展示 |
-| 本地 / 其他 | 纯文本退化列表 | stdout 可读 |
 
 ```ts
 // 自动检测

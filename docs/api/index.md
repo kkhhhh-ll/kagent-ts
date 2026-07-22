@@ -30,7 +30,7 @@ import {
   // Intent
   detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt,
   // Verification
-  VerifyAgent,
+  ,
   // MCP
   McpClientManager, McpConnectionError,
   // RAG
@@ -41,9 +41,9 @@ import {
   // Memory
   MemoryManager,
   // Reflection
-  ReflectionAgent, ErrorNotebook, MemoryReflector,
+  , 
   // Preferences & Rules
-  PreferenceManager, ProjectRules,
+
   // Git
   GitWorktreeManager, GitWorktreeError,
   // Security
@@ -64,30 +64,7 @@ import {
 
 ## 模块导航
 
-| 模块 | 说明 | 文档 |
 |------|------|------|
-| **Agent 类** | ReAct / Plan-Solve / Fusion / Orchestrator / Fork | [API - Agent](/api/agent) |
-| **LLM Provider** | OpenAI / Anthropic / Fallback / RateLimiter / Router / TokenBudget | [API - LLM](/api/llm) |
-| **Tool 系统** | Registry / CircuitBreaker / Validator / Filters / ErrorTracker | [API - Tools](/api/tools) |
-| **Message 类型** | Message / Role / ToolCall / MessageData | [API - Messages](/api/messages) |
-| **Session** | SessionManager / SessionState / Checkpoint | [API - Session](/api/session) |
-| **Context & Compression** | ContextManager / ProgressiveCompressor | [API - Context](/api/context) |
-| **Intent** | detectSignals / matchSkills — 意图识别 | [指南 - Intent](/advanced/intent) |
-| **Skills** | SkillManager / FileSkillLoader / parseFrontmatter | [指南 - Skills](/advanced/skills) |
-| **Precipitation** | PrecipitateAgent — 技能自动沉淀（含关键词） | [指南 - Precipitation](/advanced/precipitation) |
-| **Verification** | VerifyAgent — 答案验证（阻塞式） | [指南 - Verification](/advanced/verification) |
-| **SubAgent** | SubAgentManager / SubAgentLoader | [指南 - SubAgent](/advanced/subagents) |
-| **MCP** | McpClientManager / McpServerConfig | [指南 - MCP](/advanced/mcp) |
-| **RAG** | RAGManager / EmbeddingProvider / VectorStore / ReRanker | [指南 - RAG](/advanced/rag) |
-| **Memory** | MemoryManager / Memory | [指南 - Memory](/advanced/memory) |
-| **Reflection** | ReflectionAgent / ErrorNotebook / MemoryReflector | [指南 - Reflection](/advanced/reflection) |
-| **Preferences** | PreferenceManager — 用户偏好注入 | [指南 - Preferences](/advanced/preferences) |
-| **Rules** | ProjectRules — 项目规则注入 | [指南 - Rules](/advanced/rules) |
-| **Git** | GitWorktreeManager — Worktree 隔离执行 | [指南 - Git](/advanced/git) |
-| **Security** | 边界标记 / 注入签名扫描 | [指南 - Security](/advanced/security) |
-| **Eval** | ToolCallEvaluator / Benchmark | [指南 - Eval](/advanced/eval) |
-| **Trace** | TraceLogger — 全链路追踪 | [指南 - Trace](/advanced/trace) |
-| **Logging** | Logger / ConsoleLogger / SilentLogger | [指南 - Logging](/advanced/logging) |
 
 ## 主要类型一览
 
@@ -133,13 +110,12 @@ type BreakerState / BreakerStatus / CircuitBreakerConfig
 // 意图识别
 type UserSignals / SkillMatch
 
-// 验证
 type VerificationResult / VerificationInput
-type VerifyAgentConfig
+type Config
 
 // 反思 & 记忆 & 沉淀
-type ReflectionAgentConfig / ReflectionInput / ReflectionFinding
-type ErrorNotebookEntry / ErrorNotebookConfig / ReflectionErrorCategory
+type Config / ReflectionInput / ReflectionFinding
+type 
 type MemoryReflectorConfig / MemoryReflectionInput / ExtractedMemory
 type Memory / MemoryType
 type PrecipitateAgentConfig / PrecipitationInput / SkillCandidate
@@ -171,7 +147,7 @@ type Regression / Improvement / BenchmarkSummary / BenchmarkResult
 type TraceLoggerConfig / AgentTraceEvent / AgentTraceEventType
 
 // 偏好 & 规则
-type Preferences / PreferenceManagerConfig
+type Preferences / 
 ```
 
 ## 下一步

@@ -4,21 +4,13 @@
 
 ## 与 Preferences 的区别
 
-| | Preferences | Rules |
-| --- | --- | --- |
-| **范围** | 用户个人偏好（跨项目） | 项目级规则（单项目） |
-| **存储** | `.kagent/preferences.md` | `.kagent/rules/` 目录（默认） |
-| **内容** | 风格、语言、简洁度 | 架构约定、编码规范、项目约束 |
-| **编辑** | 用户手工编辑 | 用户手工编辑 |
-
 ## 默认目录结构
 
 Agent 默认从 `.kagent/rules/` 目录加载规则，每个 `.md` 文件作为一个规则 section：
 
 ```
 .kagent/
-├── preferences.md       # 用户偏好
-└── rules/
+├── └── rules/
     ├── architecture.md  # "使用 Clean Architecture 分层"
     ├── coding-style.md  # "使用函数式风格，禁止 class"
     ├── testing.md       # "所有模块必须有单元测试"
@@ -99,4 +91,4 @@ class ProjectRules {
 
 - [Memory 记忆](/advanced/memory) — LLM 自动发现和写入的长期记忆
 - [安全防护](/advanced/security) — 了解规则注入的安全防御机制
-- [Preference 偏好](/advanced/preferences) — 用户个人偏好设置
+- 

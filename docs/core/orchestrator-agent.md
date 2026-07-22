@@ -103,14 +103,6 @@ Dispatching 2 node(s):
 
 各阶段说明：
 
-| 阶段 | 输出内容 |
-| --- | --- |
-| **Decompose** | 分解出的节点列表（含依赖关系） |
-| **Dispatch** | 每个节点的 spawn / ✅完成 / ❌失败状态，含耗时 |
-| **Synthesize** | LLM 综合分析结果（thought 文本） |
-| **Adapt** | LLM 生成新节点的思考过程 |
-| **Final Answer** | 最终答案，token-by-token 流式输出 |
-
 ## 配置参数
 
 ```ts
@@ -148,8 +140,7 @@ interface TaskNode {
   dependsOn: string[]     // 依赖的节点 ID 列表
   subAgentName: string    // 执行该节点的子代理类型
   input: string           // 子代理的输入
-  status: TaskNodeStatus  // 当前状态: pending | running | completed | failed
-  result?: SubAgentResult // 执行结果 (完成后填充)
+  status: TaskNodeStatus  // 当前状态: pending   result?: SubAgentResult // 执行结果 (完成后填充)
   retryCount: number      // 已重试次数 (从 0 开始)
   maxRetries?: number     // 最大重试次数 (从配置继承)
 }
@@ -191,12 +182,6 @@ interface TaskNode {
 当子 agent 任务节点执行失败时，Orchestrator 支持三种失败处理策略，通过 `failureStrategy` 配置。
 
 ### 三种策略
-
-| 策略 | 行为 | 适用场景 |
-| ---- | ---- | -------- |
-| **`"retry-subtree"`** (默认) | 重试失败节点，同时失效化并重跑所有直接/间接下游依赖节点。未受影响的并行分支保持不变。 | 通用场景——高效且保证正确性 |
-| **`"retry-all"`** | 重置 DAG 中全部节点为 `pending`，从头开始重新执行整个任务图。 | 严格一致性要求，部分结果不可信时 |
-| **`"continue"`** | 保留失败状态，下游节点照常执行，通过模板变量获取错误信息。最终由 Synthesis 阶段判断结果是否可用。 | 探索性/容错任务 |
 
 ### 重试流程 (`"retry-subtree"`)
 
@@ -310,12 +295,6 @@ const agent = new OrchestratorAgent({
 
 ### 适用范围
 
-| 场景 | 是否感知 | 说明 |
-| ---- | ---- | ---- |
-| Orchestrator 自身阶段（Decompose/Synthesize/Adapt） | ✅ 自动 | 降级事件注入后续 prompt |
-| 子 Agent 执行 | ⚠️ 需配置 | 将 `subAgentLLM` 也设为 `FallbackProvider` |
-| ReAct / PlanSolve / Fusion | ⚠️ 被动 | `LLMResponse.providerMeta` 已打标，范式自身可消费 |
-
 ## 完整示例
 
 ```ts
@@ -357,14 +336,6 @@ for await (const chunk of agent.stream(
 ## 执行追踪
 
 Orchestrator Agent 在执行过程中会触发完整的生命周期钩子，可用于追踪和调试：
-
-| 阶段 | 触发的 Hook | 说明 |
-| --- | --- | --- |
-| Decompose | `onLLMStart/End`, `onThought`, `onPlanCreated` | LLM 分解请求 → 产生 TaskGraph DAG |
-| Dispatch | `onToolStart/End/Error("spawn_subagent")` | 每个子 Agent 的 spawn 和结果 |
-| Synthesize | `onLLMStart/End`, `onThought` | LLM 综合所有子 Agent 结果 |
-| Adapt | `onLLMStart/End`, `onThought`, `onPlanRevised` | 生成新节点 → 更新 TaskGraph |
-| 完成 | `onFinish` | 返回最终答案 |
 
 当 `hooks` 中包含 `TraceLogger` 时，子 Agent 追踪**自动生效**，无需额外配置：
 

@@ -14,16 +14,7 @@
 
 构建生产级 AI Agent 不仅仅是 Prompt Engineering —— 你还需要**可靠的工具执行**、**答案验证**、**安全取消**、**会话恢复**、**技能复用**和**可观测性**。kagent-ts 开箱即用地提供了这一切，API 简洁、可组合。
 
-| 关注点 | 没有 kagent-ts | 有了 kagent-ts |
 |--------|---------------|---------------|
-| **Agent 循环** | 自己写 ReAct | 4 种久经考验的范式：ReAct、PlanSolve、Fusion、Orchestrator |
-| **工具安全** | try/catch 碰运气 | 熔断器（CLOSED→HALF_OPEN→OPEN）+ JSON Schema 校验 + HITL 审批 |
-| **答案质量** | 盲目信任 | Fork 独立 Agent 验证正确性与完整性后才返回 |
-| **LLM 韧性** | 单 provider → 宕机 | 多 provider 路由 + 自动降级 + Token 预算 |
-| **会话恢复** | 崩溃即丢失 | 完整 checkpoint/resume，支持网络中断恢复 |
-| **技能复用** | 复制粘贴 Prompt | `.md` 文件定义技能，关键词自动激活 + 自动沉淀 |
-| **可观测性** | `console.log` | Hook 系统零侵入全链路追踪，自动传导嵌套 Agent |
-| **任务取消** | 不可靠 | `AbortController` 集成，干净中断并保存状态 |
 
 ---
 
@@ -51,14 +42,12 @@ import { FusionAgent, OpenAIProvider, AnthropicProvider, ModelRouter } from "kag
 const agent = new FusionAgent({
   llm: new ModelRouter({
     main:         new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
-    verification: new AnthropicProvider({ model: "claude-haiku-4-5-20251001", apiKey: process.env.ANTHROPIC_API_KEY! }),
+
     memory:       new OpenAIProvider({ model: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY! }),
   }),
   routing: "auto",                // LLM 自动判断任务复杂度，选择 ReAct 或 PlanSolve
   planConfirmation: "auto",       // 检测到危险操作时请求人工审批
-  verification: "post-hoc",       // Fork Agent 验证答案正确性（阻塞式，不通过自动修正）
-  reflection: "post-hoc",         // 错题本反思（fire-and-forget，不阻塞返回）
-  memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
+      memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
   precipitation: "post-hoc",      // 技能自动沉淀（fire-and-forget）
   skillsDir: "./skills",          // SKILL.md 技能文件目录
 });
@@ -76,12 +65,7 @@ console.log(answer);
 
 ### 🧠 多范式执行引擎
 
-| 引擎 | 流程 | 适用场景 |
 |------|------|---------|
-| **ReAct** | Think → Act → Observe | 通用任务、工具密集型工作流 |
-| **PlanSolve** | Plan → Resolve → Revise | 多步骤问题、复杂重构 |
-| **Fusion** | Route → Plan/Execute → Verify | 自适应：简单任务走 ReAct，复杂任务走 PlanSolve |
-| **Orchestrator** | Decompose → Dispatch → Synthesize | 多 Agent 并行分发与结果合并 |
 
 推荐默认使用 `FusionAgent` + `routing: "auto"` —— LLM 根据任务复杂度自动选择最优引擎。
 
@@ -121,21 +105,20 @@ registry.register({
 - **完整性** — 请求的所有部分是否都已处理？
 - **安全性** — 是否包含危险或破坏性建议？
 
-验证是**阻塞式**的（`verification: "post-hoc"`）—— 验证不通过则主 Agent 自动修正。
-
+验证是**阻塞式**的（`
 ### 🪞 反思与自我进化
 
 三种反思模式均为 **fire-and-forget** —— 在答案返回之后异步执行，用户无需等待：
 
 ```
-┌─ ReflectionAgent ────► ErrorNotebook（错题本，跨 Session 注入）
+┌─  ────► 
 │
 Answer ──┼─ MemoryReflector ───► MemoryManager（[[wiki-link]] 长期记忆）
 │
 └─ PrecipitateAgent ───► skills/*.md（关键词自动激活）
 ```
 
-**ErrorNotebook（错题本）**跨 Session 持久化 —— 历史错误会被注入到 System Prompt 中，不再重复犯错。
+**
 
 ### 📝 渐进式技能
 
@@ -221,7 +204,7 @@ src/
 ├── core/              # Agent 基类 + 4 种范式（ReAct/PlanSolve/Fusion/Orchestrator）
 ├── intent/            # 零 LLM 开销的信号检测 + 技能关键词匹配
 ├── verification/      # Fork 验证 Agent（正确性 + 完整性）
-├── reflection/        # ReflectionAgent + MemoryReflector + ErrorNotebook
+├── reflection/        #  + MemoryReflector + 
 ├── precipitation/     # 从对话中自动提取技能
 ├── skills/            # 渐进式技能：FileSkillLoader + SkillManager
 ├── tools/             # ToolRegistry / CircuitBreaker / Validator / Filter / Truncator
@@ -237,7 +220,6 @@ src/
 ├── eval/              # ToolCallEvaluator + Benchmark 评估体系
 ├── trace/             # 全链路追踪，嵌套 Agent 自动传播
 ├── git/               # Git Worktree 文件系统级沙箱隔离
-├── preferences/       # 用户偏好注入 + 项目规则
 ├── rules/             # CLAUDE.md / AGENTS.md 风格的项目规则
 └── logging/           # 结构化日志（ConsoleLogger / SilentLogger / 自定义）
 ```
@@ -259,61 +241,27 @@ npm run docs:dev
 
 ### Agent
 
-| 类 | 说明 |
 |---|------|
-| `ReActAgent` | 标准 Think→Act→Observe 循环 |
-| `PlanSolveAgent` | Plan→Resolve→Revise 复杂任务求解 |
-| `FusionAgent` | 自动路由 ReAct/PlanSolve + 验证 + 反思 |
-| `OrchestratorAgent` | 多 Agent Decompose→Dispatch→Synthesize |
 
 ### LLM
 
-| 类 | 说明 |
 |---|------|
-| `OpenAIProvider` | OpenAI 兼容 API（GPT-4o、GPT-4o-mini 等） |
-| `AnthropicProvider` | Anthropic API（Claude Sonnet、Haiku、Opus） |
-| `ModelRouter` | 按角色路由到不同模型 |
-| `FallbackProvider` | 多 Provider 链式自动故障转移 |
-| `RateLimitedProvider` | RPM 速率限制包装器 |
-| `TokenBudget` | Token 计数 + 预算控制 |
 
 ### 工具
 
-| 类 / 函数 | 说明 |
 |----------|------|
-| `ToolRegistry` | 注册、校验并执行工具 |
-| `CircuitBreaker` | CLOSED→HALF_OPEN→OPEN 三态熔断器 |
-| `validateToolArgs` | JSON Schema 字段级校验 |
-| `toolSuccess` / `toolError` | 标准化工具返回值 |
-| `filterTools` / `allowlist` / `denylist` / `pattern` | SubAgent 工具权限过滤器 |
 
 ### SubAgent & 会话
 
-| 类 | 说明 |
 |---|------|
-| `SubAgentManager` | 通过 AGENT.md 创建和管理子 Agent |
-| `SessionManager` | 完整状态 checkpoint + 恢复 |
-| `SessionViewer` | 会话状态查看与调试 |
 
 ### 技能、记忆 & 反思
 
-| 类 | 说明 |
 |---|------|
-| `SkillManager` | 按关键词加载匹配技能 |
-| `MemoryManager` | [[wiki-link]] 文件长期记忆 |
-| `PrecipitateAgent` | 从对话中自动提取技能 |
-| `ReflectionAgent` | 执行后错误分析 |
-| `MemoryReflector` | 执行后记忆提取 |
-| `ErrorNotebook` | 跨 Session 错题本注入 |
 
 ### RAG & MCP
 
-| 类 | 说明 |
 |---|------|
-| `RAGManager` | 混合检索引擎 |
-| `LLMReRanker` | LLM 重排序 |
-| `rrfFusion` | Reciprocal Rank Fusion |
-| `McpClientManager` | MCP 服务器连接管理 |
 
 ---
 

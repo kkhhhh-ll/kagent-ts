@@ -1,5 +1,5 @@
 import { LLMProvider } from "../llm/interface";
-import { MessageData, Role } from "../messages/types";
+import { MessageData } from "../messages/types";
 import { STRUCTURED_OUTPUT_INSTRUCTIONS, extractJSON } from "../core/response-schema";
 import { MemoryManager, Memory, MemoryType } from "../memory/memory-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
@@ -120,47 +120,21 @@ Rules:
 
 // ─── Pure Helpers ────────────────────────────────────────────────────────────
 
-/** Characters to keep from the start of a truncated tool result. */
-const TRUNCATION_RETAIN = 500;
-/** Tool result longer than this will be truncated. */
-const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
-
 const VALID_MEMORY_TYPES = new Set<string>(["rule", "project", "preference"]);
 
 /**
- * Format the conversation for the memory extraction prompt.
- * Truncates very long tool results for readability.
- */
-function formatConversation(messages: MessageData[]): string[] {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const role = msg.role.toUpperCase();
-    let content = msg.content;
-
-    if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
-      content = content.slice(0, TRUNCATION_RETAIN) + "\n... (truncated, " + content.length + " chars total)";
-    }
-
-    lines.push(`[${role}] ${content}`);
-
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      for (const tc of msg.tool_calls) {
-        lines.push(`  → tool_call: ${tc.function.name}(${tc.function.arguments})`);
-      }
-    }
-  }
-  return lines;
-}
-
-/**
- * Build the task prompt for the fork sub-agent from the memory reflection input.
+ * Build the task prompt for the fork sub-agent.
+ *
+ * The conversation history is passed via context inheritance so the fork
+ * sees structured messages directly — no serialization needed. This prompt
+ * only carries metadata not present in the conversation.
  */
 function buildTaskPrompt(
-  input: MemoryReflectionInput,
+  _input: MemoryReflectionInput,
   existing: Array<{ name: string; description: string }>,
 ): string {
   const context: string[] = [
-    "Review this agent session and extract any memories worth keeping for future sessions.",
+    "Review the conversation above and extract any memories worth keeping for future sessions.",
     "",
     "=== Existing Memories (do NOT duplicate these names) ===",
   ];
@@ -174,15 +148,6 @@ function buildTaskPrompt(
   }
 
   context.push(
-    "",
-    "=== User Query ===",
-    input.userQuery,
-    "",
-    "=== Final Answer ===",
-    input.finalAnswer,
-    "",
-    "=== Conversation ===",
-    ...formatConversation(input.conversation),
     "",
     "Analyze the session and output extracted memories as JSON in your final answer.",
   );
@@ -337,7 +302,11 @@ export class MemoryReflector {
     );
 
     try {
-      const answer = await this.forkAndRun(taskPrompt, abortController.signal);
+      const answer = await this.forkAndRun(
+        taskPrompt,
+        abortController.signal,
+        input.conversation,
+      );
 
       const extracted = parseMemories(answer, this.logger);
 
@@ -376,8 +345,14 @@ export class MemoryReflector {
   /**
    * Fork a minimal ReActAgent and run it to completion.
    * Returns the agent's final answer string.
+   *
+   * @param contextMessages — parent agent's conversation for context inheritance.
    */
-  private forkAndRun(userPrompt: string, signal?: AbortSignal): Promise<string> {
+  private forkAndRun(
+    userPrompt: string,
+    signal?: AbortSignal,
+    contextMessages?: import("../messages/types").MessageData[],
+  ): Promise<string> {
     return forkAgent(userPrompt, {
       llm: this.llm,
       systemPrompt: MEMORY_EXTRACTION_SYSTEM_PROMPT,
@@ -385,6 +360,7 @@ export class MemoryReflector {
       logger: this.logger,
       signal,
       hooks: TraceLogger.wrapHooksForFork(this.hooks, "memory-extraction"),
+      contextMessages,
     });
   }
 }

@@ -56,8 +56,7 @@ interface ToolResult {
   content: string
 
   /** 错误严重程度 */
-  severity: "success" | "retryable" | "fatal"
-
+  severity: "success" 
   /** 错误码 */
   errorCode: ToolErrorCode
 }

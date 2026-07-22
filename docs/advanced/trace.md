@@ -48,19 +48,7 @@ interface TraceLoggerConfig {
 
 `TraceLogger` 实现了 `AgentHooks` 接口，记录以下事件：
 
-| 事件 | 记录内容 |
 |------|----------|
-| `onLLMStart` | 发送的消息列表、时间戳 |
-| `onLLMEnd` | 响应内容、Token 用量、延迟 |
-| `onLLMError` | 错误信息、错误类型 |
-| `onToolStart` | 工具名称、参数 |
-| `onToolEnd` | 工具结果、是否成功 |
-| `onToolError` | 错误信息 |
-| `onThought` | LLM 的推理文本 |
-| `onPlanCreated/onPlanRevised` | 计划的创建和修改 |
-| `onFinish` | 最终答案、统计信息 |
-| `subagent_spawn` | 子 Agent 派发事件（通过 `spawn_subagent` 工具或 Orchestrator dispatch） |
-| `subagent_result` | 子 Agent 返回结果（通过 `spawn_subagent` 工具或 Orchestrator dispatch） |
 
 ## HTML 输出
 
@@ -142,5 +130,4 @@ await agent.run('分析整个项目')
 ## 下一步
 
 - [Eval 评估](/advanced/eval) — 结合 Trace 进行定量评估
-- [Reflection 反思](/advanced/reflection) — Trace 为反思提供详细素材
-- [生命周期钩子](/core/hooks) — 自定义钩子实现
+- - [生命周期钩子](/core/hooks) — 自定义钩子实现

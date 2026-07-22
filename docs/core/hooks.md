@@ -44,8 +44,7 @@ interface AgentHooks {
   onChunk?: (chunk: string) => void
 
   /** Agent 执行完成时触发（支持同步和异步，异步回调在后台执行不阻塞） */
-  onFinish?: (answer: string) => void | Promise<void>
-}
+  onFinish?: (answer: string) => void }
 ```
 
 ## 基础示例
@@ -164,24 +163,21 @@ const agent = new ReActAgent({
 
 详见 [Trace 追踪](/advanced/trace)。
 
-### 错题本反思 & 记忆提取
+### 
 
-错题本反思（Reflection）和记忆提取（Memory Reflection）已内建到 Agent 中，通过
 AgentConfig 直接开启，无需额外的 Hook：
 
 ```ts
 const agent = new ReActAgent({
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-  reflection: "post-hoc",         // 会话结束后 fork 子 Agent 分析错误
-  memoryReflection: "post-hoc",   // 会话结束后 fork 子 Agent 提取长期记忆
+    memoryReflection: "post-hoc",   // 会话结束后 fork 子 Agent 提取长期记忆
 })
 ```
 
 两个子系统都是 post-hoc（执行后）模式，在 Agent 返回 answer 之前自动触发，
 best-effort，失败不影响主流程。
 
-详见 [Reflection 反思](/advanced/reflection) 和 [Memory 记忆](/advanced/memory)。
-
+详见 
 ### ToolCallEvaluator
 
 `ToolCallEvaluator` 用于收集工具调用指标：

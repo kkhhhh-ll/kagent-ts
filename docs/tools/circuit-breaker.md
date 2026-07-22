@@ -31,14 +31,6 @@ enum BreakerState {
 }
 ```
 
-| 转换 | 条件 |
-| ---- | ---- |
-| **CLOSED → HALF_OPEN** | 首次失败发生 |
-| **HALF_OPEN → HALF_OPEN** | 继续失败但仍未超过重试上限 |
-| **HALF_OPEN → OPEN** | 连续失败超过 `retryCount`，重试耗尽 |
-| **HALF_OPEN → CLOSED** | 执行成功，失败计数清零 |
-| **任意状态 → CLOSED** | 手动调用 `reset()` |
-
 ## 配置
 
 Circuit Breaker 默认集成在 `ToolRegistry` 中，通过 `AgentConfig.toolRetryCount` 配置：
@@ -87,7 +79,7 @@ Circuit Breaker 与 `ToolErrorTracker` 协同工作：
 - `ToolErrorTracker` 在内存中记录每次失败 → 分析 → 恢复的完整生命周期
 - `"circuit_half_open"` 事件类型用于记录半熔断状态
 - `list_errors` 工具允许 LLM 在会话中实时查询当前错误状态
-- 跨会话的错误学习由 [ErrorNotebook（错题本）](/advanced/reflection) 负责
+- 跨会话的错误学习由 [
 
 ## 完整示例
 

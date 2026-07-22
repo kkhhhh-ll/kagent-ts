@@ -23,7 +23,6 @@ import {
   AgentType,
 } from "../session/session-types";
 import { countTokens } from "../utils/token-counter";
-import { PreferenceManager } from "../preferences/preference-manager";
 import { AgentHooks } from "./hooks";
 import { McpClientManager } from "../mcp/mcp-client-manager";
 import type { McpServerConfig } from "../mcp/mcp-types";
@@ -48,7 +47,6 @@ import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
 import { detectSignals } from "../intent";
 import type { UserSignals } from "../intent";
 import type { RetrievedSkill, RetrievedMemory } from "../rag/retriever";
-import type { ErrorNotebook } from "../reflection/error-notebook";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -176,15 +174,6 @@ export interface AgentConfig {
    */
   logger?: Logger;
 
-  // ─── User Preferences ───────────────────────────────────────────────
-
-  /**
-   * Path to the preferences markdown file.
-   * Default: ".kagent/preferences.md". Preferences are loaded
-   * automatically and auto-reloaded before each run.
-   */
-  preferencesPath?: string;
-
   // ─── Session Persistence ─────────────────────────────────────────────
 
   /**
@@ -262,7 +251,7 @@ export interface AgentConfig {
   /**
    * Hooks for sub-agents. Accepts a single {@link AgentHooks}, an array, or a
    * factory `(name, runId) => AgentHooks | AgentHooks[]`. **WARNING**: Do NOT
-   * pass hooks that spawn sub-agents (e.g. ReflectionHook) — unbounded recursion.
+   * pass hooks that spawn sub-agents — unbounded recursion.
    */
   subAgentHooks?:
     | AgentHooks
@@ -352,53 +341,6 @@ export interface AgentConfig {
    */
   memoryReflectorLLM?: LLMProvider;
 
-  /**
-   * LLM provider for post-hoc error reflection.
-   *
-   * When set, this provider is used for the ReflectionAgent fork.
-   * When not set, the resolution order is:
-   * 1. `ModelRouter.forReflection()` if the main `llm` is a ModelRouter
-   * 2. Otherwise falls back to the main `llm`
-   */
-  reflectionLLM?: LLMProvider;
-
-  /**
-   * ErrorNotebook for persisting error reflection findings and injecting
-   * past mistakes into the system prompt (scenario-bound). Auto-created
-   * with defaults when reflection is enabled and no notebook is provided.
-   */
-  notebook?: ErrorNotebook;
-
-  // ─── Answer Verification ──────────────────────────────────────────────
-
-  /**
-   * Answer verification mode. After the agent produces a final answer,
-   * forks an independent VerifyAgent to check correctness and completeness.
-   * Default: `"off"`.
-   */
-  verification?: "off" | "post-hoc";
-
-  /** Max iterations for the verification sub-agent. Default: 3. */
-  verificationMaxIterations?: number;
-
-  /**
-   * Minimum score (0-100) to pass verification. Default: 70.
-   * When the score is below this threshold, the verification issues are
-   * injected back into the main agent for one correction attempt.
-   */
-  verificationThreshold?: number;
-
-  /**
-   * LLM provider for answer verification.
-   *
-   * When set, this provider is used for the VerifyAgent fork.
-   * When not set, the resolution order is:
-   * 1. `ModelRouter.forVerification()` if the main `llm` is a ModelRouter
-   * 2. Otherwise falls back to the main `llm`
-   *
-   * Using an independent model here provides an unbiased review.
-   */
-  verificationLLM?: LLMProvider;
 }
 
 /**
@@ -427,7 +369,6 @@ const AGENT_CONFIG_DEFAULTS = {
  * - Context window management
  * - Tool registry (with circuit breaker support)
  * - Skill manager (progressive disclosure)
- * - User preferences (system-prompt injection)
  * - Session manager (checkpoint persistence & resume)
  * - Abort controller (cancellation via SIGINT)
  *
@@ -450,9 +391,6 @@ export abstract class Agent {
 
   /** The original core system prompt (before skill sections are appended). */
   protected coreSystemPrompt: string;
-
-  /** Preference manager for loading and injecting user preferences. */
-  protected preferenceManager: PreferenceManager;
 
   /** Lifecycle hooks for observing agent execution. */
   protected hooks: AgentHooks[] = [];
@@ -549,21 +487,6 @@ export abstract class Agent {
   /** LLM provider for memory reflection (defaults to main llm if not set). */
   protected memoryReflectorLLM?: LLMProvider;
 
-  /** LLM provider for error reflection (defaults to main llm if not set). */
-  protected reflectionLLM?: LLMProvider;
-
-  /** LLM provider for answer verification (defaults to main llm if not set). */
-  protected verificationLLM?: LLMProvider;
-
-  /** Answer verification mode. Default: `"off"`. */
-  protected verificationMode: "off" | "post-hoc" = "off";
-
-  /** Max iterations for the verification sub-agent. Default: 3. */
-  protected verificationMaxIterations: number = 3;
-
-  /** Minimum score (0-100) to pass verification. Default: 70. */
-  protected verificationThreshold: number = 70;
-
   /** Signals detected from the current run's user input. */
   protected inputSignals: UserSignals = { wantsRemember: false, riskLevel: "none", scenarios: [], complexity: "simple" };
 
@@ -575,9 +498,6 @@ export abstract class Agent {
 
   /** BM25 retriever for memories and skills (separate indexes). */
   protected retriever: Retriever = new Retriever();
-
-  /** Error notebook for scenario-bound mistake injection. */
-  protected notebook?: ErrorNotebook;
 
   /** Hooks for sub-agents (from AgentConfig). */
   protected subAgentHooks?:
@@ -724,33 +644,6 @@ export abstract class Agent {
       this.memoryReflectorLLM = cfg.llm.forMemory();
     }
 
-    // Resolve reflection LLM:
-    // 1. Explicit `reflectionLLM` → use it directly
-    // 2. `llm` is a ModelRouter → use router.forReflection()
-    // 3. Fallback → reflection shares the main `llm`
-    if (cfg.reflectionLLM) {
-      this.reflectionLLM = cfg.reflectionLLM;
-    } else if (cfg.llm instanceof ModelRouter) {
-      this.reflectionLLM = cfg.llm.forReflection();
-    }
-
-    this.notebook = cfg.notebook;
-
-    // Resolve verification LLM:
-    // 1. Explicit `verificationLLM` → use it directly
-    // 2. `llm` is a ModelRouter → use router.forVerification()
-    // 3. Fallback → verification shares the main `llm`
-    if (cfg.verificationLLM) {
-      this.verificationLLM = cfg.verificationLLM;
-    } else if (cfg.llm instanceof ModelRouter) {
-      this.verificationLLM = cfg.llm.forVerification();
-    }
-
-    // Verification settings
-    this.verificationMode = cfg.verification ?? "off";
-    this.verificationMaxIterations = cfg.verificationMaxIterations ?? 3;
-    this.verificationThreshold = cfg.verificationThreshold ?? 70;
-
     // Token budget — session-level cost control
     if (cfg.tokenBudgetConfig) {
       this.tokenBudget = new TokenBudget(cfg.tokenBudgetConfig);
@@ -779,11 +672,6 @@ export abstract class Agent {
       }
     }
 
-    // ── User Preferences ─────────────────────────────────────────────────
-    this.preferenceManager = new PreferenceManager(
-      { filePath: cfg.preferencesPath ?? ".kagent/preferences.md" },
-      this.logger,
-    );
   }
 
   /**
@@ -821,6 +709,9 @@ export abstract class Agent {
   /**
    * Fork a lightweight ReActAgent for a self-contained task. Runs inline
    * (not via SubAgentManager), uses this agent's LLM by default.
+   *
+   * Inherits the full conversation context from this agent so the fork
+   * benefits from prompt caching and structured message history.
    */
   protected async fork(
     input: string,
@@ -837,6 +728,7 @@ export abstract class Agent {
       llm: this.llm,
       ...options,
       signal: this._abortController?.signal,
+      contextMessages: this.contextManager.getContextMessages(),
     });
   }
 
@@ -968,29 +860,20 @@ export abstract class Agent {
 
   /**
    * Build the full system prompt by concatenating all sections in priority
-   * order: core prompt → rules → preferences → memories → skills. Empty
+   * order: core prompt → rules → memories → skills. Empty
    * sections are silently skipped. Subclasses append extra content by
    * calling this and concatenating, rather than duplicating the assembly.
    */
   protected buildSystemPrompt(): string {
-    // Scenario-bound error notebook prompt — only shows past mistakes
-    // relevant to the current task type (zero-injection when no scenario matched)
-    const scenarioPrompt =
-      this.notebook && this.inputSignals.scenarios.length > 0
-        ? this.notebook.buildScenarioPrompt(this.inputSignals.scenarios, 5, 1)
-        : "";
-
     const sections = [
       this.coreSystemPrompt,
       SECURITY_GUIDANCE,
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.projectRules.buildPrompt(),
-      this.preferenceManager.buildPrompt(),
       this.buildMemoryPrompt(),
       this.skillManager.buildAvailableSkillsHint(),
       this.skillManager.buildSkillsPrompt(),
       this.ragConfig ? RAG_KNOWLEDGE_BASE_HINT : "",
-      scenarioPrompt,
     ].filter(Boolean);
 
     return sections.join("");
@@ -1053,15 +936,6 @@ export abstract class Agent {
     for (const h of this.hooks) {
       h.onCompressionEnd?.(beforeTokens, afterTokens, tokensSaved, details);
     }
-  }
-
-  /** Reload preferences from disk if manually edited between runs. */
-  protected reloadPreferencesIfChanged(): boolean {
-    if (this.preferenceManager?.reloadIfChanged()) {
-      this.rebuildSystemPrompt();
-      return true;
-    }
-    return false;
   }
 
   /** Re-scan skills directory for new SKILL.md files added between runs. */
@@ -1157,7 +1031,6 @@ export abstract class Agent {
    * Picks up changes made between conversation turns.
    */
   protected async reloadDynamicResources(): Promise<void> {
-    this.reloadPreferencesIfChanged(); // rebuilds internally if changed
     const rulesChanged = this.projectRules.reloadIfChanged();
     this.reloadSkillsFromDirectory(); // rebuilds internally if changed
     this.reloadMemoryIfChanged(); // rebuilds internally if changed
@@ -1584,13 +1457,12 @@ export abstract class Agent {
 
   /**
    * Lazily-generated fallback session ID for runs that don't configure
-   * session persistence. Generated once per instance so all notebook
-   * entries and log messages within a single agent lifetime share the
-   * same ID.
+   * session persistence. Generated once per instance so all log messages
+   * and entries within a single agent lifetime share the same ID.
    */
   private _fallbackSessionId?: string;
 
-  /** Return a session ID suitable for logging and notebook entries. */
+  /** Return a session ID suitable for logging and traceability. */
   protected getSessionId(): string {
     if (this.sessionManager) return this.sessionManager.getSessionId();
     if (!this._fallbackSessionId) {
@@ -1994,7 +1866,7 @@ export abstract class Agent {
 
   // ─── Background Tasks ─────────────────────────────────────────────────
 
-  /** In-flight fire-and-forget tasks (precipitation, reflection, memory). */
+  /** In-flight fire-and-forget tasks (precipitation, memory reflection). */
   private backgroundTasks: Set<Promise<unknown>> = new Set();
 
   /**
@@ -2011,7 +1883,7 @@ export abstract class Agent {
 
   /**
    * Wait for all in-flight background tasks (skill precipitation, memory
-   * reflection, error reflection) to settle.
+   * reflection) to settle.
    *
    * Call this before exiting the process — the post-hoc tasks are
    * fire-and-forget, so `run()` resolves before they finish and an
@@ -2136,266 +2008,4 @@ export abstract class Agent {
     this.rebuildSystemPrompt();
   }
 
-  // ─── Answer Verification ────────────────────────────────────────────────
-
-  /**
-   * Run answer verification and, if needed, one correction cycle with
-   * re-verification.
-   *
-   * Flow:
-   * 1. Skip trivial answers (short length or simple task).
-   * 2. Fork a VerifyAgent to check the answer.
-   * 3. If it passes (score >= threshold) → return the original answer.
-   * 4. If it fails → mini ReAct correction with tools (up to 2 LLM calls)
-   *    → re-verify the corrected answer.
-   * 5. If re-verify passes → return the corrected answer.
-   * 6. Otherwise → return the original answer (clean, no inline note).
-   *
-   * Failures (timeout, parse error) are non-fatal — the original answer
-   * is returned so the user is never blocked.
-   */
-  protected async runVerification(
-    input: string,
-    answer: string,
-  ): Promise<string> {
-    // ── Skip heuristic: don't fork for trivial answers ─────────────
-    const MIN_ANSWER_LENGTH = 200;
-    if (
-      answer.length < MIN_ANSWER_LENGTH ||
-      this.inputSignals.complexity === "simple"
-    ) {
-      const reason =
-        answer.length < MIN_ANSWER_LENGTH
-          ? `answer length ${answer.length} < ${MIN_ANSWER_LENGTH}`
-          : `task complexity is "simple"`;
-      this.logger.info("Verification", `Skipping — ${reason}.`);
-      return answer;
-    }
-
-    const { VerifyAgent } = await import("../verification/verify-agent.js");
-
-    const verifier = new VerifyAgent({
-      llm: this.verificationLLM ?? this.llm,
-      maxIterations: this.verificationMaxIterations,
-      threshold: this.verificationThreshold,
-      logger: this.logger,
-      hooks: this.hooks,
-    });
-
-    // ── Phase 1: Verify ───────────────────────────────────────────
-    const result = await verifier.verify({ userQuery: input, answer });
-
-    if (result.valid) {
-      this.logger.info(
-        "Verification",
-        `Answer passed verification (score: ${result.score}).`,
-      );
-      return answer;
-    }
-
-    this.logger.info(
-      "Verification",
-      `Answer failed verification (score: ${result.score}, threshold: ${this.verificationThreshold}). ` +
-        `Issues: ${result.issues.length}. Attempting correction...`,
-    );
-
-    // ── Phase 2: Correct (mini ReAct, up to 2 LLM calls with tools)
-    const corrected = await this.correctWithTools(result);
-
-    if (!corrected) {
-      this.logger.warn(
-        "Verification",
-        "Correction failed — returning original answer.",
-      );
-      return answer;
-    }
-
-    // ── Phase 3: Re-verify ────────────────────────────────────────
-    try {
-      const reResult = await verifier.verify({
-        userQuery: input,
-        answer: corrected,
-      });
-
-      if (reResult.valid) {
-        this.logger.info(
-          "Verification",
-          `Corrected answer passed re-verification (score: ${reResult.score}).`,
-        );
-        return corrected;
-      }
-
-      this.logger.warn(
-        "Verification",
-        `Corrected answer still failed (score: ${reResult.score}). Returning original answer.`,
-      );
-    } catch (err: unknown) {
-      this.logger.warn(
-        "Verification",
-        `Re-verification failed: ${err instanceof Error ? err.message : String(err)}. ` +
-          `Returning original answer.`,
-      );
-    }
-
-    return answer;
-  }
-
-  // ── Read-only tools for the correction loop (mirrors fork.ts) ──────
-  private static readonly CORRECTION_TOOL_NAMES: ReadonlySet<string> = new Set([
-    "read_file",
-    "grep_search",
-  ]);
-
-  /**
-   * Run a lightweight correction loop for a failed verification.
-   *
-   * Injects the verification issues as feedback, then makes up to 2 LLM
-   * calls.  The first call has access to **read-only** tools (read_file,
-   * grep_search) so the LLM can verify facts before correcting; if it
-   * makes tool calls they are executed and a second (tool-free) call
-   * produces the final corrected answer.
-   *
-   * Write tools are deliberately excluded — the correction loop fixes
-   * the *answer*, not the codebase.
-   *
-   * @returns The corrected answer, or `null` if correction could not
-   *          produce a usable result or the agent was cancelled.
-   */
-  private async correctWithTools(result: {
-    score: number;
-    issues: string[];
-    assessment: string;
-  }): Promise<string | null> {
-    // Respect cancellation — bail early if the user aborted
-    if (this.isCancelled) {
-      this.logger.info("Verification", "Correction skipped — agent cancelled.");
-      return this.closeCorrection("cancelled");
-    }
-
-    const issuesText = result.issues
-      .map((issue, i) => `${i + 1}. ${issue}`)
-      .join("\n");
-
-    const feedbackMsg = Message.user(
-      `⚠️ [VERIFICATION FAILED] The previous answer scored ${result.score}/100. ` +
-        `Please fix the following issues:\n\n` +
-        `${issuesText}\n\n` +
-        `Assessment: ${result.assessment}\n\n` +
-        `Provide a corrected answer that addresses each issue. ` +
-        `Use tools if you need to verify facts before correcting. ` +
-        `Do NOT repeat the original answer — output ONLY the corrected version.`,
-    );
-    this.contextManager.addMessage(feedbackMsg.toDict());
-
-    // Read-only tools only — same policy as fork agents
-    const readOnlyTools = this.toolRegistry
-      .getTools()
-      .filter((t) => Agent.CORRECTION_TOOL_NAMES.has(t.name));
-
-    try {
-      // Step 1: LLM with read-only tools — may verify facts
-      this._abortController = new AbortController();
-      const messages1 = this.contextManager.getContextMessages();
-      const response1 = await this.llm.chat(
-        messages1,
-        readOnlyTools,
-        this._abortController.signal,
-      );
-
-      // Respect cancellation after Step 1
-      if (this.isCancelled) {
-        this.logger.info("Verification", "Correction cancelled after Step 1.");
-        return this.closeCorrection("cancelled");
-      }
-
-      // No tool calls and has content → that's the corrected answer
-      if (
-        !response1.tool_calls ||
-        response1.tool_calls.length === 0
-      ) {
-        if (response1.content && response1.content.trim().length > 5) {
-          const assistantMsg = Message.assistant(response1.content);
-          this.contextManager.addMessage(assistantMsg.toDict());
-          this.logger.info("Verification", "Correction applied (single-pass).");
-          return response1.content;
-        }
-        return this.closeCorrection("empty response");
-      }
-
-      // LLM requested tools — execute them and inject results
-      const assistantMsg1 = Message.assistant(
-        response1.content || "",
-        response1.tool_calls,
-      );
-      this.contextManager.addMessage(assistantMsg1.toDict());
-
-      for (const tc of response1.tool_calls) {
-        const name = tc.function.name;
-        let args: Record<string, unknown>;
-        try {
-          args = JSON.parse(tc.function.arguments);
-        } catch {
-          args = {};
-        }
-        // Only execute read-only tools; non-read-only tool calls
-        // from the LLM are silently dropped (shouldn't happen with
-        // the filtered tool set, but defensive).
-        if (!Agent.CORRECTION_TOOL_NAMES.has(name)) {
-          this.logger.warn(
-            "Verification",
-            `Correction LLM tried to call non-read-only tool "${name}" — skipped.`,
-          );
-          continue;
-        }
-        const execResult = await this.toolRegistry.execute(name, args);
-        const toolMsg = Message.tool(
-          wrapAndScan(`tool:${name}`, execResult.content),
-          tc.id,
-          name,
-        );
-        this.contextManager.addMessage(toolMsg.toDict());
-      }
-
-      // Respect cancellation before final call
-      if (this.isCancelled) {
-        this.logger.info("Verification", "Correction cancelled before final call.");
-        return this.closeCorrection("cancelled");
-      }
-
-      // Step 2: Final call without tools — must produce the answer
-      this._abortController = new AbortController();
-      const messages2 = this.contextManager.getContextMessages();
-      const response2 = await this.llm.chat(
-        messages2,
-        undefined,
-        this._abortController.signal,
-      );
-
-      if (response2.content && response2.content.trim().length > 5) {
-        const assistantMsg2 = Message.assistant(response2.content);
-        this.contextManager.addMessage(assistantMsg2.toDict());
-        this.logger.info("Verification", "Correction applied (two-pass).");
-        return response2.content;
-      }
-
-      return this.closeCorrection("empty response after tool use");
-    } catch (err: unknown) {
-      this.logger.warn(
-        "Verification",
-        `Correction failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return this.closeCorrection("exception");
-    }
-  }
-
-  /** Close the correction attempt cleanly so context doesn't look truncated. */
-  private closeCorrection(reason: string): null {
-    this.contextManager.addMessage(
-      Message.user(
-        `[System] Correction attempt ended (${reason}). ` +
-          `The original answer has been preserved.`,
-      ),
-    );
-    return null;
-  }
 }

@@ -75,13 +75,6 @@ tools:
 
 匹配规则：
 
-| Pattern | 匹配 |
-| ------- | ---- |
-| `filesystem_*` | 所有以 `filesystem_` 开头的工具 |
-| `*_read` | 所有以 `_read` 结尾的工具 |
-| `*` | 主 ToolRegistry 中的全部工具 |
-| `echo` | 精确匹配（无 `*` 时保持原有行为） |
-
 多个 pattern 匹配到同名工具时会**自动去重**；未匹配到任何工具的 pattern 会输出警告日志。
 
 ## 加载和管理子代理
@@ -252,13 +245,6 @@ queued → cancelled (从等待队列中移除)
 
 子代理被构造时自动应用以下限制：
 
-| 限制         | 说明                                                              |
-| ------------ | ----------------------------------------------------------------- |
-| 无子代理递归 | `subAgentsDir=""`，不会自动注册子代理                            |
-| 无意向识别   | `skipAutoTools=true`，不跑 `detectInputSignals` / `matchInputContext` |
-| 无侧效工具   | 不注册 `remember`、`recall`、`skill`、`list_errors`               |
-| 工具白名单   | 只能使用 AGENT.md 中声明的工具（精确匹配 + 通配符 + filter）      |
-
 ## 类型定义
 
 ```ts
@@ -279,12 +265,9 @@ interface SubAgentResult {
   durationMs: number             // 执行时长（ms）
 }
 
-type RunStatus = "queued" | "running" | "completed" | "error" | "cancelled"
-
+type RunStatus = "queued" 
 type CancelResult =
-  | { cancelled: true; wasRunning: boolean }
-  | { cancelled: false; reason: "not_found" | "already_completed" }
-```
+    ```
 
 ## 异步执行流程
 
@@ -410,8 +393,7 @@ const agent = new ReActAgent({
 
 - **静态对象**：所有子 Agent 共享同一套 hook
 - **数组**：传入多个 hook
-- **工厂函数**：`(name: string, runId: string) => AgentHooks | AgentHooks[]`，每次 spawn 时调用
-
+- **工厂函数**：`(name: string, runId: string) => AgentHooks 
 ### 安全防护
 
 标记了 `safeForSubAgent: false` 的 hook 会被 `SubAgentManager` 自动过滤：
@@ -428,16 +410,6 @@ const unsafeHook = {
 ## Sub-Agent vs Fork
 
 如果不需要完整工具集或工作区隔离，考虑使用更轻量的 [Fork](/core/fork)：
-
-|            | Sub-Agent                     | Fork                          |
-| ---------- | ----------------------------- | ----------------------------- |
-| 触发方式   | LLM 通过 `spawn_subagent` 工具| 代码直接调用 `forkAgent()`    |
-| 隔离       | worktree 隔离                 | 无隔离（共享进程）            |
-| 工具       | 声明式 allowlist（支持通配符） | 强制只读白名单（`read_file` + `grep_search`） |
-| 执行       | 异步 fire-and-forget + 队列   | 同步阻塞 `await`              |
-| 取消       | `cancel(runId)` 精确取消      | `AbortSignal` 信号取消        |
-| 开销       | 较高                          | 极低                          |
-| 适用场景   | 开放式复杂子任务              | 确定性的小范围任务            |
 
 ## 下一步
 

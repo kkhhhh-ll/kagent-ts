@@ -172,10 +172,6 @@ export type {
 } from "./compression/interface";
 export type { CompressionConfig } from "./compression/types";
 
-// User preferences
-export { PreferenceManager } from "./preferences/preference-manager";
-export type { Preferences, PreferenceManagerConfig } from "./preferences/types";
-
 // Session persistence & network resilience
 export { SessionManager } from "./session/session-manager";
 export type { SessionManagerConfig } from "./session/session-manager";
@@ -251,19 +247,7 @@ export { Logger, ConsoleLogger, SilentLogger } from "./logging/index";
 export { MemoryManager } from "./memory/index";
 export type { Memory, MemoryType } from "./memory/index";
 
-// Reflection — post-execution self-reflection with error notebook (错题本)
-export { ErrorNotebook } from "./reflection/error-notebook";
-export type {
-  ErrorNotebookEntry,
-  ErrorNotebookConfig,
-  ReflectionErrorCategory,
-} from "./reflection/error-notebook";
-export { ReflectionAgent } from "./reflection/reflection-agent";
-export type {
-  ReflectionAgentConfig,
-  ReflectionInput,
-  ReflectionFinding,
-} from "./reflection/reflection-agent";
+// Reflection — memory extraction from sessions
 export { MemoryReflector } from "./reflection/memory-reflector";
 export type {
   MemoryReflectorConfig,
@@ -273,11 +257,6 @@ export type {
 // Intent — user signal detection + skill keyword matching
 export { detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt } from "./intent";
 export type { UserSignals, SkillMatch, AgentScenario, RiskLevel, TaskComplexity } from "./intent";
-
-// Verification — answer correctness & completeness check
-export { VerifyAgent } from "./verification/verify-agent";
-export type { VerifyAgentConfig } from "./verification/verify-agent";
-export type { VerificationResult, VerificationInput } from "./verification/types";
 
 // Precipitation — post-execution skill extraction
 export { PrecipitateAgent } from "./precipitation/precipitate-agent";

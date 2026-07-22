@@ -13,11 +13,9 @@ import { Logger, ConsoleLogger } from "../logging/logger";
 export type ModelRoute =
   | "main"
   | "subAgent"
-  | "reflection"
   | "lightweight"
   | "precipitation"
-  | "memory"
-  | "verification";
+  | "memory";
 
 /**
  * Configuration for the ModelRouter.
@@ -31,13 +29,6 @@ export interface ModelRouterConfig {
    * Default: `main`.
    */
   subAgent?: LLMProvider;
-
-  /**
-   * Model for post-execution reflection / QA.
-   * Default: `main`.
-   * Using a different model here provides an independent review perspective.
-   */
-  reflection?: LLMProvider;
 
   /**
    * Model for lightweight tasks (memory operations, error listing, etc.).
@@ -61,13 +52,6 @@ export interface ModelRouterConfig {
    * different models.
    */
   memory?: LLMProvider;
-
-  /**
-   * Model for answer verification (correctness / completeness check).
-   * Default: `main`.
-   * Using an independent model here provides an unbiased review perspective.
-   */
-  verification?: LLMProvider;
 
   /**
    * Shared fallback providers tried in order when the primary for
@@ -100,7 +84,6 @@ export interface ModelRouterConfig {
  * const router = new ModelRouter({
  *   main: new OpenAIProvider({ model: "gpt-4o" }),
  *   subAgent: new OpenAIProvider({ model: "gpt-4o-mini" }),
- *   reflection: new AnthropicProvider({ model: "claude-haiku-4-5-20251001" }),
  *   fallbacks: [new AnthropicProvider({ model: "claude-sonnet-4-6" })],
  * });
  *
@@ -161,16 +144,6 @@ export class ModelRouter implements LLMProvider {
   }
 
   /**
-   * Get the LLM provider for post-execution reflection / QA.
-   *
-   * Delegates to `reflection` when configured, otherwise falls back to `main`.
-   * Wraps the provider with any shared fallback chain.
-   */
-  forReflection(): LLMProvider {
-    return this.route("reflection");
-  }
-
-  /**
    * Get the LLM provider for lightweight tasks.
    *
    * Delegates to `lightweight` when configured, otherwise falls back to `main`.
@@ -198,16 +171,6 @@ export class ModelRouter implements LLMProvider {
    */
   forMemory(): LLMProvider {
     return this.route("memory");
-  }
-
-  /**
-   * Get the LLM provider for answer verification.
-   *
-   * Delegates to `verification` when configured, otherwise falls back to `main`.
-   * Wraps the provider with any shared fallback chain.
-   */
-  forVerification(): LLMProvider {
-    return this.route("verification");
   }
 
   // ─── Internal ────────────────────────────────────────────────────────
@@ -239,16 +202,12 @@ export class ModelRouter implements LLMProvider {
         return this.config.main;
       case "subAgent":
         return this.config.subAgent ?? this.config.main;
-      case "reflection":
-        return this.config.reflection ?? this.config.main;
       case "lightweight":
         return this.config.lightweight ?? this.config.main;
       case "precipitation":
         return this.config.precipitation ?? this.config.main;
       case "memory":
         return this.config.memory ?? this.config.main;
-      case "verification":
-        return this.config.verification ?? this.config.main;
     }
   }
 

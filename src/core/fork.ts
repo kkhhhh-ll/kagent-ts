@@ -6,6 +6,9 @@ import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { Tool } from "./types";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import type { AgentHooks } from "./hooks";
+import { ContextManager } from "../context/context-manager";
+import type { MessageData } from "../messages/types";
+import { Role } from "../messages/types";
 
 /**
  * Whitelist of tool names allowed in fork agents.
@@ -52,22 +55,40 @@ export interface ForkOptions {
    * When omitted, the fork runs without hook instrumentation.
    */
   hooks?: AgentHooks | AgentHooks[];
+  /**
+   * Optional context messages to inherit from a parent agent.
+   *
+   * When provided, these messages are pre-populated into the fork's context
+   * BEFORE the task `input` is added. System-role messages are filtered out
+   * so the fork keeps its own system prompt. This enables prompt caching on
+   * the shared prefix and eliminates the need to serialize the conversation
+   * into the `input` string.
+   */
+  contextMessages?: MessageData[];
 }
 
 /**
  * Fork a lightweight ReActAgent and run it to completion.
  *
- * Returns the agent's final answer string. The fork runs in its own
- * isolated context with read-only tools by default — ideal for
- * post-hoc analysis, extraction, or verification tasks.
+ * Returns the agent's final answer string. The fork runs with read-only
+ * tools by default — ideal for post-hoc analysis, extraction, or
+ * verification tasks.
+ *
+ * When `contextMessages` is provided, the fork inherits the parent agent's
+ * conversation history (minus system messages). This enables prompt caching
+ * on the shared prefix and eliminates the need to serialize the conversation
+ * into the `input` string. The `input` then only needs to carry the task
+ * instruction and any metadata not present in the conversation.
  *
  * The fork does NOT go through the SubAgentManager; it is a direct,
  * inline agent invocation.
  *
  * @example
  * ```ts
- * const result = await forkAgent("Analyze this session...", {
- *   systemPrompt: "You are a code reviewer...",
+ * // With context inheritance (recommended):
+ * const result = await forkAgent("Review the conversation above and extract skills.", {
+ *   systemPrompt: "You are a skill extractor...",
+ *   contextMessages: parentContext.getContextMessages(),
  *   maxIterations: 5,
  * });
  * ```
@@ -80,6 +101,24 @@ export async function forkAgent(
   const logger = options.logger ?? new ConsoleLogger();
 
   logger.info("ForkAgent", `Starting fork with max ${maxIterations} iteration(s)...`);
+
+  // ── Inherit parent context ──────────────────────────────────────────
+  // Pre-populate a ContextManager with the parent agent's messages so the
+  // fork "sees" the full conversation instead of a serialized summary.
+  // System messages are filtered out — the fork has its own system prompt.
+  let contextManager: ContextManager | undefined;
+  if (options.contextMessages && options.contextMessages.length > 0) {
+    contextManager = new ContextManager();
+    for (const msg of options.contextMessages) {
+      if (msg.role !== Role.System) {
+        contextManager.addMessage(msg);
+      }
+    }
+    logger.info(
+      "ForkAgent",
+      `Inherited ${options.contextMessages.length} context message(s) from parent agent.`,
+    );
+  }
 
   const tools = new ToolRegistry();
   if (options.tools && options.tools.length > 0) {
@@ -123,6 +162,7 @@ export async function forkAgent(
     maxIterations,
     logger,
     hooks: options.hooks,
+    contextManager,
     // Disable sub-agent discovery explicitly — no falsy string hack.
     disableSubAgents: preventSubAgents,
     // Skip auto-registration of side-effect tools (`remember`, `recall`,

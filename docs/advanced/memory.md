@@ -34,14 +34,7 @@ type: rule
 kagent-ts 提供三种记忆类型：
 
 ```ts
-type MemoryType = "rule" | "project" | "preference"
-```
-
-| 类型 | 用途 | 示例 |
-| --- | --- | --- |
-| `rule` | 用户**明确要求**的约束、规范 | "始终用 kebab-case 命名"、"组件用函数式写法" |
-| `project` | 项目事实、架构决策 | "从 MySQL 迁移到了 PostgreSQL"、"API 基础地址为 https://api.example.com/v2" |
-| `preference` | LLM **观察到的**用户习惯、风格偏好 | "用户喜欢简短直接的回答"、"用户偏好 pnpm 而非 npm" |
+type MemoryType = "rule" ```
 
 ### 设计理念
 
@@ -195,8 +188,7 @@ const agent = new ReActAgent({
 
 `MemoryReflector` Fork 一个独立的子 Agent，拥有只读工具（`read_file`、`grep_search`），会审查对话历史并提取值得跨 session 保留的规则和项目事实。已有的同名记忆会自动跳过。
 
-详见 [Reflection 反思](/advanced/reflection)。
-
+详见 
 ## 关联记忆
 
 记忆文件之间可以相互引用：
@@ -238,6 +230,5 @@ type: rule
 
 ## 下一步
 
-- [Reflection 反思](/advanced/reflection) — 自动记忆提取和错题本机制
-- [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
+- - [RAG 知识库](/advanced/rag) — 大规模文档语义检索（与 Memory 互补）
 - [AgentConfig](/guide/configuration) — 通过 `memoryReflection: "post-hoc"` 在 Agent 执行后自动触发记忆提取

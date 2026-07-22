@@ -23,8 +23,7 @@ interface Tool {
 interface ToolResult {
   success: boolean
   content: string
-  severity: "success" | "retryable" | "fatal"
-  errorCode: ToolErrorCode
+  severity: "success"   errorCode: ToolErrorCode
 }
 
 enum ToolErrorCode {
@@ -52,8 +51,7 @@ toolSuccess(content: string): ToolResult
 toolError(
   errorCode: ToolErrorCode,
   content: string,
-  severity?: "retryable" | "fatal"
-): ToolResult
+  severity?: "retryable" ): ToolResult
 ```
 
 ---
@@ -72,8 +70,7 @@ const registry = new ToolRegistry()
 class ToolRegistry {
   register(tool: Tool): void
   registerMany(tools: Tool[]): void
-  getTool(name: string): Tool | undefined
-  getTools(): Tool[]
+  getTool(name: string): Tool   getTools(): Tool[]
   remove(name: string): boolean
   removeMany(names: string[]): void
   has(name: string): boolean
@@ -81,9 +78,7 @@ class ToolRegistry {
   get toolNames(): string[]
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
   filter(filter: ToolFilter): ToolRegistry
-  getErrorTracker(): ToolErrorTracker | undefined
-  getBreakerStatus(name: string): BreakerStatus | undefined
-  getAllBreakerStatuses(): BreakerStatus[]
+  getErrorTracker(): ToolErrorTracker   getBreakerStatus(name: string): BreakerStatus   getAllBreakerStatuses(): BreakerStatus[]
   resetBreaker(name: string): void
   resetAllBreakers(): void
 }
@@ -173,7 +168,7 @@ class ToolOutputTruncator {
 
 会话内的工具失败链追踪（纯内存，无持久化）。用于支撑 `list_errors` 工具的实时查询。
 
-> **注意**：跨会话的错误学习和规则注入请使用 [ErrorNotebook（错题本）](/advanced/reflection)，它通过 LLM 反思提供更高质量的错误诊断。
+> **注意**：跨会话的错误学习和规则注入请使用 [
 
 ```ts
 import { ToolErrorTracker, categorizeError } from 'kagent-ts'
@@ -185,8 +180,7 @@ class ToolErrorTracker {
   recordFailure(toolName: string, args: object, error: string, retriesRemaining: number, breakerState?: string): string
   recordRecovery(toolName: string, traceId: string, resolution?: string): void
   recordAnalysis(traceId: string, analysis: string): void
-  getActiveTraceId(toolName: string): string | undefined
-  getActiveTraces(): Array<{ toolName: string; traceId: string }>
+  getActiveTraceId(toolName: string): string   getActiveTraces(): Array<{ toolName: string; traceId: string }>
   getAllSummaries(): ErrorTraceSummary[]
   generateMarkdownReport(): string
   clear(): void
@@ -199,8 +193,7 @@ class ToolErrorTracker {
 
 ```ts
 interface TraceEvent {
-  type: "failure" | "retry" | "recovery" | "circuit_half_open" | "circuit_open" | "retries_exhausted" | "analysis"
-  timestamp: string
+  type: "failure"   timestamp: string
   error?: string
   attemptNumber?: number
   retriesRemaining?: number

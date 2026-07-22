@@ -25,7 +25,7 @@ Phase 2 — RESOLVE:
   ↓
 Final Answer: 所有步骤完成，输出完整答案
   ↓
-[VERIFY] (可选): Fork VerifyAgent 验证答案正确性
+[VERIFY] (可选): 
   ├── 通过 → 返回答案
   └── 不通过 → 注入反馈 → 一次 LLM 修正 → 返回修正后答案
 ```
@@ -90,23 +90,18 @@ interface PlanSolveAgentConfig extends AgentConfig {
   replanThreshold?: number
 
   /** 答案验证模式 (默认: "off") — 阻塞式 */
-  verification?: "off" | "post-hoc"
 
-  /** 错题本反思模式 (默认: "off") — fire-and-forget */
-  reflection?: "off" | "post-hoc"
+  /** 
 
   /** 反思子 Agent 最大迭代次数 (默认: 4) */
-  reflectionMaxIterations?: number
 
   /** 记忆提取模式 (默认: "off") */
-  memoryReflection?: "off" | "post-hoc"
-
+  memoryReflection?: "off" 
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
 
   /** 技能沉淀模式 (默认: "off") */
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
   precipitationMaxIterations?: number
 }
@@ -142,21 +137,11 @@ interface PlanSolveAgentConfig extends AgentConfig {
 
 Plan-Solve Agent 支持两种响应格式，解析器按优先级依次尝试：
 
-| 优先级 | 格式 | 示例 |
 |--------|------|------|
-| 1 | JSON | `{"thought": "...", "plan": [...]}` |
-| 2 | 方括号标记 | `[Thought] ...` / `[Plan]` / `[Final Answer]` |
-| 3 | 自然语言 | `Final Answer: ...` |
 
 **方括号标记列表：**
 
-| 标记 | 用途 |
 |------|------|
-| `[Thought]` | 每轮必填 — 当前分析/推理 |
-| `[Plan]` | 初始计划（编号列表） |
-| `[Current Step]` | 即将执行的步骤号（1-based） |
-| `[Revised Plan]` | 修正后的剩余步骤（编号列表） |
-| `[Final Answer]` | 任务完成时的最终答案 |
 
 如果模型只输出 `[Thought]` 而没有其他标记，解析器会将其作为最终答案返回。这确保弱模型（不严格遵守格式）也能正常结束循环。
 

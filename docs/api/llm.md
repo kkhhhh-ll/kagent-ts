@@ -69,11 +69,9 @@ interface LLMStreamDone {
     completion_tokens: number
     total_tokens: number
   }
-  stop_reason?: "length" | string
-}
+  stop_reason?: "length" }
 
-type LLMStreamEvent = LLMStreamChunk | LLMStreamDone
-```
+type LLMStreamEvent = LLMStreamChunk ```
 
 ---
 
@@ -187,7 +185,6 @@ interface ModelRouterConfig {
   subAgent?: LLMProvider
 
   /** 反思专用模型（默认: main） */
-  reflection?: LLMProvider
 
   /** 轻量任务专用模型（默认: main） */
   lightweight?: LLMProvider
@@ -199,7 +196,6 @@ interface ModelRouterConfig {
   memory?: LLMProvider
 
   /** 答案验证专用模型（默认: main） */
-  verification?: LLMProvider
 
   /** 共享 Fallback 链（所有 route 的网络错误都会尝试这些 provider） */
   fallbacks?: LLMProvider[]
@@ -236,8 +232,7 @@ interface LLMProviderConfig {
   baseURL?: string
   retry?: RetryConfig
   timeout?: number
-  provider?: "openai" | "anthropic" | "auto"  // 默认: "auto"
-}
+  provider?: "openai" }
 ```
 
 ---
@@ -285,14 +280,7 @@ class LLMNetworkError extends Error {
 }
 
 type NetworkErrorCause =
-  | 'timeout'
-  | 'connection'
-  | 'rate_limited'
-  | 'server_error'
-  | 'abort'
-  | 'dns'
-  | 'tls'
-```
+              ```
 
 ## 下一步
 

@@ -1,5 +1,5 @@
 import { LLMProvider } from "../llm/interface";
-import { MessageData, Role } from "../messages/types";
+import { MessageData } from "../messages/types";
 import { extractJSON } from "../core/response-schema";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
@@ -189,43 +189,8 @@ Skills are reusable workflow templates that capture "how to do X in this project
 
 // ─── Pure Helpers ────────────────────────────────────────────────────────────
 
-/** Characters to keep from the start of a truncated tool result. */
-const TRUNCATION_RETAIN = 500;
-/** Tool result longer than this will be truncated. */
-const TRUNCATION_THRESHOLD = TRUNCATION_RETAIN * 2;
 /** Max number of existing skills to list in the prompt. */
 const MAX_EXISTING_SKILLS_LISTED = 30;
-
-/**
- * Format the conversation for the precipitation prompt.
- * Truncates very long tool results for readability.
- */
-function formatConversation(messages: MessageData[]): string[] {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const role = msg.role.toUpperCase();
-    let content = msg.content ?? "";
-
-    if (msg.role === Role.Tool && content.length > TRUNCATION_THRESHOLD) {
-      content =
-        content.slice(0, TRUNCATION_RETAIN) +
-        "\n... (truncated, " +
-        content.length +
-        " chars total)";
-    }
-
-    lines.push(`[${role}] ${content}`);
-
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      for (const tc of msg.tool_calls) {
-        lines.push(
-          `  → tool_call: ${tc.function.name}(${tc.function.arguments})`,
-        );
-      }
-    }
-  }
-  return lines;
-}
 
 /**
  * Format the existing skills list for dedup awareness.
@@ -258,20 +223,15 @@ function formatExistingSkills(
 }
 
 /**
- * Build the task prompt for the fork sub-agent from the precipitation input.
+ * Build the task prompt for the fork sub-agent.
+ *
+ * The conversation history is passed via {@link ForkOptions.contextMessages}
+ * so the fork inherits structured messages directly — no serialization needed.
+ * This prompt only carries metadata not present in the conversation.
  */
 function buildTaskPrompt(input: PrecipitationInput): string {
   return [
-    "Please review this agent session and extract reusable skills.",
-    "",
-    "=== User Query ===",
-    input.userQuery,
-    "",
-    "=== Final Answer ===",
-    input.finalAnswer,
-    "",
-    "=== Conversation ===",
-    ...formatConversation(input.conversation),
+    "Please review the conversation above and extract reusable skills.",
     "",
     "=== Existing Skills (do NOT duplicate these) ===",
     ...formatExistingSkills(
@@ -506,13 +466,16 @@ You have access to read_file and grep_search tools to verify claims against the 
 
 /**
  * Build the verification prompt for a single skill candidate.
+ *
+ * The conversation history is passed via context inheritance so the
+ * verifier can fact-check claims against the original session transcript.
  */
 function buildVerifyPrompt(
   candidate: SkillCandidate,
   input: PrecipitationInput,
 ): string {
   return [
-    "Please review this skill candidate extracted from an agent session.",
+    "Please review this skill candidate extracted from the conversation above.",
     "",
     "=== Skill Candidate ===",
     `Name: ${candidate.name}`,
@@ -527,16 +490,13 @@ function buildVerifyPrompt(
     `Content:`,
     candidate.content,
     "",
-    "=== Original User Query ===",
-    input.userQuery,
-    "",
     "=== Existing Skills (check for duplication) ===",
     ...input.existingSkillNames.map(
       (n) =>
         `- ${n}: ${input.existingSkillDescriptions[n] || "(no description)"}`,
     ),
     "",
-    "Review the candidate and output your verdict as JSON.",
+    "Review the candidate against the session transcript and output your verdict as JSON.",
   ].join("\n");
 }
 
@@ -769,7 +729,11 @@ export class PrecipitateAgent {
     );
 
     try {
-      const answer = await this.forkAndRun(taskPrompt, abortController.signal);
+      const answer = await this.forkAndRun(
+        taskPrompt,
+        abortController.signal,
+        input.conversation,
+      );
 
       const candidates = parseCandidates(answer, this.logger);
 
@@ -860,10 +824,13 @@ export class PrecipitateAgent {
    *
    * @param signal — forwarded to the fork so the timeout in {@link precipitate}
    *                 can cancel in-flight LLM requests.
+   * @param contextMessages — parent agent's conversation messages for context
+   *                          inheritance (enables prompt caching).
    */
   private forkAndRun(
     userPrompt: string,
     signal?: AbortSignal,
+    contextMessages?: import("../messages/types").MessageData[],
   ): Promise<string> {
     return forkAgent(userPrompt, {
       llm: this.llm,
@@ -872,6 +839,7 @@ export class PrecipitateAgent {
       logger: this.logger,
       signal,
       hooks: TraceLogger.wrapHooksForFork(this.hooks, "precipitation"),
+      contextMessages,
     });
   }
 
@@ -960,6 +928,7 @@ export class PrecipitateAgent {
           this.hooks,
           `skill-verify:${candidate.name}`,
         ),
+        contextMessages: input.conversation,
       });
 
       const result = parseVerifyResult(answer, this.logger);

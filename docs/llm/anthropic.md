@@ -101,11 +101,7 @@ const agent = new FusionAgent({
 
 ## 可用模型
 
-| 模型 ID | 说明 |
 |---------|------|
-| `claude-opus-4-8` | 最强大的 Claude 模型，支持 Extended Thinking |
-| `claude-sonnet-4-6` | 性能与速度的最佳平衡 (默认) |
-| `claude-haiku-4-5-20251001` | 最快的 Claude 模型 |
 
 ## 下一步
 

@@ -23,8 +23,7 @@ class SessionManager {
   getSessionDir(): string
   setSessionId(id: string): void
   saveCheckpoint(state: SessionState): void
-  loadSession(sessionId: string): SessionState | null
-  listSessions(): SessionState[]
+  loadSession(sessionId: string): SessionState   listSessions(): SessionState[]
   deleteSession(sessionId: string): void
   markStatus(status: SessionStatus): void
 }
@@ -51,10 +50,8 @@ interface SessionState {
   metadata?: Record<string, unknown>
 }
 
-type AgentType = "react" | "plan-solve" | "fusion" | "orchestrator"
-
-type SessionStatus = "active" | "interrupted" | "completed" | "cancelled"
-```
+type AgentType = "react" 
+type SessionStatus = "active" ```
 
 ---
 
@@ -75,13 +72,12 @@ interface PlanSolveSessionState {
 
 ```ts
 interface FusionSessionState {
-  complexity: "simple" | "complex"
-  routed: boolean
+  complexity: "simple"   routed: boolean
   currentPlan: string[]
   hasPlan: boolean
   completedSteps: number
   consecutiveFailures: number
-  reflectionEnabled: boolean
+
 }
 ```
 

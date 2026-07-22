@@ -173,8 +173,6 @@ export class FusionAgent extends Agent {
   private planConfirmation: "auto" | "always" | "never";
   private onPlanConfirm?: PlanConfirmCallback;
   private maxPlanSteps: number;
-  private reflectionMode: "off" | "post-hoc";
-  private reflectionMaxIterations: number;
 
   private maxIterations: number;
   private replanThreshold: number;
@@ -215,8 +213,6 @@ export class FusionAgent extends Agent {
     this.planConfirmation = config.planConfirmation ?? "always";
     this.onPlanConfirm = config.onPlanConfirm;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
-    this.reflectionMode = config.reflection ?? "off";
-    this.reflectionMaxIterations = config.reflectionMaxIterations ?? 6;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.precipitationMode = config.precipitation ?? "off";
@@ -323,20 +319,6 @@ export class FusionAgent extends Agent {
 
     // ── Phase 3: ReAct Execute Loop ───────────────────────────────────
     let answer = await this.executeReActLoop();
-
-    // ── Phase 4: Answer Verification (blocking) ───────────────────────
-    if (this.verificationMode === "post-hoc") {
-      try {
-        answer = await this.runVerification(input, answer);
-      } catch (err: unknown) {
-        this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
-      }
-    }
-
-    // ── Phase 5: Reflection (best-effort, non-blocking) ──────────────
-    this.trackBackground(this.runReflection(input, answer)).catch((err) =>
-      this.logger.warn("Reflection", `Background reflection failed: ${err instanceof Error ? err.message : String(err)}`),
-    );
 
     // ── Phase 6: Precipitation (skill extraction) ─────────────────────
     // Trigger on: post-hoc mode, or hard-won success (failures→success), or user intent
@@ -977,80 +959,7 @@ export class FusionAgent extends Agent {
     return timeoutMsg;
   }
 
-  // ─── Phase 4: Reflection ────────────────────────────────────────────
 
-  /**
-   * Run the configured reflection strategy.
-   */
-  private async runReflection(
-    input: string,
-    answer: string,
-  ): Promise<void> {
-    if (this.reflectionMode === "off") return;
-    if (this.reflectionMode === "post-hoc") {
-      await this.reflectPostHoc(input, answer);
-    }
-  }
-
-  /**
-   * Post-hoc reflection: after execution completes, fork a
-   * ReflectionAgent to review the full session and persist
-   * findings to the ErrorNotebook.
-   */
-  private async reflectPostHoc(
-    input: string,
-    answer: string,
-  ): Promise<void> {
-    const { ReflectionAgent: RA } = await import("../reflection/reflection-agent.js");
-    const { ErrorNotebook: NB } = await import("../reflection/error-notebook.js");
-
-    // Auto-create notebook if not provided
-    const notebook = this.notebook ?? new NB();
-
-    this.logger.info("Reflection", "Starting post-hoc reflection...");
-
-    try {
-      const reflector = new RA({
-        llm: this.reflectionLLM ?? this.llm,
-        notebook,
-        maxIterations: this.reflectionMaxIterations,
-        hooks: this.hooks,
-      });
-
-      const contextMessages = this.contextManager.getContextMessages();
-
-      const entries = await reflector.reflect({
-        userQuery: input,
-        finalAnswer: answer,
-        conversation: contextMessages,
-        sessionId: this.getSessionId(),
-        scenarios: this.inputSignals.scenarios.length > 0 ? this.inputSignals.scenarios : undefined,
-        errorTraces: this.errorTracker?.getAllTraces(),
-        complexity: this.complexity,
-        routeReason: this.routeReason || undefined,
-      });
-
-      if (entries.length > 0) {
-        this.logger.info(
-          "Reflection",
-          `Post-hoc complete — ${entries.length} finding(s) written to notebook.`,
-        );
-        for (const entry of entries) {
-          this.logger.info(
-            "Reflection",
-            `  [${entry.category}] ${entry.description}`,
-          );
-        }
-      } else {
-        this.logger.info("Reflection", "Post-hoc complete — no issues found.");
-      }
-    } catch (err: unknown) {
-      this.logger.warn(
-        "Reflection",
-        `Post-hoc reflection failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
 
   // ─── Phase 5: Precipitation ──────────────────────────────────────────
 
@@ -1557,28 +1466,20 @@ export class FusionAgent extends Agent {
           yield parsed.answer;
         }
 
-        // ── Answer verification (blocking) ─────────────────────
-        let verifiedAnswer = parsed.answer;
-        if (this.verificationMode === "post-hoc") {
-          try {
-            verifiedAnswer = await this.runVerification(input, parsed.answer);
-          } catch (err: unknown) {
-            this.logger.warn("Verification", `Verification failed: ${err instanceof Error ? err.message : String(err)} — returning original answer.`);
-          }
-        }
+        const answer = parsed.answer;
 
-        this.fireOnFinish(verifiedAnswer);
+        this.fireOnFinish(answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
         if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
             this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ──────
         if (shouldReflectMemory) {
-          this.trackBackground(this.runMemoryReflection(input, verifiedAnswer)).catch((err: unknown) =>
+          this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
             this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
           );
         }

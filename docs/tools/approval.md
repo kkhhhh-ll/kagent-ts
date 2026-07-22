@@ -36,16 +36,10 @@ const agent = new ReActAgent({
     return await askUser(toolName, args);
   },
   approvalTimeoutMs: 120_000,           // 默认 2 分钟
-  approvalTimeoutStrategy: "deny",      // "deny"（默认）| "allow"
-})
+  approvalTimeoutStrategy: "deny",      // "deny"（默认）})
 ```
 
 ### 超时策略
-
-| 策略 | 超时后行为 | 适用场景 |
-| ---- | ---- | ---- |
-| `"deny"` (默认) | 拒绝工具执行，返回 `APPROVAL_DENIED`，LLM 必须找其他方法 | 通用场景——安全优先 |
-| `"allow"` | 放行工具执行 | 非破坏性工具 + 可信环境 |
 
 ### 三种超时路径
 

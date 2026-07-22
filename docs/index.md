@@ -126,12 +126,11 @@ kagent-ts
 │   ├── llm-reranker.ts        # LLM 重排序
 │   ├── cross-encoder-reranker.ts  # Cross-Encoder 重排序（默认）
 │   └── rag-types.ts           # 类型定义
-├── reflection/     # 反思代理 + 错误笔记本 (错题本)
+├── reflection/     # 记忆提取 (MemoryReflector)
 ├── precipitation/  # 技能沉淀 (提取可复用 Skills)
 ├── security/       # Prompt Injection 防御（边界标记 + 注入签名扫描）
 ├── git/            # Git Worktree 隔离（子代理并行执行文件隔离）
 ├── memory/         # 长期记忆 (MEMORY.md)
-├── preferences/    # 用户偏好注入
 ├── rules/          # 项目规则注入 (CLAUDE.md)
 ├── eval/           # 评估框架（Benchmark 回归测试）
 ├── trace/          # 执行追踪 (HTML Trace Logger)

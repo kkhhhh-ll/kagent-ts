@@ -22,8 +22,7 @@ interface AgentConfig {
   logger?: Logger                                   // 日志实例
 
   // ── 生命周期钩子 ──
-  hooks?: AgentHooks | AgentHooks[]
-
+  hooks?: AgentHooks 
   // ── 人工审批 (HITL) ──
   onToolApproval?: (toolName: string, args: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>
 
@@ -46,8 +45,7 @@ interface AgentConfig {
   subAgentsDir?: string
 
   // ── 子代理生命周期钩子（支持静态/数组/工厂函数）──
-  subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[])
-
+  subAgentHooks?: AgentHooks 
   // ── 最大并行子 Agent 数 (默认: 3，超过的排队) ──
   maxPending?: number
 
@@ -60,8 +58,7 @@ interface AgentConfig {
   // ── 子 Agent 专用 LLM Provider（默认复用 llm）──
   subAgentLLM?: LLMProvider
 
-  // ── 错题本反思专用 LLM Provider（默认复用 llm）──
-  reflectionLLM?: LLMProvider
+  // ── 
 
   // ── 记忆提取专用 LLM Provider（默认复用 llm）──
   memoryReflectorLLM?: LLMProvider
@@ -70,19 +67,9 @@ interface AgentConfig {
   precipitationLLM?: LLMProvider
 
   // ── Skill 沉淀模式 (默认: "off") ──
-  precipitation?: "off" | "post-hoc"
-
+  precipitation?: "off" 
   // ── 记忆提取模式 (默认: "off") ──
-  memoryReflection?: "off" | "post-hoc"
-
-  // ── 答案验证模式 (默认: "off") ──
-  verification?: "off" | "post-hoc"
-
-  // ── 答案验证专用 LLM Provider（默认复用 llm）──
-  verificationLLM?: LLMProvider
-
-  // ── 答案验证及格线 0-100（默认: 70）──
-  verificationThreshold?: number
+  memoryReflection?: "off" 
 
   // ── 记忆存储目录 (默认: ".k-memory") ──
   memoryDir?: string
@@ -92,19 +79,9 @@ interface AgentConfig {
 }
 ```
 
-> **注意**：`maxIterations` 和 `reflection`（错题本反思模式）不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中（如 `ReActAgentConfig`、`PlanSolveAgentConfig` 等）。不同 Agent 类型的默认 `maxIterations` 不同：ReAct=10, PlanSolve=15, Fusion=15。
-
 ### 子系统的 LLM 分配
 
 Reflection、Memory、Precipitation、Verification 四个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
-
-| 子系统 | 配置方式 | 决策链 |
-| ------ | -------- | ------ |
-| **Reflection** | AgentConfig 中 `reflectionLLM` | 显式 → ModelRouter → llm |
-| **Memory** | AgentConfig 中 `memoryReflectorLLM` | 显式 → ModelRouter → llm |
-| **Precipitation** | AgentConfig 中 `precipitationLLM` | 显式 → ModelRouter → llm |
-| **Verification** | AgentConfig 中 `verificationLLM` | 显式 → ModelRouter → llm |
-| **SubAgent** | AgentConfig 中 `subAgentLLM` | 显式 → ModelRouter → llm |
 
 推荐使用 `ModelRouter` 集中管理所有模型路由，详见 [Model Router](/llm/model-router)。
 
@@ -229,12 +206,7 @@ const agent = new ReActAgent({
 
 ## 环境变量
 
-| 变量名 | 说明 |
 |--------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 |
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
-| `KAGENT_CONFIG_DIR` | 自定义配置目录 (默认: `~/.kagent`) |
-| `KAGENT_SESSIONS_DIR` | 自定义会话持久化目录 |
 
 ## 下一步
 
