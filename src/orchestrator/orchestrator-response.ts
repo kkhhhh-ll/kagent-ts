@@ -66,8 +66,8 @@ export function parseDecomposeResponse(raw: string): OrchestrationPlan {
  * System prompt fragment injected during the Decompose phase.
  *
  * Teaches the LLM to break a user request into a DAG of sub-agent tasks.
- * The `availableSubAgents` placeholder is filled at runtime with the
- * output of the `list_subagents` tool so the LLM knows which agents exist.
+ * The `availableSubAgents` placeholder is filled at runtime from the
+ * sub-agent manager (same source as the system-prompt hint).
  */
 export function buildDecomposePrompt(availableSubAgents: string): string {
   return `You are an expert task orchestrator. Your job is to analyse the user's request and

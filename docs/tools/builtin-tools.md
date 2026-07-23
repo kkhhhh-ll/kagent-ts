@@ -18,9 +18,7 @@ kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执
 | `skill` | 知识/记忆 | - |
 | `remember` | 知识/记忆 | - |
 | `recall` | 知识/记忆 | - |
-| `list_subagents` | 子代理 | - |
 | `spawn_subagent` | 子代理 | - |
-| `list_errors` | 诊断 | - |
 
 ## 注册方式
 

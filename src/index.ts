@@ -90,14 +90,6 @@ export {
   filterTools,
 } from "./tools/tool-filter";
 
-// Tool error tracker — in-memory tracking for tool failure chains
-export { ToolErrorTracker, categorizeError } from "./tools/error-tracker";
-export type {
-  ToolErrorTrace,
-  TraceEvent,
-  ErrorTraceSummary,
-} from "./tools/types";
-
 // Built-in file tools
 export {
   BUILTIN_TOOLS,
@@ -108,9 +100,7 @@ export {
   EditFileTool,
   GrepSearchTool,
   GlobSearchTool,
-  createListSubagentsTool,
   createSpawnSubagentTool,
-  createListErrorsTool,
   createSkillTool,
   createRememberTool,
   createRecallTool,

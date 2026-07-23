@@ -35,13 +35,10 @@ export const BUILTIN_TOOL_NAMES = new Set([
   "bash",
   "skill",
   "spawn_subagent",
-  "list_subagents",
   "remember",
   "recall",
-  "list_errors",
   "search_knowledge",
   "list_knowledge_documents",
-  "precipitate_skill",
 ]);
 
 // Re-export individual tools
@@ -52,13 +49,10 @@ export { GrepSearchTool } from "./grep-search";
 export { GlobSearchTool } from "./glob-search";
 export { WebFetchTool } from "./web-fetch";
 export { BashTool } from "./bash";
-export { createListSubagentsTool } from "./list-subagents";
 export { createSpawnSubagentTool } from "./spawn-subagent";
-export { createListErrorsTool } from "./list-errors";
 export { createSkillTool } from "./skill";
 export { createRememberTool } from "./remember";
 export { createRecallTool } from "./recall";
-export { createPrecipitateSkillTool } from "./precipitate-skill";
 export { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../../rag/search-knowledge";
 
 /**
@@ -66,9 +60,9 @@ export { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../
  *
  * Only registers tools that don't require runtime dependencies (read_file,
  * write_file, edit_file, grep_search, glob_search, web_fetch, bash).
- * Factory-created tools (spawn_subagent, list_subagents, skill, remember,
- * recall, list_errors, search_knowledge, list_knowledge_documents) must be
- * registered separately via their respective factory functions.
+ * Factory-created tools (spawn_subagent, skill, remember, recall,
+ * search_knowledge, list_knowledge_documents) must be registered
+ * separately via their respective factory functions.
  *
  * Silently skips tools that are already registered.
  *

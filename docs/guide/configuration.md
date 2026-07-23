@@ -13,8 +13,6 @@ interface AgentConfig {
 
   // ── 工具 ──
   tools?: Tool[]                                    // 工具列表
-  toolRetryCount?: number                           // 工具失败重试次数
-
   // ── 上下文 ──
   contextManager?: ContextManager                   // 上下文管理器实例
 

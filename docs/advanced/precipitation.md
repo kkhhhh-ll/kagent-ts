@@ -130,22 +130,6 @@ const agent = new ReActAgent({
 
 > **keywords 字段**：PrecipitateAgent 的 System Prompt 包含关键词生成指引，LLM 需要输出 3-8 个关键词。这些关键词使沉淀的 Skill 在下一次用户输入匹配时自动激活。
 
-## precipitate_skill 工具
-
-Agent 执行过程中，LLM 也可以**主动调用** `precipitate_skill` 工具保存技能：
-
-```ts
-// 工具参数
-{
-  name: "prisma-migration-workflow",          // kebab-case 唯一名称
-  description: "Prisma 数据库迁移流程",         // 在可用技能列表中展示
-  keywords: ["prisma", "migration", "database", "schema"],  // 可选，自动激活关键词
-  content: "## Steps\n1. 修改 schema.prisma\n2. 运行 prisma migrate dev..."
-}
-```
-
-工具默认 `requireApproval: true`，需要用户审批后才会写入。
-
 ## 沉淀产物
 
 生成的 `SKILL.md` 带有 `precipitated: true` 标记和自动生成的关键词：

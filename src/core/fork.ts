@@ -166,7 +166,7 @@ export async function forkAgent(
     // Disable sub-agent discovery explicitly — no falsy string hack.
     disableSubAgents: preventSubAgents,
     // Skip auto-registration of side-effect tools (`remember`, `recall`,
-    // `skill`, `list_errors`) so the fork only has the explicitly
+    // `skill`) so the fork only has the explicitly
     // configured tools (read_file + grep_search by default).
     skipAutoTools: true,
   });

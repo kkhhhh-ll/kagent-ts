@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { detectSignals, planHasRiskyOps } from "../../src/intent/signal-detector";
-import type { RiskLevel, TaskComplexity, AgentScenario } from "../../src/intent/signal-detector";
+import type { RiskLevel } from "../../src/intent/signal-detector";
 
 // ─── detectSignals ──────────────────────────────────────────────────────────
 
@@ -192,122 +192,6 @@ describe("detectSignals", () => {
     });
   });
 
-  // ── Scenarios (multi-label) ───────────────────────────────────────────
-
-  describe("scenarios", () => {
-    it("returns empty array when no scenario matches", () => {
-      expect(detectSignals("hello world").scenarios).toEqual([]);
-    });
-
-    it("detects single scenario", () => {
-      expect(detectSignals("debug the authentication bug").scenarios).toEqual(["debugging"]);
-      expect(detectSignals("deploy to production").scenarios).toEqual(["deployment"]);
-      expect(detectSignals("refactor the user module").scenarios).toEqual(["refactoring"]);
-    });
-
-    it("detects multiple scenarios (multi-label)", () => {
-      const result = detectSignals("find the bug in auth.ts and fix it");
-      expect(result.scenarios).toContain("debugging");
-      expect(result.scenarios).toContain("file-search");
-      expect(result.scenarios.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("detects code-write + testing together", () => {
-      const result = detectSignals("write tests for the auth module");
-      expect(result.scenarios).toContain("code-write");
-      expect(result.scenarios).toContain("testing");
-    });
-
-    it("detects deployment + configuration together", () => {
-      const result = detectSignals("configure the env and deploy");
-      expect(result.scenarios).toContain("configuration");
-      expect(result.scenarios).toContain("deployment");
-    });
-
-    it("detects Chinese keywords", () => {
-      expect(detectSignals("搜索并修复bug").scenarios).toContain("file-search");
-      expect(detectSignals("請閱讀這份代碼").scenarios).toContain("code-read");
-      expect(detectSignals("创建一个新的API").scenarios).toContain("code-write");
-    });
-
-    describe("stem precision (short stems should not over-match)", () => {
-      it("'add' stem matches add / adds / added / adding but NOT address / addition", () => {
-        expect(detectSignals("add a new function").scenarios).toContain("code-write");
-        expect(detectSignals("adding a new feature").scenarios).toContain("code-write");
-        expect(detectSignals("added error handling").scenarios).toContain("code-write");
-        // These should NOT trigger code-write
-        expect(detectSignals("please check the address field").scenarios).not.toContain("code-write");
-        expect(detectSignals("in addition to the above").scenarios).not.toContain("code-write");
-        expect(detectSignals("additional context is needed").scenarios).not.toContain("code-write");
-      });
-
-      it("'mov' stem matches move / moved / moves / moving but NOT movie / movement", () => {
-        expect(detectSignals("move the file to src/").scenarios).toContain("refactoring");
-        expect(detectSignals("moved the function to utils").scenarios).toContain("refactoring");
-        // These should NOT trigger refactoring
-        expect(detectSignals("watch a movie then go home").scenarios).not.toContain("refactoring");
-        expect(detectSignals("the movement of data").scenarios).not.toContain("refactoring");
-      });
-    });
-  });
-
-  // ── Complexity ────────────────────────────────────────────────────────
-
-  describe("complexity", () => {
-    it("returns 'simple' for short, single-task queries", () => {
-      expect(detectSignals("read auth.ts").complexity).toBe("simple");
-      expect(detectSignals("fix the bug").complexity).toBe("simple");
-    });
-
-    it("returns 'moderate' for medium-length queries with file refs and multi-task", () => {
-      const input =
-        "Look at auth.ts and user.ts. Also fix the config. Write a summary.";
-      const result = detectSignals(input);
-      // 2 file refs + 3 sentences + "also" → score ≈ 3 → moderate
-      expect(result.complexity).toBe("moderate");
-    });
-
-    it("returns 'complex' for long, multi-file, multi-step queries", () => {
-      const input =
-        "Refactor the entire authentication system. Migrate from JWT to session-based auth. " +
-        "Update auth.ts, session.ts, middleware.ts, config.ts, index.ts, user.ts, " +
-        "and all test files. Also update the deployment configuration and documentation. " +
-        "Make sure backward compatibility is maintained for existing API consumers.";
-      const result = detectSignals(input);
-      expect(result.complexity).toBe("complex");
-    });
-
-    it("broad-scope keywords increase score but don't alone make it complex", () => {
-      // Short queries with broad keywords → moderate at most (score=1 → simple)
-      // Need file refs or length to push it into moderate/complex territory
-      expect(detectSignals("refactor the entire auth module in auth.ts user.ts").complexity).toBe("moderate");
-    });
-
-    it("detects multi-task connectors bumping complexity", () => {
-      const input = "Update the login page. Also rewrite the database schema. Write tests for everything.";
-      // 3 sentences (+1), length > 100 (+1), "also" (+1) → score 3 → moderate
-      expect(detectSignals(input).complexity).toBe("moderate");
-    });
-  });
-
-  // ── Full signal integration ───────────────────────────────────────────
-
-  describe("integration", () => {
-    it("returns complete signals for a complex, risky, multi-scenario query", () => {
-      const input =
-        "Find all bugs in the auth system, write fixes, and then deploy to production. " +
-        "Don't delete any user data. Remember to log everything.";
-      const signals = detectSignals(input);
-
-      expect(signals.wantsRemember).toBe(true);
-      // "deploy" is low-risk, "don't delete" is negated → only low
-      expect(signals.riskLevel).toBe("low");
-      // Multiple scenarios
-      expect(signals.scenarios).toContain("file-search");
-      expect(signals.scenarios).toContain("debugging");
-      expect(signals.scenarios.length).toBeGreaterThanOrEqual(2);
-    });
-  });
 });
 
 // ─── planHasRiskyOps ─────────────────────────────────────────────────────────

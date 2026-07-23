@@ -115,7 +115,7 @@ const agent = new ReActAgent({
 })
 ```
 
-> Agent 会在 `init()` 阶段自动扫描 `skillsDir` 并注册 Skill，同时注册 `skill` 工具（LLM 可调用以手动激活未被自动匹配的 Skill）和 `precipitate_skill` 工具。
+> Agent 会在 `init()` 阶段自动扫描 `skillsDir` 并注册 Skill，同时注册 `skill` 工具（LLM 可调用以手动激活未被自动匹配的 Skill）。
 
 > **安全提示：** 框架自动对 Skills 内容进行安全防护：
 > - `buildSkillsPrompt()`（活跃 Skill 的完整内容）→ 自动包裹 `wrapUserAuthored` + 注入签名扫描

@@ -44,7 +44,7 @@ export function allowlist(...names: string[]): ToolFilter {
  *
  * @example
  * ```ts
- * const filter = denylist("spawn_subagent", "list_subagents");
+ * const filter = denylist("spawn_subagent");
  * ```
  */
 export function denylist(...names: string[]): ToolFilter {

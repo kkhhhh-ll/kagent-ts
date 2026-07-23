@@ -18,6 +18,7 @@ resume-agent-harness.md
 .claude/
 mcp.json
 i.md
+mcp.txt
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 analysis/

@@ -105,7 +105,7 @@ kagent-ts
 │   ├── error-tracker.ts          # 工具错误追踪
 │   └── builtin/            # 15 个内置工具（bash, read_file, write_file, edit_file,
 │                            #   grep_search, glob_search, web_fetch, skill,
-│                            #   spawn_subagent, list_subagents, remember, recall, list_errors）
+│                            #   spawn_subagent, remember, recall）
 ├── session/        # 会话持久化与恢复（Checkpoint + 优雅关闭）
 ├── context/        # 上下文窗口管理（Token 预算 + 智能裁剪）
 ├── compression/    # 4 步渐进式上下文压缩

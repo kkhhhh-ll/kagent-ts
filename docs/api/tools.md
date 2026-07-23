@@ -171,7 +171,7 @@ class ToolOutputTruncator {
 
 ## ToolErrorTracker
 
-会话内的工具失败链追踪（纯内存，无持久化）。用于支撑 `list_errors` 工具的实时查询。
+会话内的工具失败链追踪（纯内存，无持久化）。错误信息通过工具输出的 `[RETRYABLE:*]` / `[FATAL:*]` 标签直接返回给 LLM。
 
 > **注意**：跨会话的错误学习和规则注入请使用 [Memory 记忆](/advanced/memory) 系统。
 
@@ -250,8 +250,6 @@ import {
   createSkillTool,
   createRememberTool,
   createRecallTool,
-  createPrecipitateSkillTool,
-  createListSubagentsTool,
   createSpawnSubagentTool,
   createListErrorsTool,
 } from 'kagent-ts'

@@ -1,6 +1,5 @@
 import { Tool, ToolResult, ToolErrorCode, toolSuccess, toolError, BreakerStatus } from "./types";
 import { CircuitBreaker } from "./circuit-breaker";
-import { ToolErrorTracker } from "./error-tracker";
 import { ToolOutputTruncator } from "./tool-output-truncator";
 import { ToolFilter } from "./tool-filter";
 
@@ -16,23 +15,19 @@ export class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
   private breakers: Map<string, CircuitBreaker> = new Map();
   private retryCount: number;
-  private errorTracker?: ToolErrorTracker;
   private truncator: ToolOutputTruncator;
 
   /**
    * @param retryCount Number of retries allowed after the first failure
    *                    (default: 2 → 3 total attempts before circuit opens).
-   * @param errorTracker Optional ToolErrorTracker for recording failure chains.
    * @param truncator   Optional ToolOutputTruncator for truncating large
    *                    tool outputs (default: enabled with default limits).
    */
   constructor(
     retryCount?: number,
-    errorTracker?: ToolErrorTracker,
     truncator?: ToolOutputTruncator,
   ) {
     this.retryCount = retryCount ?? 2;
-    this.errorTracker = errorTracker;
     this.truncator = truncator ?? new ToolOutputTruncator();
   }
 
@@ -128,7 +123,6 @@ export class ToolRegistry {
   filter(filter: ToolFilter): ToolRegistry {
     const registry = new ToolRegistry(
       this.retryCount,
-      this.errorTracker,
       this.truncator,
     );
     for (const tool of this.tools.values()) {
@@ -187,39 +181,19 @@ export class ToolRegistry {
       const truncated = this.truncator.truncate(name, rawResult);
       const wasTruncated = truncated !== rawResult;
 
-      // Success after previous failures — record recovery + reset breaker.
-      // Only include the recovery message in the LLM context when an
-      // error tracker is active (meaning the LLM was previously informed
-      // of the failures via error-analysis injection).
+      // Success after previous failures — reset breaker and notify LLM.
       if (breaker.currentFailureCount > 0) {
-        let hadActiveTrace = false;
-        if (this.errorTracker) {
-          const activeTrace = this.errorTracker.getActiveTraceId(name);
-          if (activeTrace) {
-            this.errorTracker.recordRecovery(
-              name,
-              activeTrace,
-              `Tool "${name}" executed successfully after ${breaker.currentFailureCount} failure(s).`
-            );
-            hadActiveTrace = true;
-          }
-        }
         breaker.recordSuccess();
 
-        if (hadActiveTrace) {
-          const content = wasTruncated
-            ? `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]\n[Note: Output was truncated due to size limits.]`
-            : `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]`;
-          return {
-            success: true,
-            severity: "success",
-            errorCode: wasTruncated ? ToolErrorCode.TRUNCATED_OUTPUT : ToolErrorCode.SUCCESS,
-            content,
-          };
-        }
-
-        // Breaker was reset but no active error trace — silent recovery.
-        return toolSuccess(truncated);
+        const content = wasTruncated
+          ? `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]\n[Note: Output was truncated due to size limits.]`
+          : `${truncated}\n\n[Tool "${name}" has recovered after previous failures. The failure counter has been reset.]`;
+        return {
+          success: true,
+          severity: "success",
+          errorCode: wasTruncated ? ToolErrorCode.TRUNCATED_OUTPUT : ToolErrorCode.SUCCESS,
+          content,
+        };
       }
 
       breaker.recordSuccess();
@@ -227,11 +201,6 @@ export class ToolRegistry {
     } catch (err: unknown) {
       const rawMessage = err instanceof Error ? err.message : String(err);
       const remaining = breaker.recordFailure();
-
-      // Record the failure in the error tracker
-      if (this.errorTracker) {
-        this.errorTracker.recordFailure(name, args, rawMessage, remaining, breaker.state);
-      }
 
       // Circuit just opened — no retries left
       if (!breaker.isAvailable) {
@@ -263,13 +232,6 @@ export class ToolRegistry {
         "retryable",
       );
     }
-  }
-
-  /**
-   * Get the error tracker instance, if one is configured.
-   */
-  getErrorTracker(): ToolErrorTracker | undefined {
-    return this.errorTracker;
   }
 
   /**

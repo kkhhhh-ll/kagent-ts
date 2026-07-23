@@ -590,7 +590,7 @@ export class SubAgentManager {
 
   /**
    * Build a formatted list of all registered sub-agents with their
-   * capabilities (returned by the `list_subagents` tool).
+   * capabilities (used by the orchestrator and the system-prompt hint).
    */
   buildSubAgentList(): string {
     if (this.definitions.size === 0) return "No sub-agents registered.";
@@ -605,6 +605,23 @@ export class SubAgentManager {
       }
     }
     return lines.join("\n");
+  }
+
+  /**
+   * Build a compact hint listing available sub-agents (name + description only).
+   * Injected directly into the system prompt so the LLM discovers available
+   * sub-agents without calling a tool — same pattern as skills' hint.
+   */
+  buildSubAgentHint(): string {
+    if (this.definitions.size === 0) return "";
+    const lines: string[] = [];
+    for (const def of this.definitions.values()) {
+      lines.push(`- **${def.name}**: ${def.description}`);
+    }
+    return (
+      `Available sub-agents (use \`spawn_subagent\` with the name to delegate):\n` +
+      lines.join("\n")
+    );
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────────
@@ -901,7 +918,7 @@ export class SubAgentManager {
       // Sub-agents execute a specific delegated task — they do not need
       // intent detection (wantsRemember, riskLevel, scenarios, complexity),
       // skill auto-activation (skills are pre-declared in the definition),
-      // or side-effect tools (remember, recall, skill, list_errors).
+      // or side-effect tools (remember, recall, skill).
       skipAutoTools: true,
       workdir,
       // Inherit the main agent's approval callback so tools like bash /

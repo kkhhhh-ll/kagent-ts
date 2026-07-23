@@ -139,7 +139,8 @@ describe("Agent Lifecycle", () => {
         await agent.run("test");
         const prompt = (agent as any).buildSystemPrompt();
         expect(prompt).toContain("Sub-Agent Delegation");
-        expect(prompt).toContain("list_subagents");
+        expect(prompt).toContain("Available sub-agents");
+        expect(prompt).toContain("helper");
         expect(prompt).toContain("spawn_subagent");
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });

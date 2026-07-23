@@ -137,7 +137,7 @@ SPAWN A SUB-AGENT when:
 PREFER THE MAIN AGENT when the task depends on conversation context or is quick to complete.
 
 How to delegate:
-- Call \`list_subagents\` to see available sub-agents and their capabilities (tools, skills)
-- Choose the best match, then call \`spawn_subagent\` with the name and a clear task description
+- Available sub-agents are listed below with their names and descriptions — pick the best match
+- Call \`spawn_subagent\` with the exact name and a clear task description
 - Sub-agents run asynchronously; their results arrive as user messages wrapped in <subagent-result> tags
 - You can continue working while sub-agents run in the background`;

@@ -695,10 +695,6 @@ export class FusionAgent extends Agent {
 
       const parsed = parseFusionResponse(response.content);
 
-      // Capture LLM analysis of active tool error traces
-      if (parsed.thought) {
-        this.captureErrorAnalysis(parsed.thought);
-      }
 
       // ── Store assistant message ─────────────────────────────────────
       const assistantMessage = Message.assistant(
@@ -1339,7 +1335,7 @@ export class FusionAgent extends Agent {
       }
 
       const parsed = parseFusionResponse(rawContent);
-      if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
+
 
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {

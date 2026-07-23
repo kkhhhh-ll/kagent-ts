@@ -172,9 +172,6 @@ interface AgentConfig {
   tools?: Tool[]                                    // 工具列表
   toolRegistry?: ToolRegistry                       // 自定义 ToolRegistry 实例
   toolOutputMaxBytes?: number                       // 工具输出截断阈值
-  toolRetryCount?: number                           // 工具失败重试次数
-  toolErrorTracker?: ToolErrorTracker               // 自定义错误追踪器
-
   // ── 上下文 ──
   contextManager?: ContextManager                   // 上下文管理器实例
 

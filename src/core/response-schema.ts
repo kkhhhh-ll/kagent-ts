@@ -773,34 +773,46 @@ export function parseFusionResponse(raw: string): FusionResponse {
  * The LLM is asked to classify whether the user's request needs a plan.
  */
 export const FUSION_ROUTE_INSTRUCTIONS = `
-You are a task complexity classifier. Analyze the user's request and determine whether it requires a structured plan.
+You are a task complexity classifier. Your job is to decide whether a task should
+be executed with a pre-generated plan or handled directly in a ReAct loop.
 
-A request needs a PLAN ("complex") when it:
-- Involves orchestrating MULTIPLE INDEPENDENT sub-tasks across different domains or tools
-- Requires multi-source cross-referencing or multi-hop reasoning (e.g. "compare X from A with Y from B,
-  then reconcile differences")
-- Is a "build", "create", or "refactor" request with non-trivial scope (multiple files, multiple steps)
-- Will likely take 5+ tool calls to resolve, where those calls form a non-trivial dependency chain
+The fundamental test: does the task have an ACTION DEPENDENCY CHAIN?
 
-A request does NOT need a plan ("simple") when it is:
-- A factual question, lookup, or single-source retrieval (including knowledge-base / RAG lookups)
-- A single straightforward action (read a file, run a command, search a codebase)
-- A brief conversational exchange
-- A request to summarize, introduce, or explain based on retrieved content — the standard
-  ReAct loop (search → read → answer) handles these naturally without a formal plan
-- Immediately answerable from general knowledge without tools
+A task is "complex" when later actions depend on the outcomes of earlier actions,
+creating a chain that isn't obvious until you start executing. Examples:
 
-Respond with ONLY a JSON object:
-{"complexity": "simple", "reason": "..."}
+  Discover → Act: "Find all places that use the deprecated API and migrate them"
+  Analyze → Decide → Execute: "Check if the database is the bottleneck; if so,
+    add indexing; otherwise profile the application layer"
+  Multi-hop retrieval: "Compare the Q2 earnings of the top 3 tech companies and
+    explain which one grew fastest, using only their official SEC filings"
+  Build → Verify: "Create a deployment script and confirm it works in staging"
+  Research → Synthesize: "Survey the literature on X, identify the top 3
+    approaches, then write a comparison with a recommendation"
+
+A task is "simple" when the path from start to finish is straightforward —
+even if it takes several tool calls, those calls form a linear "look → read →
+answer" pattern with no branching or dependencies. Examples:
+
+  Pure retrieval / lookup: "What's the capital of Bhutan?" / "Find all PDFs in
+    the project" / "Search the codebase for calls to function foo()"
+  Single action: "Run the test suite" / "Delete the temp branch" / "Create a
+    file with this content"
+  Read-and-explain: "Summarize the README" / "What does this config file do?" /
+    "Explain the architecture based on the design doc"
+  Pure generation (no tools needed): "Write a haiku about debugging" /
+    "Translate this paragraph to Japanese"
+  Linear multi-step without branching: "Read the three config files and tell me
+    which ports are in use" — the reads are independent of each other
+
+When genuinely uncertain, prefer "simple". A plan adds overhead; it only pays
+off when the dependency chain is complex enough that a ReAct loop would
+plausibly take wrong turns or miss prerequisites.
+
+Respond with ONLY a valid JSON object:
+{"complexity": "simple", "reason": "<1 sentence>"}
 or
-{"complexity": "complex", "reason": "..."}
-
-Rules:
-- The JSON must be valid and parseable — no trailing commas, no comments.
-- "reason" should be a short (1 sentence) explanation of your classification.
-- Default to "simple" when the task can reasonably be completed in a direct ReAct loop.
-  A plan adds 2 extra LLM calls (plan generation + plan tracking overhead), so only
-  classify as "complex" when the structure genuinely adds value.`;
+{"complexity": "complex", "reason": "<1 sentence>"}`;
 
 /**
  * Full system prompt instructions for Fusion Agent execution mode.

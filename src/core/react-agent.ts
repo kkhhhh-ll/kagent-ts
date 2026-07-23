@@ -230,10 +230,6 @@ export class ReActAgent extends Agent {
       const rawContent = response.content;
       const parsed = parseReActResponse(response.content);
 
-      // Capture LLM analysis of any active tool error traces
-      if (parsed.thought) {
-        this.captureErrorAnalysis(parsed.thought);
-      }
 
       // Create assistant message from the response
       const assistantMessage = Message.assistant(
@@ -553,7 +549,7 @@ export class ReActAgent extends Agent {
       }
 
       const parsed = parseReActResponse(rawContent);
-      if (parsed.thought) this.captureErrorAnalysis(parsed.thought);
+
 
       // ── Tool calls → execute and continue ───────────────────────────
       if (toolCalls.length > 0) {

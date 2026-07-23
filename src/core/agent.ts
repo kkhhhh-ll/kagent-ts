@@ -8,7 +8,6 @@ import { wrapAndScan, wrapUntrusted, detectInjectionSignatures, buildInjectionWa
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
 import { ToolRegistry } from "../tools/tool-registry";
-import { ToolErrorTracker } from "../tools/error-tracker";
 import { ToolOutputTruncator } from "../tools/tool-output-truncator";
 import { ToolResult, ToolErrorCode, toolError } from "../tools/types";
 import { validateToolArgs } from "../tools/tool-validator";
@@ -34,11 +33,8 @@ import {
   createSearchKnowledgeTool,
   createListKnowledgeDocumentsTool,
 } from "../rag/search-knowledge";
-import { createListSubagentsTool } from "../tools/builtin/list-subagents";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
-import { createListErrorsTool } from "../tools/builtin/list-errors";
 import { createSkillTool } from "../tools/builtin/skill";
-import { createPrecipitateSkillTool } from "../tools/builtin/precipitate-skill";
 import { createRememberTool } from "../tools/builtin/remember";
 import { createRecallTool } from "../tools/builtin/recall";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
@@ -103,21 +99,6 @@ export interface AgentConfig {
    * its own registry).
    */
   toolOutputMaxBytes?: number;
-
-  /**
-   * Number of retry attempts allowed per tool before its circuit
-   * breaker opens. Only used with the plain `tools` array path
-   * (ignored when `toolRegistry` is provided).
-   * Default: 2 (3 total attempts: 1 initial + 2 retries).
-   */
-  toolRetryCount?: number;
-
-  /**
-   * Error tracker for recording tool failure chains.
-   * Only used with the plain `tools` array path
-   * (ignored when `toolRegistry` is provided).
-   */
-  toolErrorTracker?: ToolErrorTracker;
 
   /**
    * A pre-configured SkillManager. If provided, `skillsDir` is ignored.
@@ -209,7 +190,7 @@ export interface AgentConfig {
   /** When true, skip SubAgentManager even if `subAgentsDir` is configured. */
   disableSubAgents?: boolean;
 
-  /** When true, skip auto-registration of `remember`, `recall`, `skill`, `list_errors`. */
+  /** When true, skip auto-registration of `remember`, `recall`, `skill`. */
   skipAutoTools?: boolean;
 
   /**
@@ -538,8 +519,7 @@ export abstract class Agent {
         ? new ToolOutputTruncator(cfg.toolOutputMaxBytes)
         : undefined;
       this.toolRegistry = new ToolRegistry(
-        cfg.toolRetryCount,
-        cfg.toolErrorTracker,
+        undefined,
         truncator,
       );
       if (cfg.tools) {
@@ -869,6 +849,7 @@ export abstract class Agent {
       this.coreSystemPrompt,
       SECURITY_GUIDANCE,
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
+      this.hasSubAgents() ? this.buildSubAgentHint() : "",
       this.projectRules.buildPrompt(),
       this.buildMemoryPrompt(),
       this.skillManager.buildAvailableSkillsHint(),
@@ -1637,11 +1618,6 @@ export abstract class Agent {
 
     this.logger.info("Init", "Starting agent initialization...");
 
-    // ── Error tracking tool (synchronous, fast) ──────────────────────
-    if (!this.skipAutoTools) {
-      this.safeRegister(createListErrorsTool(this.toolRegistry));
-    }
-
     // ── Kick off parallel subsystem initialization ───────────────────
     // MCP connections, sub-agent registry, and RAG indexing are all
     // I/O-bound and independent — running them in parallel cuts cold-start
@@ -1667,15 +1643,6 @@ export abstract class Agent {
       this.safeRegister(
         createSkillTool(this.skillManager, () => this.rebuildSystemPrompt()),
       );
-    }
-
-    if (!this.skipAutoTools && this.skillsDir) {
-      this.safeRegister(
-        createPrecipitateSkillTool(this.skillManager, this.skillsDir),
-      );
-    }
-
-    if (!this.skipAutoTools) {
       this.safeRegister(createRememberTool(this.memoryManager));
       this.safeRegister(createRecallTool(this.memoryManager));
     }
@@ -1721,7 +1688,6 @@ export abstract class Agent {
       this.onToolApproval,
     );
     this.subAgentManager.registerFromDirectory(this.subAgentsDir!);
-    this.safeRegister(createListSubagentsTool(this.subAgentManager));
     this.safeRegister(createSpawnSubagentTool(this.subAgentManager));
     // Include SUB_AGENT_DELEGATION in the system prompt for the first run.
     this.rebuildSystemPrompt();
@@ -1762,6 +1728,21 @@ export abstract class Agent {
   /** Whether sub-agents are configured and have registered definitions. */
   protected hasSubAgents(): boolean {
     return this.subAgentManager?.hasDefinitions() === true;
+  }
+
+  /** Build a compact hint listing available sub-agents for the system prompt. */
+  protected buildSubAgentHint(): string {
+    if (!this.subAgentManager) return "";
+    const body = this.subAgentManager.buildSubAgentHint();
+    if (!body) return "";
+
+    // Sub-agent names/descriptions are authored by the project maintainer —
+    // same trust level as skill descriptions.
+    const patterns = detectInjectionSignatures(body);
+    const warning = buildInjectionWarning(patterns, "sub-agent descriptions");
+    const wrapped = wrapUntrusted("subagent-index", body);
+
+    return "\n\n" + warning + wrapped;
   }
 
   /**
@@ -1894,41 +1875,6 @@ export abstract class Agent {
     while (this.backgroundTasks.size > 0) {
       await Promise.allSettled([...this.backgroundTasks]);
     }
-  }
-
-  // ─── Error Trace & Analysis ──────────────────────────────────────────
-
-  /**
-   * Get the error tracker (if configured via the ToolRegistry).
-   */
-  get errorTracker(): ToolErrorTracker | undefined {
-    return this.toolRegistry.getErrorTracker();
-  }
-
-  /**
-   * Capture the LLM's reasoning as error analysis for any active tool error
-   * traces. Feeds the error→analysis pipeline: tool fails → LLM sees error
-   * → its next thought is recorded as root-cause analysis.
-   */
-  protected captureErrorAnalysis(thought: string): void {
-    if (!thought) return;
-    const tracker = this.toolRegistry.getErrorTracker();
-    if (!tracker) return;
-
-    const activeTraces = tracker.getActiveTraces();
-    for (const { traceId } of activeTraces) {
-      tracker.recordAnalysis(traceId, thought);
-    }
-  }
-
-  /**
-   * Generate a markdown report of all recorded tool error traces.
-   */
-  generateErrorReport(): string {
-    const tracker = this.errorTracker;
-    if (!tracker)
-      return "# Tool Error Trace Report\n\n*Error tracker not configured.*\n";
-    return tracker.generateMarkdownReport();
   }
 
   // ─── Intent Detection ─────────────────────────────────────────────────

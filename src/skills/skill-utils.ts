@@ -1,11 +1,7 @@
 /**
  * Shared utilities for skill name validation and SKILL.md frontmatter
- * generation. Used by both PrecipitateAgent (post-hoc extraction) and
- * the `precipitate_skill` tool (LLM-driven, in-session).
- *
- * Keeping these in one place ensures the two code-paths stay in sync
- * — a change to name validation or YAML escaping rules applies
- * everywhere at once.
+ * generation. Used by PrecipitateAgent (post-hoc extraction) for
+ * writing skill candidates to disk.
  */
 
 /** Regex matching the FileSkillLoader validation: no slashes, backslashes, "..", or null bytes. */

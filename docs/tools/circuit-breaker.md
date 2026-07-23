@@ -33,14 +33,14 @@ enum BreakerState {
 
 ## 配置
 
-Circuit Breaker 默认集成在 `ToolRegistry` 中，通过 `AgentConfig.toolRetryCount` 配置：
+Circuit Breaker 默认集成在 `ToolRegistry` 中，通过 `ToolRegistry` 构造函数配置：
 
 ```ts
+const registry = new ToolRegistry(2);  // 首次失败后的重试次数 (默认: 2 → 共 3 次尝试)
 const agent = new ReActAgent({
   systemPrompt: '...',
   llm: provider,
-  tools: BUILTIN_TOOLS,
-  toolRetryCount: 2,           // 首次失败后的重试次数 (默认: 2 → 共 3 次尝试)
+  toolRegistry: registry,
 })
 ```
 
@@ -76,21 +76,21 @@ Please find a completely different approach.
 
 Circuit Breaker 与 `ToolErrorTracker` 协同工作：
 
-- `ToolErrorTracker` 在内存中记录每次失败 → 分析 → 恢复的完整生命周期
-- `"circuit_half_open"` 事件类型用于记录半熔断状态
-- `list_errors` 工具允许 LLM 在会话中实时查询当前错误状态
+- 电路 breaker 在每次工具执行过程中自动追踪失败计数和熔断状态
+- `[RETRYABLE:*]` / `[FATAL:*]` 标签会直接返回给 LLM，无需额外查询
 - 跨会话的错误学习由 [Memory 记忆](/advanced/memory) 系统负责。
 
 ## 完整示例
 
 ```ts
-import { ReActAgent, OpenAIProvider, BUILTIN_TOOLS } from 'kagent-ts'
+import { ReActAgent, OpenAIProvider, ToolRegistry } from 'kagent-ts'
+
+const registry = new ToolRegistry(2);  // retryCount: 2 → 3 total attempts
 
 const agent = new ReActAgent({
   systemPrompt: '你是一个有用的 AI 助手。如果工具熔断了，请尝试其他方式。',
   llm: new OpenAIProvider({ apiKey: '...', model: 'gpt-4o' }),
-  tools: BUILTIN_TOOLS,
-  toolRetryCount: 2,
+  toolRegistry: registry,
 })
 ```
 

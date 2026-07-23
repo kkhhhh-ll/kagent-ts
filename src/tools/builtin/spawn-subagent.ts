@@ -8,16 +8,16 @@ export function createSpawnSubagentTool(manager: SubAgentManager): Tool {
   return {
     name: "spawn_subagent",
     description:
-      "Spawn an asynchronous sub-agent to handle a task. " +
+      "Spawn an asynchronous sub-agent to handle a delegated task. " +
       "The sub-agent runs in the background; its result will appear " +
       "as a new user message enclosed in <subagent-result> tags once it completes. " +
-      "Call list_subagents first to see available sub-agents and pick the right one.",
+      "Available sub-agents are listed in the system prompt — use the exact name from that list.",
     parameters: {
       type: "object",
       properties: {
         name: {
           type: "string",
-          description: "Name of the sub-agent to spawn. Call list_subagents first to see available names.",
+          description: "Name of the sub-agent to spawn. See the system prompt for available sub-agents and their names.",
         },
         input: {
           type: "string",

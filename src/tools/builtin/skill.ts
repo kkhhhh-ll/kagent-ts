@@ -5,7 +5,7 @@ import type { SkillManager } from "../../skills/skill-manager";
  * Create a Skill tool that allows the LLM to activate / deactivate skills
  * on demand during the agent loop.
  *
- * Factory pattern matching `createListSubagentsTool` / `createSpawnSubagentTool`.
+ * Factory pattern matching `createSpawnSubagentTool` / `createRememberTool`.
  *
  * @param skillManager  The agent's SkillManager for skill state management.
  * @param onSkillChanged  Callback invoked after a skill is activated or

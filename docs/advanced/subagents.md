@@ -90,14 +90,14 @@ const agent = new ReActAgent({
 })
 ```
 
-框架在 `init()` 阶段自动完成：扫描目录 → 解析 frontmatter → 注册定义 → 绑定 LLM/ToolRegistry → 注册 `spawn_subagent` / `list_subagents` 工具 → 注入 `SUB_AGENT_DELEGATION` 到系统提示词。**无需手动调用任何 API。**
+框架在 `init()` 阶段自动完成：扫描目录 → 解析 frontmatter → 注册定义 → 绑定 LLM/ToolRegistry → 注册 `spawn_subagent` 工具 → 注入 `SUB_AGENT_DELEGATION` + 子代理列表到系统提示词。**无需手动调用任何 API。**
 
 > **注意**：设置为 `""`（空字符串）可以禁用目录扫描，但仍可手动注册子代理。
 
 ### 方式 2: 手动注册
 
 ```ts
-import { SubAgentManager, SubAgentDefinition, createSpawnSubagentTool, createListSubagentsTool } from 'kagent-ts'
+import { SubAgentManager, SubAgentDefinition, createSpawnSubagentTool } from 'kagent-ts'
 
 const manager = new SubAgentManager()
 manager.register({
@@ -110,7 +110,6 @@ manager.register({
 
 // 绑定资源并注册工具
 manager.bind(llmProvider, toolRegistry, skillManager)
-agent.addTool(createListSubagentsTool(manager))
 agent.addTool(createSpawnSubagentTool(manager))
 ```
 

@@ -8,7 +8,7 @@ import type { MemoryType } from "../../memory/memory-manager";
  * The LLM should call this when it learns something worth keeping across
  * sessions — rules the user set, project decisions, conventions, etc.
  *
- * Factory pattern matching `createSkillTool` / `createListSubagentsTool`.
+ * Factory pattern matching `createSkillTool` / `createSpawnSubagentTool`.
  */
 export function createRememberTool(memoryManager: MemoryManager): Tool {
   return {
