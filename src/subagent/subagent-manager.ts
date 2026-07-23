@@ -909,7 +909,6 @@ export class SubAgentManager {
       toolRegistry,
       skillManager,
       name: definition.name,
-      maxIterations: 100,
       // Prevent infinite recursion: sub-agents should NOT auto-register
       // sub-agents from the project directory.
       // "" explicitly disables the default (undefined would be overridden

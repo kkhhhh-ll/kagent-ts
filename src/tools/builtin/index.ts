@@ -39,6 +39,7 @@ export const BUILTIN_TOOL_NAMES = new Set([
   "recall",
   "search_knowledge",
   "list_knowledge_documents",
+  "fork_agent",
 ]);
 
 // Re-export individual tools
@@ -53,6 +54,7 @@ export { createSpawnSubagentTool } from "./spawn-subagent";
 export { createSkillTool } from "./skill";
 export { createRememberTool } from "./remember";
 export { createRecallTool } from "./recall";
+export { createForkAgentTool } from "./fork-agent";
 export { createSearchKnowledgeTool, createListKnowledgeDocumentsTool } from "../../rag/search-knowledge";
 
 /**

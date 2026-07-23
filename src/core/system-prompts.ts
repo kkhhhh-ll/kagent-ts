@@ -141,3 +141,32 @@ How to delegate:
 - Call \`spawn_subagent\` with the exact name and a clear task description
 - Sub-agents run asynchronously; their results arrive as user messages wrapped in <subagent-result> tags
 - You can continue working while sub-agents run in the background`;
+
+// ─── Fork Agent Guidance ──────────────────────────────────────────────────────
+
+/**
+ * Instructions for using fork_agent for inline analysis.
+ * Always included — fork_agent is a builtin tool that doesn't require
+ * pre-registered sub-agent definitions.
+ */
+export const FORK_AGENT_GUIDANCE = `
+=== Fork Agent (Inline Analysis) ===
+You also have a \`fork_agent\` tool for lightweight inline analysis. Unlike \`spawn_subagent\`,
+a fork agent runs synchronously — it blocks until complete and returns its result immediately.
+
+USE FORK AGENT when:
+1. You need a focused "second opinion" on something already in context (e.g. review code you just read)
+2. You want to extract, summarize, or classify information without polluting the main conversation
+3. The task needs a custom role / system prompt that no pre-registered sub-agent provides
+4. The task is quick and you need the result before your next step
+
+Fork agent characteristics:
+- Inherits your FULL conversation context — it sees everything you've read and done so far
+- Has read-only tools (read_file, grep_search) — it CANNOT modify files
+- Runs inline — you wait for the result, then continue with it
+- Each fork gets its own clean system prompt — define its role and output format precisely
+
+How to use:
+- Call \`fork_agent\` with \`systemPrompt\` (the role for the fork) and \`task\` (what to do)
+- Be specific in \`systemPrompt\` about the output format you want
+- The result is returned directly — use it in your next response`;

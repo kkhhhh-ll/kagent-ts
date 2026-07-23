@@ -1,6 +1,7 @@
 import { LLMProvider } from "../llm/interface";
 import { ReActAgent } from "./react-agent";
 import { ToolRegistry } from "../tools/tool-registry";
+import { TraceLogger } from "../trace/trace-logger";
 import { ReadFileTool } from "../tools/builtin/read-file";
 import { GrepSearchTool } from "../tools/builtin/grep-search";
 import { Tool } from "./types";
@@ -97,10 +98,10 @@ export async function forkAgent(
   input: string,
   options: ForkOptions,
 ): Promise<string> {
-  const { systemPrompt, llm, maxIterations = 5, preventSubAgents = true } = options;
+  const { systemPrompt, llm, preventSubAgents = true } = options;
   const logger = options.logger ?? new ConsoleLogger();
 
-  logger.info("ForkAgent", `Starting fork with max ${maxIterations} iteration(s)...`);
+  logger.info("ForkAgent", "Starting fork agent...");
 
   // ── Inherit parent context ──────────────────────────────────────────
   // Pre-populate a ContextManager with the parent agent's messages so the
@@ -154,20 +155,24 @@ export async function forkAgent(
     tools.register(GrepSearchTool);
   }
 
+  // Fork label for trace separation — first line or first 40 chars of system prompt
+  const forkLabel = systemPrompt.split("\n")[0].slice(0, 40).trim() || "fork-analysis";
+  const forkHooks = options.hooks
+    ? TraceLogger.wrapHooksForFork(options.hooks, forkLabel)
+    : undefined;
+
   const agent = new ReActAgent({
     llm,
     systemPrompt,
     toolRegistry: tools,
     name: "fork",
-    maxIterations,
     logger,
-    hooks: options.hooks,
+    hooks: forkHooks,
     contextManager,
     // Disable sub-agent discovery explicitly — no falsy string hack.
     disableSubAgents: preventSubAgents,
-    // Skip auto-registration of side-effect tools (`remember`, `recall`,
-    // `skill`) so the fork only has the explicitly
-    // configured tools (read_file + grep_search by default).
+    // Forks are read-only reviewers — skip `remember`, `recall`, `skill`,
+    // and `fork_agent` to prevent recursive sub-fork creation.
     skipAutoTools: true,
   });
 

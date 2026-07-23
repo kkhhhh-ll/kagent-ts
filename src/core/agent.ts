@@ -3,7 +3,7 @@ import { LLMNetworkError } from "../llm/errors";
 import { ModelRouter } from "../llm/model-router";
 import { Message } from "../messages/message";
 import { Role } from "../messages/types";
-import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION, RAG_KNOWLEDGE_BASE_HINT } from "./system-prompts";
+import { SECURITY_GUIDANCE, SUB_AGENT_DELEGATION, FORK_AGENT_GUIDANCE, RAG_KNOWLEDGE_BASE_HINT } from "./system-prompts";
 import { wrapAndScan, wrapUntrusted, detectInjectionSignatures, buildInjectionWarning } from "../security/boundaries";
 import { ContextManager } from "../context/context-manager";
 import { Tool } from "./types";
@@ -37,6 +37,7 @@ import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent";
 import { createSkillTool } from "../tools/builtin/skill";
 import { createRememberTool } from "../tools/builtin/remember";
 import { createRecallTool } from "../tools/builtin/recall";
+import { createForkAgentTool } from "../tools/builtin/fork-agent";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { TokenBudget, TokenBudgetConfig } from "../llm/token-budget";
@@ -639,7 +640,7 @@ export abstract class Agent {
    * Inherits the full conversation context from this agent so the fork
    * benefits from prompt caching and structured message history.
    */
-  protected async fork(
+  public async fork(
     input: string,
     options: {
       systemPrompt: string;
@@ -652,6 +653,7 @@ export abstract class Agent {
     const { forkAgent } = await import("./fork.js");
     return forkAgent(input, {
       llm: this.llm,
+      hooks: this.hooks,
       ...options,
       signal: this._abortController?.signal,
       contextMessages: this.contextManager.getContextMessages(),
@@ -794,6 +796,7 @@ export abstract class Agent {
     const sections = [
       this.coreSystemPrompt,
       SECURITY_GUIDANCE,
+      FORK_AGENT_GUIDANCE,
       this.hasSubAgents() ? SUB_AGENT_DELEGATION : "",
       this.hasSubAgents() ? this.buildSubAgentHint() : "",
       this.projectRules.buildPrompt(),
@@ -1603,6 +1606,7 @@ export abstract class Agent {
       );
       this.safeRegister(createRememberTool(this.memoryManager));
       this.safeRegister(createRecallTool(this.memoryManager));
+      this.safeRegister(createForkAgentTool(this));
     }
 
     this.logger.info("Init", "Agent initialization complete.");
