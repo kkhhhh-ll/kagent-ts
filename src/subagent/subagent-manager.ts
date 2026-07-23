@@ -283,6 +283,68 @@ export class SubAgentManager {
     return runId;
   }
 
+  /**
+   * Spawn an ad-hoc sub-agent from a {@link AdHocRunSpec} — no AGENT.md needed.
+   *
+   * Creates a synthetic definition internally and runs through the same
+   * queue / poll / cancel / trace infrastructure as pre-registered sub-agents.
+   *
+   * @param spec  The run specification (systemPrompt, task, tools, etc.).
+   * @returns The unique run ID.
+   */
+  spawnAdHoc(spec: import("./subagent-types").AdHocRunSpec): string {
+    if (!this.llmProvider || !this.toolRegistry || !this.skillManager) {
+      throw new Error(
+        "SubAgentManager is not bound. Call bind() before spawnAdHoc().",
+      );
+    }
+
+    if (this.waitQueue.length >= this.maxQueueSize) {
+      throw new Error(
+        `Sub-agent queue full (${this.maxQueueSize}). Wait for running sub-agents.`,
+      );
+    }
+
+    const label = spec.label || "ad-hoc";
+    const name = `adhoc_${label.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+    const runId = `${name}_${++this.runIdCounter}_${Date.now()}`;
+
+    // Build a synthetic definition from the spec
+    const definition: import("./subagent-types").SubAgentDefinition = {
+      name,
+      description: `Ad-hoc sub-agent: ${label}`,
+      systemPrompt: spec.systemPrompt,
+      tools: spec.tools ?? ["read_file", "grep_search"],
+      skills: [],
+    };
+
+    const queued: QueuedRun = {
+      subAgentId: runId,
+      name,
+      definition,
+      input: spec.task,
+      createdAt: Date.now(),
+      options: { workdir: spec.workdir },
+      abortController: new AbortController(),
+      // Ad-hoc run metadata
+      label: spec.label,
+      traceKind: spec.traceKind ?? "subagent",
+      contextMessages: spec.contextMessages,
+    };
+
+    if (this.pending.length < this.maxPending) {
+      this.dequeue(queued);
+    } else {
+      this.waitQueue.push(queued);
+      this.logger.info(
+        "SubAgent",
+        `"${label}" queued (run: ${runId}), ${this.waitQueue.length} ahead.`,
+      );
+    }
+
+    return runId;
+  }
+
   // ─── Cancel ───────────────────────────────────────────────────────────────
 
   /**
@@ -638,6 +700,9 @@ export class SubAgentManager {
       status: "running",
       resolved: null,
       promise: Promise.resolve(undefined as unknown as SubAgentResult),
+      label: item.label,
+      traceKind: item.traceKind,
+      contextMessages: item.contextMessages,
     };
 
     pending.promise = this.executeRun(
@@ -647,6 +712,8 @@ export class SubAgentManager {
       item.input,
       pending.startedAt,
       item.options,
+      item.contextMessages,
+      item.traceKind,
     )
       .then((r) => {
         pending.status = r.success ? "completed" : "error";
@@ -695,8 +762,12 @@ export class SubAgentManager {
     input: string,
     startedAt: number,
     options?: { workdir?: string },
+    contextMessages?: import("../messages/types").MessageData[],
+    traceKind?: "fork" | "subagent",
   ): Promise<SubAgentResult> {
-    const runPromise = this.doExecute(name, runId, definition, input, startedAt, options);
+    const runPromise = this.doExecute(
+      name, runId, definition, input, startedAt, options, contextMessages, traceKind,
+    );
 
     // Wrap with timeout
     const timeoutPromise = new Promise<SubAgentResult>((_, reject) => {
@@ -728,8 +799,12 @@ export class SubAgentManager {
     input: string,
     startedAt: number,
     options?: { workdir?: string },
+    contextMessages?: import("../messages/types").MessageData[],
+    traceKind?: "fork" | "subagent",
   ): Promise<SubAgentResult> {
-    const agent = await this.buildSubAgent(definition, options?.workdir);
+    const agent = await this.buildSubAgent(
+      definition, options?.workdir, contextMessages, traceKind,
+    );
 
     // Store the agent reference on the PendingRun so cancel(runId) can
     // call agent.cancel() to abort the in-flight LLM request + ReAct loop.
@@ -786,7 +861,12 @@ export class SubAgentManager {
    * `filesystem_*` matches all tools whose names start with `filesystem_`
    * (e.g. MCP tools from the "filesystem" server).
    */
-  private async buildSubAgent(definition: SubAgentDefinition, workdir?: string): Promise<ReActAgent> {
+  private async buildSubAgent(
+    definition: SubAgentDefinition,
+    workdir?: string,
+    contextMessages?: import("../messages/types").MessageData[],
+    traceKind?: "fork" | "subagent",
+  ): Promise<ReActAgent> {
     // Look up declared tools from the main agent's registry.
     // Supports wildcard patterns (e.g. "filesystem_*" matches all tools
     // from the "filesystem" MCP server). Uses a Map for deduplication.
@@ -862,10 +942,14 @@ export class SubAgentManager {
         definition,
         filteredRegistry,
         workdir,
+        contextMessages,
+        traceKind,
       );
     }
 
-    return await this.finishBuildSubAgent(definition, toolRegistry, workdir);
+    return await this.finishBuildSubAgent(
+      definition, toolRegistry, workdir, contextMessages, traceKind,
+    );
   }
 
   /** Shared tail of buildSubAgent: wire up skills and return the agent. */
@@ -873,6 +957,8 @@ export class SubAgentManager {
     definition: SubAgentDefinition,
     toolRegistry: ToolRegistry,
     workdir?: string,
+    contextMessages?: import("../messages/types").MessageData[],
+    traceKind?: "fork" | "subagent",
   ): Promise<ReActAgent> {
 
     // Build a dedicated SkillManager with declared skills pre-activated.
@@ -900,6 +986,37 @@ export class SubAgentManager {
     // subAgentLLM (from AgentConfig) takes priority over the main model.
     const effectiveLLM = this.subAgentLLM ?? this.llmProvider!;
 
+    // Context inheritance: when contextMessages are provided (ad-hoc runs),
+    // pre-populate a ContextManager so the sub-agent sees the parent's
+    // conversation history. System messages are filtered out — the sub-agent
+    // has its own system prompt.
+    let contextManager: import("../context/context-manager").ContextManager | undefined;
+    if (contextMessages && contextMessages.length > 0) {
+      const { ContextManager } = await import("../context/context-manager.js");
+      contextManager = new ContextManager();
+      for (const msg of contextMessages) {
+        if (msg.role !== "system") {
+          contextManager.addMessage(msg);
+        }
+      }
+    }
+
+    // Trace separation: wrap hooks for fork-kind runs so they appear in
+    // the parent trace as separate "🔀 Fork Agents" entries.
+    // Factory functions are not supported here — drop them (they'll be
+    // resolved by the orchestrator when creating sub-agents externally).
+    const rawHooks = this.subAgentHooks;
+    let hooks: AgentHooks | AgentHooks[] | undefined;
+    if (typeof rawHooks === "function") {
+      hooks = undefined;
+    } else {
+      hooks = rawHooks;
+    }
+    if (traceKind === "fork" && hooks) {
+      const { TraceLogger } = await import("../trace/trace-logger.js");
+      hooks = TraceLogger.wrapHooksForFork(hooks, definition.name);
+    }
+
     // Dynamic import to break CJS circular dependency:
     // agent.ts → subagent-manager.ts → react-agent.ts → agent.ts
     const { ReActAgent: ReActAgentCtor } = await import("../core/react-agent.js");
@@ -909,6 +1026,8 @@ export class SubAgentManager {
       toolRegistry,
       skillManager,
       name: definition.name,
+      hooks,
+      contextManager,
       // Prevent infinite recursion: sub-agents should NOT auto-register
       // sub-agents from the project directory.
       // "" explicitly disables the default (undefined would be overridden
@@ -917,7 +1036,7 @@ export class SubAgentManager {
       // Sub-agents execute a specific delegated task — they do not need
       // intent detection (wantsRemember, riskLevel, scenarios, complexity),
       // skill auto-activation (skills are pre-declared in the definition),
-      // or side-effect tools (remember, recall, skill).
+      // or side-effect tools (remember, recall, skill, fork_agent).
       skipAutoTools: true,
       workdir,
       // Inherit the main agent's approval callback so tools like bash /

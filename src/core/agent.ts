@@ -1295,7 +1295,9 @@ export abstract class Agent {
       // Sub-agent spawned — purely informational; results arrive
       // asynchronously and will be injected via pollSubAgentResults() or
       // the fast-results wait (collectFastResults) in the ReAct loop.
-      if (result.success && slot.toolCall.function.name === "spawn_subagent") {
+      const isSpawnCall = slot.toolCall.function.name === "spawn_subagent"
+        || slot.toolCall.function.name === "fork_agent";
+      if (result.success && isSpawnCall) {
         hadSpawnCalls = true;
         this.logger.info(
           "SubAgent",
@@ -1544,6 +1546,11 @@ export abstract class Agent {
     return this.contextManager.getMessages().length;
   }
 
+  /** Expose context messages for fork tools that need context inheritance. */
+  getContextMessages(): import("../messages/types").MessageData[] {
+    return this.contextManager.getContextMessages();
+  }
+
   /** Cumulative token consumption for the current session, or null. */
   getSessionCost() {
     return this.tokenBudget?.getSessionCost() ?? null;
@@ -1606,7 +1613,7 @@ export abstract class Agent {
       );
       this.safeRegister(createRememberTool(this.memoryManager));
       this.safeRegister(createRecallTool(this.memoryManager));
-      this.safeRegister(createForkAgentTool(this));
+      this.safeRegister(createForkAgentTool(this, this.subAgentManager));
     }
 
     this.logger.info("Init", "Agent initialization complete.");

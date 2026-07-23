@@ -1,5 +1,6 @@
 import type { ToolFilter } from "../tools/tool-filter";
 import type { ReActAgent } from "../core/react-agent";
+import type { MessageData } from "../messages/types";
 
 /**
  * SubAgent type definitions.
@@ -101,6 +102,12 @@ export interface QueuedRun {
   options?: { workdir?: string };
   /** Aborted when the queued run is cancelled before it ever starts. */
   abortController: AbortController;
+  /** Ad-hoc: display label for logs and traces. */
+  label?: string;
+  /** Ad-hoc: kind for trace separation (default: "subagent"). */
+  traceKind?: "fork" | "subagent";
+  /** Ad-hoc: parent context to inherit. */
+  contextMessages?: MessageData[];
 }
 
 /**
@@ -124,6 +131,12 @@ export interface PendingRun {
    * Only set while `status === "running"`.
    */
   agent?: ReActAgent;
+  /** Ad-hoc: display label for logs and traces. */
+  label?: string;
+  /** Ad-hoc: kind for trace separation. */
+  traceKind?: "fork" | "subagent";
+  /** Ad-hoc: parent context to inherit. */
+  contextMessages?: MessageData[];
 }
 
 /**
@@ -132,3 +145,44 @@ export interface PendingRun {
 export type CancelResult =
   | { cancelled: true; wasRunning: boolean }
   | { cancelled: false; reason: "not_found" | "already_completed" };
+
+// ─── Ad-Hoc Sub-Agent Run ──────────────────────────────────────────────────
+
+/**
+ * Spec for spawning a sub-agent without a pre-registered AGENT.md definition.
+ *
+ * This is the unified interface for all ad-hoc sub-agent runs — fork agents,
+ * async analysis agents, or future dynamically-created agent types.
+ *
+ * {@link SubAgentManager.spawnAdHoc} accepts this spec and creates a synthetic
+ * {@link SubAgentDefinition} internally, so the same queue/poll/cancel/trace
+ * infrastructure is reused without changes.
+ */
+export interface AdHocRunSpec {
+  /** Display label for logs and trace UI (e.g. "fork-code-review"). */
+  label: string;
+  /** System prompt for the sub-agent. */
+  systemPrompt: string;
+  /** Task description. */
+  task: string;
+  /**
+   * Tool name patterns to grant from the main agent's registry.
+   * Defaults to `["read_file", "grep_search"]` (read-only).
+   *
+   * Supports exact names and wildcard patterns (e.g. `"filesystem_*"`).
+   */
+  tools?: string[];
+  /**
+   * Trace kind for the UI. `"fork"` renders in the fork section;
+   * `"subagent"` (default) renders with other sub-agents.
+   */
+  traceKind?: "fork" | "subagent";
+  /**
+   * Parent conversation context to inherit. When provided, these messages
+   * are pre-populated into the sub-agent's context (system messages filtered
+   * out). This enables forks that "see" the full conversation.
+   */
+  contextMessages?: MessageData[];
+  /** Working directory for the sub-agent. */
+  workdir?: string;
+}
