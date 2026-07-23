@@ -116,17 +116,6 @@ export interface FusionAgentConfig extends AgentConfig {
    */
   replanThreshold?: number;
 
-  // ── Precipitation ──────────────────────────────────────────────────
-
-  /**
-   * Skill precipitation. Runs after Phase 4 (Reflection).
-   * Default: "off".
-   */
-  precipitation?: "off" | "post-hoc";
-
-  /** Max iterations for the precipitation sub-agent. Default: 15. */
-  precipitationMaxIterations?: number;
-
   // ── Memory Reflection ───────────────────────────────────────────────
 
   /** Memory reflection mode. Default: "off". */
@@ -176,9 +165,6 @@ export class FusionAgent extends Agent {
 
   private maxIterations: number;
   private replanThreshold: number;
-  private precipitationMode: "off" | "post-hoc";
-  private precipitationMaxIterations: number;
-  private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
 
@@ -215,9 +201,6 @@ export class FusionAgent extends Agent {
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
-    this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
-    this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
 
@@ -320,21 +303,8 @@ export class FusionAgent extends Agent {
     // ── Phase 3: ReAct Execute Loop ───────────────────────────────────
     let answer = await this.executeReActLoop();
 
-    // ── Phase 6: Precipitation (skill extraction) ─────────────────────
-    // Trigger on: post-hoc mode, or hard-won success (failures→success), or user intent
-    const FAILURE_THRESHOLD = 2;
-    const shouldPrecipitate =
-      this.precipitationMode === "post-hoc" ||
-      (this.precipitationMode !== "off" &&
-        this.consecutiveFailures >= FAILURE_THRESHOLD) ||
-      this.inputSignals.wantsRemember;
-    if (shouldPrecipitate) {
-      this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-        this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-      );
-    }
-
     // ── Phase 7: Memory Reflection ────────────────────────────────────
+    const FAILURE_THRESHOLD = 2;
     const shouldReflectMemory =
       this.memoryReflectionMode === "post-hoc" ||
       (this.memoryReflectionMode !== "off" &&
@@ -957,57 +927,13 @@ export class FusionAgent extends Agent {
 
 
 
-  // ─── Phase 5: Precipitation ──────────────────────────────────────────
-
-  /**
-   * Run the configured skill precipitation strategy.
-   */
-  private async runPrecipitation(
-    input: string,
-    answer: string,
-  ): Promise<void> {
-    if (!this.skillsDir) {
-      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
-      return;
-    }
-
-    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
-    try {
-      await PrecipitateAgent.runFromAgent({
-        input,
-        answer,
-        skillsDir: this.skillsDir,
-        skillManager: this.skillManager,
-        llm: this.precipitationLLM ?? this.llm,
-        sessionId: this.getSessionId(),
-        maxIterations: this.precipitationMaxIterations,
-        skillVerificationMaxIterations: this.skillVerificationMaxIterations,
-        verifySkills: this.verifySkills,
-        skillVerificationLLM: this.skillVerificationLLM,
-        logger: this.logger,
-        contextMessages: this.contextManager.getContextMessages(),
-        hooks: this.hooks,
-      });
-    } catch (err: unknown) {
-      this.logger.error(
-        "Precipitation",
-        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    // Rebuild system prompt so new skills show up immediately
-    if (this.skillManager.getAll().length > 0) {
-      this.rebuildSystemPrompt();
-    }
-  }
-
   // ─── Memory Reflection ──────────────────────────────────────────────
 
   /**
    * Run post-hoc memory extraction after a successful completion.
    * Best-effort — failures are logged but never affect the answer.
    *
-   * Unlike precipitation, no guard for `skillsDir` is needed here:
+   * No guard for `skillsDir` is needed here:
    * MemoryManager is always created by the base Agent constructor.
    */
   private async runMemoryReflection(
@@ -1218,12 +1144,9 @@ export class FusionAgent extends Agent {
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    // Determine if precipitation should run (mode + signals)
-    const FAILURE_THRESHOLD = 2;
-    let shouldPrecipitate = this.precipitationMode === "post-hoc";
+    // Determine if memory reflection should run (mode + signals)
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
     if (this.inputSignals.wantsRemember) {
-      shouldPrecipitate = true;
       shouldReflectMemory = true;
     }
 
@@ -1391,10 +1314,6 @@ export class FusionAgent extends Agent {
 
         if (hadFailure) {
           this.consecutiveFailures++;
-          if (this.consecutiveFailures >= FAILURE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
         } else {
           this.consecutiveFailures = 0;
           if (parsed.currentStep && this.hasPlan) {
@@ -1466,12 +1385,6 @@ export class FusionAgent extends Agent {
 
         this.fireOnFinish(answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
-
-        if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ──────
         if (shouldReflectMemory) {

@@ -175,8 +175,8 @@ export class TraceLogger implements AgentHooks {
   }
 
   /**
-   * Create a child TraceLogger for a fork agent run (precipitation,
-   * reflection, memory extraction).
+   * Create a child TraceLogger for a fork agent run (reflection,
+   * memory extraction).
    *
    * Works identically to {@link createChildTrace} but marks the child
    * with `kind: "fork"` so the UI renders forks in a separate section
@@ -204,7 +204,7 @@ export class TraceLogger implements AgentHooks {
    * hooks pass through unchanged.
    *
    * Use this when passing hooks from a main agent to a fork agent
-   * (precipitation / reflection / memory extraction) so the fork's
+   * (reflection / memory extraction) so the fork's
    * events appear as a nested child trace instead of merging into the
    * parent timeline.
    */

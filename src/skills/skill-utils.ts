@@ -1,7 +1,6 @@
 /**
  * Shared utilities for skill name validation and SKILL.md frontmatter
- * generation. Used by PrecipitateAgent (post-hoc extraction) for
- * writing skill candidates to disk.
+ * generation for writing skill candidates to disk.
  */
 
 /** Regex matching the FileSkillLoader validation: no slashes, backslashes, "..", or null bytes. */
@@ -37,7 +36,7 @@ export function yamlValue(value: string): string {
 
 /**
  * Optional enrichment fields persisted alongside the skill body.
- * Produced by the PrecipitateAgent's extraction prompt.
+ * Produced by the skill extraction prompt.
  */
 export interface SkillMarkdownExtras {
   /** Extractor's self-assessed confidence (0.0-1.0) — stored in frontmatter. */
@@ -75,7 +74,6 @@ export function buildSkillMarkdown(
     frontmatter.push(`confidence: ${extras.confidence}`);
   }
 
-  frontmatter.push("precipitated: true");
   frontmatter.push("---");
   frontmatter.push("");
   frontmatter.push(content);

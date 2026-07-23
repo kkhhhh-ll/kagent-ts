@@ -114,12 +114,12 @@ describe("Tool Approval (Human-in-the-loop)", () => {
     expect(result).toContain("Safe operation");
   });
 
-  it("write_file has requireApproval: true", () => {
-    expect(WriteFileTool.requireApproval).toBe(true);
+  it("write_file does NOT require approval (batch-friendly)", () => {
+    expect(WriteFileTool.requireApproval).toBeFalsy();
   });
 
-  it("edit_file has requireApproval: true", () => {
-    expect(EditFileTool.requireApproval).toBe(true);
+  it("edit_file does NOT require approval (batch-friendly)", () => {
+    expect(EditFileTool.requireApproval).toBeFalsy();
   });
 
   it("bash has requireApproval: true", () => {

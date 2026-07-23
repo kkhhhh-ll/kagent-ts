@@ -52,15 +52,6 @@ export interface PlanSolveAgentConfig extends AgentConfig {
    */
   replanThreshold?: number;
 
-  /** Skill precipitation mode. Default: "off". */
-  precipitation?: "off" | "post-hoc";
-
-  /** Max iterations for the precipitation sub-agent. Default: 15. */
-  precipitationMaxIterations?: number;
-
-  /** Max iterations for each skill-verification fork. Default: 8. */
-  skillVerificationMaxIterations?: number;
-
   /** Memory reflection mode. Default: "off". */
   memoryReflection?: "off" | "post-hoc";
 
@@ -92,9 +83,6 @@ export interface PlanSolveAgentConfig extends AgentConfig {
 export class PlanSolveAgent extends Agent {
   private maxIterations: number;
   private maxPlanSteps: number;
-  private precipitationMode: "off" | "post-hoc";
-  private precipitationMaxIterations: number;
-  private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
 
@@ -131,9 +119,6 @@ export class PlanSolveAgent extends Agent {
     this.maxIterations = config.maxIterations ?? 15;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.replanThreshold = config.replanThreshold ?? 2;
-    this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
-    this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
 
@@ -190,12 +175,8 @@ export class PlanSolveAgent extends Agent {
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    // Determine if precipitation should run (mode + signals)
-    const FAILURE_PRECIPITATE_THRESHOLD = 2;
-    let shouldPrecipitate = this.precipitationMode === "post-hoc";
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
     if (this.inputSignals.wantsRemember) {
-      shouldPrecipitate = true;
       shouldReflectMemory = true;
     }
 
@@ -370,10 +351,6 @@ export class PlanSolveAgent extends Agent {
         // Update consecutive failure count and step progress
         if (roundHadFailure) {
           this.consecutiveFailures++;
-          if (this.consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
           this.logger.info(
             "Replan",
             `Consecutive failures: ${this.consecutiveFailures}` +
@@ -465,13 +442,6 @@ export class PlanSolveAgent extends Agent {
         const answer = parsed.answer;
 
         this.fireOnFinish(answer);
-
-        // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
-        if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
@@ -655,12 +625,10 @@ export class PlanSolveAgent extends Agent {
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    // Determine if precipitation should run (mode + signals)
+    // Determine if memory reflection should run (mode + signals)
     const FAILURE_PRECIPITATE_THRESHOLD = 2;
-    let shouldPrecipitate = this.precipitationMode === "post-hoc";
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
     if (this.inputSignals.wantsRemember) {
-      shouldPrecipitate = true;
       shouldReflectMemory = true;
     }
 
@@ -840,10 +808,6 @@ export class PlanSolveAgent extends Agent {
         if (hadFailure) {
           this.consecutiveFailures++;
           if (this.consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
-          if (this.consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
               && this.memoryReflectionMode !== "off") {
             shouldReflectMemory = true;
           }
@@ -919,12 +883,6 @@ export class PlanSolveAgent extends Agent {
 
         this.fireOnFinish(answer);
         if (this.checkpointingEnabled) this.saveCheckpoint("completed");
-
-        if (shouldPrecipitate) {
-          this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-            this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
 
         // ── Memory reflection (fire-and-forget, post-hoc) ────────────
         if (shouldReflectMemory) {
@@ -1069,53 +1027,13 @@ export class PlanSolveAgent extends Agent {
     return undefined;
   }
 
-  // ─── Precipitation ───────────────────────────────────────────────────
-
-  /**
-   * Run post-hoc skill extraction after a successful completion.
-   * Best-effort — failures are logged but never affect the answer.
-   */
-  private async runPrecipitation(
-    input: string,
-    answer: string,
-  ): Promise<void> {
-    if (!this.skillsDir) {
-      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
-      return;
-    }
-
-    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
-    try {
-      await PrecipitateAgent.runFromAgent({
-        input,
-        answer,
-        skillsDir: this.skillsDir,
-        skillManager: this.skillManager,
-        llm: this.precipitationLLM ?? this.llm,
-        sessionId: this.getSessionId(),
-        maxIterations: this.precipitationMaxIterations,
-        skillVerificationMaxIterations: this.skillVerificationMaxIterations,
-        verifySkills: this.verifySkills,
-        skillVerificationLLM: this.skillVerificationLLM,
-        logger: this.logger,
-        contextMessages: this.contextManager.getContextMessages(),
-        hooks: this.hooks,
-      });
-    } catch (err: unknown) {
-      this.logger.error(
-        "Precipitation",
-        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
   // ─── Memory Reflection ──────────────────────────────────────────────
 
   /**
    * Run post-hoc memory extraction after a successful completion.
    * Best-effort — failures are logged but never affect the answer.
    *
-   * Unlike precipitation, no guard for `skillsDir` is needed here:
+   * No guard for `skillsDir` is needed here:
    * MemoryManager is always created by the base Agent constructor.
    */
   private async runMemoryReflection(

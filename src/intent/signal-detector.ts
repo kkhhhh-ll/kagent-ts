@@ -4,8 +4,8 @@
  * PlanSolveAgent, and FusionAgent.
  *
  * All signal detection happens once at the start of `Agent.run()`. Results
- * are stored on the agent and consumed by downstream logic (precipitation
- * trigger, memory reflection trigger, risky-plan confirmation, etc.).
+ * are stored on the agent and consumed by downstream logic (memory
+ * reflection trigger, risky-plan confirmation, etc.).
  *
  * ## Design
  *

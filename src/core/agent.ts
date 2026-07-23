@@ -210,26 +210,6 @@ export interface AgentConfig {
   routeLLM?: LLMProvider;
 
   /**
-   * LLM provider for skill precipitation. When omitted, resolves via
-   * `ModelRouter.forPrecipitation()` or falls back to `llm`. Use a cheaper
-   * model — precipitation is background work.
-   */
-  precipitationLLM?: LLMProvider;
-
-  /**
-   * Verify precipitated skills before persisting to disk.
-   * Forks an independent agent per candidate to check quality.
-   * Default: true.
-   */
-  verifySkills?: boolean;
-
-  /**
-   * LLM provider for skill verification. When omitted, reuses
-   * `precipitationLLM` → `llm`.
-   */
-  skillVerificationLLM?: LLMProvider;
-
-  /**
    * Hooks for sub-agents. Accepts a single {@link AgentHooks}, an array, or a
    * factory `(name, runId) => AgentHooks | AgentHooks[]`. **WARNING**: Do NOT
    * pass hooks that spawn sub-agents — unbounded recursion.
@@ -288,20 +268,6 @@ export interface AgentConfig {
 
   /** Working directory scoped to sub-agents for file/bash operations. */
   workdir?: string;
-
-  // ─── Skill Precipitation ─────────────────────────────────────────────
-
-  /**
-   * Skill precipitation mode. After the agent completes a task, extracts
-   * reusable skills as SKILL.md files. Requires `skillsDir`. Default: `"off"`.
-   */
-  precipitation?: "off" | "post-hoc";
-
-  /** Max iterations for the precipitation sub-agent. Default: 15. */
-  precipitationMaxIterations?: number;
-
-  /** Max iterations for each skill-verification fork. Default: 8. */
-  skillVerificationMaxIterations?: number;
 
   // ─── Memory Reflection ──────────────────────────────────────────────
 
@@ -456,15 +422,6 @@ export abstract class Agent {
   /** LLM provider for task-complexity routing (defaults to main llm if not set). */
   protected routeLLM?: LLMProvider;
 
-  /** LLM provider for skill precipitation (defaults to main llm if not set). */
-  protected precipitationLLM?: LLMProvider;
-
-  /** Verify precipitated skills before persisting. Default: true. */
-  protected verifySkills: boolean = true;
-
-  /** LLM provider for skill verification (defaults to precipitationLLM → llm). */
-  protected skillVerificationLLM?: LLMProvider;
-
   /** LLM provider for memory reflection (defaults to main llm if not set). */
   protected memoryReflectorLLM?: LLMProvider;
 
@@ -602,19 +559,6 @@ export abstract class Agent {
     } else if (cfg.llm instanceof ModelRouter) {
       this.routeLLM = cfg.llm.forLightweight();
     }
-
-    // Resolve precipitation LLM:
-    // 1. Explicit `precipitationLLM` → use it directly
-    // 2. `llm` is a ModelRouter → use router.forPrecipitation()
-    // 3. Fallback → precipitation shares the main `llm`
-    if (cfg.precipitationLLM) {
-      this.precipitationLLM = cfg.precipitationLLM;
-    } else if (cfg.llm instanceof ModelRouter) {
-      this.precipitationLLM = cfg.llm.forPrecipitation();
-    }
-
-    this.verifySkills = cfg.verifySkills ?? true;
-    this.skillVerificationLLM = cfg.skillVerificationLLM;
 
     // Resolve memory reflector LLM:
     // 1. Explicit `memoryReflectorLLM` → use it directly
@@ -1850,7 +1794,7 @@ export abstract class Agent {
 
   // ─── Background Tasks ─────────────────────────────────────────────────
 
-  /** In-flight fire-and-forget tasks (precipitation, memory reflection). */
+  /** In-flight fire-and-forget tasks (memory reflection). */
   private backgroundTasks: Set<Promise<unknown>> = new Set();
 
   /**
@@ -1866,8 +1810,7 @@ export abstract class Agent {
   }
 
   /**
-   * Wait for all in-flight background tasks (skill precipitation, memory
-   * reflection) to settle.
+   * Wait for all in-flight background tasks (memory reflection) to settle.
    *
    * Call this before exiting the process — the post-hoc tasks are
    * fire-and-forget, so `run()` resolves before they finish and an
@@ -1885,7 +1828,7 @@ export abstract class Agent {
    * Detect user signals from the input string (zero LLM cost).
    *
    * Stores results on `this.inputSignals` so downstream logic
-   * (precipitation trigger, memory reflection, plan confirmation)
+   * (memory reflection, plan confirmation)
    * reads flags instead of running ad-hoc regex.
    *
    * Called once at the start of every `run()`.

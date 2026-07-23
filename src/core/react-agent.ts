@@ -38,15 +38,7 @@ export interface ReActAgentConfig extends AgentConfig {
   /** Maximum iterations for the ReAct loop (default: 10). */
   maxIterations?: number;
 
-  /** Skill precipitation mode. Default: "off". */
-  precipitation?: "off" | "post-hoc";
-
-  /** Max iterations for the precipitation sub-agent. Default: 15. */
-  precipitationMaxIterations?: number;
-
   /** Max iterations for each skill-verification fork. Default: 8. */
-  skillVerificationMaxIterations?: number;
-
   /** Memory reflection mode. Default: "off". */
   memoryReflection?: "off" | "post-hoc";
 
@@ -71,9 +63,6 @@ export interface ReActAgentConfig extends AgentConfig {
  */
 export class ReActAgent extends Agent {
   private maxIterations: number;
-  private precipitationMode: "off" | "post-hoc";
-  private precipitationMaxIterations: number;
-  private skillVerificationMaxIterations: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
 
@@ -85,9 +74,6 @@ export class ReActAgent extends Agent {
     super(mergedConfig);
 
     this.maxIterations = config.maxIterations ?? 10;
-    this.precipitationMode = config.precipitation ?? "off";
-    this.precipitationMaxIterations = config.precipitationMaxIterations ?? 15;
-    this.skillVerificationMaxIterations = config.skillVerificationMaxIterations ?? 8;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
     this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
 
@@ -109,7 +95,7 @@ export class ReActAgent extends Agent {
     // ── Intent detection (zero LLM cost, runs once per run) ────────
     // Skip for fork / minimal agents that have no side-effect tools
     // (remember, recall, skill) — intents are only actionable by the
-    // main agent which can trigger precipitation & memory reflection.
+    // main agent which can trigger memory reflection.
     // ── Recover orphaned sub-agent results from a cancelled session ──
     this.recoverOrphanedSubAgentResults();
 
@@ -135,16 +121,9 @@ export class ReActAgent extends Agent {
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    // Track tool failures → trigger precipitation on hard-won success
-    let consecutiveFailures = 0;
-    const FAILURE_PRECIPITATE_THRESHOLD = 2;
-
-    // Determine if precipitation should run (mode + signals)
-    let shouldPrecipitate = this.precipitationMode === "post-hoc";
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
     // User explicitly asked to remember — override mode config
     if (this.inputSignals.wantsRemember) {
-      shouldPrecipitate = true;
       shouldReflectMemory = true;
     }
 
@@ -285,14 +264,7 @@ export class ReActAgent extends Agent {
 
         const mcpWarnedServers = new Set<string>();
         const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
-        if (hadFailure) {
-          consecutiveFailures++;
-          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
-        } else {
-          consecutiveFailures = 0;
+        if (!hadFailure) {
           consecutiveEmptyResponses = 0;
         }
 
@@ -366,13 +338,6 @@ export class ReActAgent extends Agent {
       this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-      // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
-      if (shouldPrecipitate) {
-        this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
-      }
-
       // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
         this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
@@ -424,16 +389,9 @@ export class ReActAgent extends Agent {
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    // Track tool failures → trigger precipitation on hard-won success
-    let consecutiveFailures = 0;
-    const FAILURE_PRECIPITATE_THRESHOLD = 2;
-
-    // Determine if precipitation should run (mode + signals)
-    let shouldPrecipitate = this.precipitationMode === "post-hoc";
     let shouldReflectMemory = this.memoryReflectionMode === "post-hoc";
     // User explicitly asked to remember — override mode config
     if (this.inputSignals.wantsRemember) {
-      shouldPrecipitate = true;
       shouldReflectMemory = true;
     }
 
@@ -585,14 +543,7 @@ export class ReActAgent extends Agent {
         const mcpWarnedServers = new Set<string>();
         const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
 
-        if (hadFailure) {
-          consecutiveFailures++;
-          if (consecutiveFailures >= FAILURE_PRECIPITATE_THRESHOLD
-              && this.precipitationMode !== "off") {
-            shouldPrecipitate = true;
-          }
-        } else {
-          consecutiveFailures = 0;
+        if (!hadFailure) {
           consecutiveEmptyResponses = 0;
         }
 
@@ -679,13 +630,6 @@ export class ReActAgent extends Agent {
       this.fireOnFinish(answer);
       if (this.checkpointingEnabled) this.saveCheckpoint("completed");
 
-      // ── Skill precipitation (fire-and-forget, post-hoc) ─────────
-      if (shouldPrecipitate) {
-        this.trackBackground(this.runPrecipitation(input, answer)).catch((err: unknown) =>
-          this.logger.warn("Precipitation", `Background precipitation failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
-      }
-
       // ── Memory reflection (fire-and-forget, post-hoc) ────────────
       if (shouldReflectMemory) {
         this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
@@ -718,53 +662,13 @@ export class ReActAgent extends Agent {
     return this.run(input);
   }
 
-  // ─── Precipitation ───────────────────────────────────────────────────
-
-  /**
-   * Run post-hoc skill extraction after a successful completion.
-   * Best-effort — failures are logged but never affect the answer.
-   */
-  private async runPrecipitation(
-    input: string,
-    answer: string,
-  ): Promise<void> {
-    if (!this.skillsDir) {
-      this.logger.warn("Precipitation", "skillsDir not set — skipping.");
-      return;
-    }
-
-    const { PrecipitateAgent } = await import("../precipitation/precipitate-agent.js");
-    try {
-      await PrecipitateAgent.runFromAgent({
-        input,
-        answer,
-        skillsDir: this.skillsDir,
-        skillManager: this.skillManager,
-        llm: this.precipitationLLM ?? this.llm,
-        sessionId: this.getSessionId(),
-        maxIterations: this.precipitationMaxIterations,
-        skillVerificationMaxIterations: this.skillVerificationMaxIterations,
-        verifySkills: this.verifySkills,
-        skillVerificationLLM: this.skillVerificationLLM,
-        logger: this.logger,
-        contextMessages: this.contextManager.getContextMessages(),
-        hooks: this.hooks,
-      });
-    } catch (err: unknown) {
-      this.logger.error(
-        "Precipitation",
-        `Skill precipitation failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
   // ─── Memory Reflection ──────────────────────────────────────────────
 
   /**
    * Run post-hoc memory extraction after a successful completion.
    * Best-effort — failures are logged but never affect the answer.
    *
-   * Unlike precipitation, no guard for `skillsDir` is needed here:
+   * No guard for `skillsDir` is needed here:
    * MemoryManager is always created by the base Agent constructor.
    */
   private async runMemoryReflection(

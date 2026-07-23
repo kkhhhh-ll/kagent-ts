@@ -22,7 +22,7 @@ export interface DirEntry {
  * Implementations:
  * - {@link FileSystemSkillStore} — local directory of SKILL.md files (default)
  * - Custom implementations (database, object storage, etc.) by implementing
- *   this interface and passing to {@link SkillManager} and {@link PrecipitateAgent}.
+ *   this interface and passing to {@link SkillManager}.
  */
 export interface SkillStore {
   /**

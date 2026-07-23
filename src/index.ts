@@ -248,14 +248,6 @@ export type {
 export { detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt } from "./intent";
 export type { UserSignals, SkillMatch, RiskLevel } from "./intent";
 
-// Precipitation — post-execution skill extraction
-export { PrecipitateAgent } from "./precipitation/precipitate-agent";
-export type {
-  PrecipitateAgentConfig,
-  PrecipitationInput,
-  SkillCandidate,
-} from "./precipitation/precipitate-agent";
-
 // Evaluation — tool call metrics, regression benchmarks
 export { ToolCallEvaluator, Benchmark } from "./eval";
 export type {

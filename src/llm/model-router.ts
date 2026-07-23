@@ -14,7 +14,6 @@ export type ModelRoute =
   | "main"
   | "subAgent"
   | "lightweight"
-  | "precipitation"
   | "memory";
 
 /**
@@ -35,14 +34,6 @@ export interface ModelRouterConfig {
    * Default: `main`.
    */
   lightweight?: LLMProvider;
-
-  /**
-   * Model for post-execution skill precipitation.
-   * Default: `main`.
-   * Precipitation reviews completed sessions to extract reusable skills —
-   * using a cheaper model here saves cost on non-user-facing work.
-   */
-  precipitation?: LLMProvider;
 
   /**
    * Model for memory extraction (user preferences, project decisions, etc.).
@@ -154,16 +145,6 @@ export class ModelRouter implements LLMProvider {
   }
 
   /**
-   * Get the LLM provider for post-execution skill precipitation.
-   *
-   * Delegates to `precipitation` when configured, otherwise falls back to `main`.
-   * Wraps the provider with any shared fallback chain.
-   */
-  forPrecipitation(): LLMProvider {
-    return this.route("precipitation");
-  }
-
-  /**
    * Get the LLM provider for memory extraction.
    *
    * Delegates to `memory` when configured, otherwise falls back to `main`.
@@ -204,8 +185,6 @@ export class ModelRouter implements LLMProvider {
         return this.config.subAgent ?? this.config.main;
       case "lightweight":
         return this.config.lightweight ?? this.config.main;
-      case "precipitation":
-        return this.config.precipitation ?? this.config.main;
       case "memory":
         return this.config.memory ?? this.config.main;
     }
