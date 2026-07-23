@@ -291,8 +291,12 @@ export class AnthropicProvider implements LLMProvider {
           },
         };
       }
-    } catch {
+    } catch (err) {
       // Stream terminated abnormally — usage stats unavailable.
+      console.warn(
+        "[AnthropicProvider] failed to retrieve final message stats:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
     if (!emittedDone) {
