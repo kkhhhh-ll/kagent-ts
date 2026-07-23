@@ -1,7 +1,7 @@
 {
   "name": "kagent-ts",
-  "version": "1.0.6",
-  "description": "A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, post-hoc reflection, memory extraction, skill precipitation, and prompt-injection defense.",
+  "version": "1.0.7",
+  "description": "A production-grade TypeScript agent framework with multi-paradigm agent loops, multi-agent orchestration, tool governance, session persistence, streaming, memory extraction, skill precipitation, and prompt-injection defense.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

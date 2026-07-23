@@ -14,7 +14,15 @@
 
 构建生产级 AI Agent 不仅仅是 Prompt Engineering —— 你还需要**可靠的工具执行**、**答案验证**、**安全取消**、**会话恢复**、**技能复用**和**可观测性**。kagent-ts 开箱即用地提供了这一切，API 简洁、可组合。
 
+| 痛点 | 传统做法 | kagent-ts |
 |--------|---------------|---------------|
+| 工具不可靠 | 手动 try-catch，出错就卡死 | Circuit Breaker 熔断 + 自动重试 + 错误追踪 |
+| 答案不可信 | 直接返回 LLM 输出 | Post-hoc 答案验证 + 反思修正 |
+| 长对话崩塌 | Token 超限静默截断 | 4 步渐进式压缩 + Token Budget 硬上限 |
+| Ctrl+C 白跑 | 进程终止，上下文丢失 | 自动 Checkpoint + resume() 无缝恢复 |
+| 每次从零开始 | 无记忆，经验无法复用 | Memory 长期记忆 + Skill 沉淀 + BM25 自动激活 |
+| 子任务混乱 | 单线程串行，无并行 | Sub-Agent 并发 + Orchestrator DAG 编排 |
+| 安全风险 | 无 Prompt Injection 防御 | 5 层防御：签名扫描 + 边界标记 + 名称检测 |
 
 ---
 
@@ -47,7 +55,7 @@ const agent = new FusionAgent({
   }),
   routing: "auto",                // LLM 自动判断任务复杂度，选择 ReAct 或 PlanSolve
   planConfirmation: "auto",       // 检测到危险操作时请求人工审批
-      memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
+  memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
   precipitation: "post-hoc",      // 技能自动沉淀（fire-and-forget）
   skillsDir: "./skills",          // SKILL.md 技能文件目录
 });
@@ -65,7 +73,12 @@ console.log(answer);
 
 ### 🧠 多范式执行引擎
 
+| Agent | 执行策略 | 适用场景 |
 |------|------|---------|
+| `ReActAgent` | Thought → Action → Observation 循环 | 简单问答、1-3 步工具调用 |
+| `PlanSolveAgent` | Plan → Execute → Answer 两阶段 | 多步骤复杂任务 |
+| `FusionAgent` | 自动路由 → ReAct 或 Plan-Solve → 反思 | 不确定复杂度的通用场景 |
+| `OrchestratorAgent` | DAG 分解 → 并行调度 → 合成 | 大规模多 Agent 协作 |
 
 推荐默认使用 `FusionAgent` + `routing: "auto"` —— LLM 根据任务复杂度自动选择最优引擎。
 
