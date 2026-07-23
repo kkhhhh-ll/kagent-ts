@@ -1,6 +1,6 @@
 # kagent-ts
 
-**生产级 TypeScript Agent 框架** — 多范式执行引擎、意图识别、答案验证、工具治理、会话持久化、渐进式技能、自我进化。
+**生产级 TypeScript Agent 框架** — 多范式执行引擎、工具治理、会话持久化、渐进式技能、长期记忆、子 Agent 编排。
 
 [![npm version](https://img.shields.io/npm/v/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
 [![npm downloads](https://img.shields.io/npm/dm/kagent-ts)](https://www.npmjs.com/package/kagent-ts)
@@ -12,15 +12,14 @@
 
 ## 为什么选择 kagent-ts？
 
-构建生产级 AI Agent 不仅仅是 Prompt Engineering —— 你还需要**可靠的工具执行**、**答案验证**、**安全取消**、**会话恢复**、**技能复用**和**可观测性**。kagent-ts 开箱即用地提供了这一切，API 简洁、可组合。
+构建生产级 AI Agent 不仅仅是 Prompt Engineering —— 你还需要**可靠的工具执行**、**会话恢复**、**技能复用**、**子 Agent 编排**和**可观测性**。kagent-ts 开箱即用地提供了这一切，API 简洁、可组合。
 
 | 痛点 | 传统做法 | kagent-ts |
 |--------|---------------|---------------|
-| 工具不可靠 | 手动 try-catch，出错就卡死 | Circuit Breaker 熔断 + 自动重试 + 错误追踪 |
-| 答案不可信 | 直接返回 LLM 输出 | Post-hoc 答案验证 + 反思修正 |
+| 工具不可靠 | 手动 try-catch，出错就卡死 | Circuit Breaker 熔断 + 自动重试 |
 | 长对话崩塌 | Token 超限静默截断 | 4 步渐进式压缩 + Token Budget 硬上限 |
 | Ctrl+C 白跑 | 进程终止，上下文丢失 | 自动 Checkpoint + resume() 无缝恢复 |
-| 每次从零开始 | 无记忆，经验无法复用 | Memory 长期记忆 + Skill 沉淀 + BM25 自动激活 |
+| 每次从零开始 | 无记忆，经验无法复用 | Memory 长期记忆 + BM25 自动激活 |
 | 子任务混乱 | 单线程串行，无并行 | Sub-Agent 并发 + Orchestrator DAG 编排 |
 | 安全风险 | 无 Prompt Injection 防御 | 5 层防御：签名扫描 + 边界标记 + 名称检测 |
 
@@ -49,14 +48,12 @@ import { FusionAgent, OpenAIProvider, AnthropicProvider, ModelRouter } from "kag
 // 多 provider 路由：不同任务用最合适的模型
 const agent = new FusionAgent({
   llm: new ModelRouter({
-    main:         new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
-
-    memory:       new OpenAIProvider({ model: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY! }),
+    main:   new OpenAIProvider({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY! }),
+    memory: new OpenAIProvider({ model: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY! }),
   }),
   routing: "auto",                // LLM 自动判断任务复杂度，选择 ReAct 或 PlanSolve
   planConfirmation: "auto",       // 检测到危险操作时请求人工审批
   memoryReflection: "post-hoc",   // 记忆提取（fire-and-forget）
-  precipitation: "post-hoc",      // 技能自动沉淀（fire-and-forget）
   skillsDir: "./skills",          // SKILL.md 技能文件目录
 });
 
@@ -118,20 +115,16 @@ registry.register({
 - **完整性** — 请求的所有部分是否都已处理？
 - **安全性** — 是否包含危险或破坏性建议？
 
-验证是**阻塞式**的（`
-### 🪞 反思与自我进化
+验证是**阻塞式**的
+### 🪞 反思与记忆
 
-三种反思模式均为 **fire-and-forget** —— 在答案返回之后异步执行，用户无需等待：
+MemoryReflector 在答案返回后异步执行（fire-and-forget），用户无需等待：
 
 ```
-┌─  ────► 
-│
-Answer ──┼─ MemoryReflector ───► MemoryManager（[[wiki-link]] 长期记忆）
-│
-└─ PrecipitateAgent ───► skills/*.md（关键词自动激活）
+Answer ── MemoryReflector ── MemoryManager（[[wiki-link]] 长期记忆）
 ```
 
-**
+
 
 ### 📝 渐进式技能
 
@@ -152,8 +145,6 @@ keywords: ["deploy", "vercel", "nextjs", "production"]
 ```
 
 用户说"deploy this to vercel" → 关键词 `deploy` + `vercel` 命中 → 技能自动注入 System Prompt。**零额外 LLM 开销。**
-
-自动沉淀的技能会带有 `precipitated: true` 标记和关键词，下次相似请求时自动激活。
 
 ### 💾 会话持久化
 
@@ -182,7 +173,7 @@ const llm = new FallbackProvider({
 });
 ```
 
-**模型路由：** `main`、`subAgent`、`reflection`、`verification`、`memory`、`precipitation` —— 不同角色使用不同模型，兼顾成本与能力。
+**模型路由：** `main`、`subAgent`、`memory` —— 不同角色使用不同模型，兼顾成本与能力。
 
 ### 🛡️ 安全防护
 
@@ -215,11 +206,8 @@ const hooks: AgentHooks = {
 ```text
 src/
 ├── core/              # Agent 基类 + 4 种范式（ReAct/PlanSolve/Fusion/Orchestrator）
-├── intent/            # 零 LLM 开销的信号检测 + 技能关键词匹配
-├── verification/      # Fork 验证 Agent（正确性 + 完整性）
-├── reflection/        #  + MemoryReflector + 
-├── precipitation/     # 从对话中自动提取技能
-├── skills/            # 渐进式技能：FileSkillLoader + SkillManager
+├── intent/            # 零 LLM 开销的信号检测（风险等级、记忆意图）
+├── skills/            # 渐进式技能：FileSkillLoader + SkillManager + BM25 自动激活
 ├── tools/             # ToolRegistry / CircuitBreaker / Validator / Filter / Truncator
 ├── llm/               # OpenAI / Anthropic / Fallback / RateLimiter / Router / TokenBudget
 ├── subagent/          # AGENT.md 零代码注册子 Agent
@@ -254,27 +242,46 @@ npm run docs:dev
 
 ### Agent
 
+| 类 | 说明 |
 |---|------|
+| `ReActAgent` | Thought → Action → Observation 循环 |
+| `PlanSolveAgent` | Plan → Resolve → Answer 两阶段 |
+| `FusionAgent` | 自动路由 ReAct / PlanSolve |
+| `OrchestratorAgent` | DAG 分解 → 并行调度 → 合成 |
 
 ### LLM
 
+| 类 | 说明 |
 |---|------|
+| `OpenAIProvider` | OpenAI 兼容 API |
+| `AnthropicProvider` | Anthropic API |
+| `FallbackProvider` | 多 Provider 自动降级 |
+| `RateLimitedProvider` | RPM 速率限制 |
+| `ModelRouter` | 按角色路由到不同模型 |
 
 ### 工具
 
-|----------|------|
+| 功能 | 说明 |
+|------|------|
+| `ToolRegistry` | 工具注册 + Circuit Breaker + 执行 |
+| `CircuitBreaker` | CLOSED → HALF_OPEN → OPEN 三态熔断 |
+| `ToolFilter` | allowlist / denylist 工具过滤 |
+| `ToolOutputTruncator` | 大输出自动截断落盘 |
 
 ### SubAgent & 会话
 
+| 类 | 说明 |
 |---|------|
+| `SubAgentManager` | 子 Agent 注册、并发调度、结果收集 |
+| `SubAgentLoader` | 从 `AGENT.md` 文件加载子 Agent 定义 |
+| `SessionManager` | 会话持久化 + Checkpoint 恢复 |
 
-### 技能、记忆 & 反思
+### 技能、记忆
 
+| 类 | 说明 |
 |---|------|
-
-### RAG & MCP
-
-|---|------|
+| `SkillManager` | 渐进式技能注册 + BM25 自动激活 |
+| `MemoryManager` | Markdown 长期记忆 + [[wiki-link]] 互联 |
 
 ---
 

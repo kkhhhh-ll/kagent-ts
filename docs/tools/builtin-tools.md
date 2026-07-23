@@ -1,6 +1,6 @@
 # 内置工具
 
-kagent-ts 提供了 15 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、知识检索、记忆管理等场景。
+kagent-ts 提供了 13 个内置工具，覆盖文件操作、搜索、Shell 执行、网络抓取、知识检索、记忆管理等场景。
 
 ## 工具列表总览
 
@@ -182,10 +182,6 @@ console.log(BUILTIN_TOOL_NAMES)
 
 ## 子代理工具
 
-### ListSubagentsTool
-
-列出当前可用的所有子代理及其能力。
-
 ### SpawnSubagentTool
 
 异步派发子代理任务。
@@ -196,12 +192,6 @@ console.log(BUILTIN_TOOL_NAMES)
   "input": "审查 src/core/react-agent.ts 的代码质量"
 }
 ```
-
-## 诊断工具
-
-### ListErrorsTool
-
-列出工具执行错误追踪记录，帮助 LLM 了解系统状态。
 
 ## 下一步
 

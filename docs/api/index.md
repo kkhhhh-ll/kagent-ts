@@ -12,6 +12,7 @@ import {
   // LLM
   OpenAIProvider, AnthropicProvider, FallbackProvider, RateLimitedProvider,
   ModelRouter, createLLMProvider, TokenBudget, LLMNetworkError,
+  isNetworkError, LLMResponseErrorCode,
   // Tools
   ToolRegistry, CircuitBreaker, BUILTIN_TOOLS, BUILTIN_TOOL_NAMES,
   toolSuccess, toolError, validateToolArgs,
@@ -22,7 +23,7 @@ import {
   // Context & Compression
   ContextManager, ProgressiveCompressor,
   // Session
-  SessionManager,
+  SessionManager, SessionViewer,
   // Skills
   SkillManager, FileSkillLoader, parseFrontmatter,
   // Intent
@@ -51,6 +52,20 @@ import {
   Logger, ConsoleLogger, SilentLogger,
   // Response Schema
   parseReActResponse, parsePlanSolveResponse, parseFusionRouteResponse,
+  parseFusionResponse, STRUCTURED_OUTPUT_INSTRUCTIONS, PLAN_SOLVE_INSTRUCTIONS,
+  FUSION_ROUTE_INSTRUCTIONS, FUSION_EXECUTION_INSTRUCTIONS, INLINE_REFLECTION_PROMPT,
+  // Orchestrator Response
+  parseDecomposeResponse, parseSynthesizeResponse, parseAdaptResponse,
+  // Built-in Tools
+  registerAllBuiltinTools, ReadFileTool, WriteFileTool, EditFileTool,
+  GrepSearchTool, GlobSearchTool, createSpawnSubagentTool, createSkillTool,
+  createRememberTool, createRecallTool,
+  // Reflection
+  MemoryReflector,
+  // Rules
+  ProjectRules,
+  // Tools
+  BreakerState, ToolErrorCode,
 } from 'kagent-ts'
 ```
 
@@ -108,13 +123,9 @@ type BreakerState / BreakerStatus / CircuitBreakerConfig
 // 意图识别
 type UserSignals / SkillMatch
 
-// 反思 & 记忆 & 沉淀
-type ReflectionFinding
-type 
+// 反思 & 记忆
 type MemoryReflectorConfig / MemoryReflectionInput / ExtractedMemory
 type Memory / MemoryType
-// 意图识别
-type UserSignals / SkillMatch
 
 // 会话
 type SessionState / SessionStatus / AgentType

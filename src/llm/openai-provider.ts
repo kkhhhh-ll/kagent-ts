@@ -1,13 +1,22 @@
 import OpenAI from "openai";
 import { Stream } from "openai/streaming";
-import { LLMProvider, LLMResponse, LLMStreamEvent, LLMResponseErrorCode } from "./interface";
+import {
+  LLMProvider,
+  LLMResponse,
+  LLMStreamEvent,
+  LLMResponseErrorCode,
+} from "./interface";
 import { MessageData } from "../messages/types";
 import { Tool } from "../tools/types";
 import { countTokens } from "../utils/token-counter";
 
 // ─── Shared error types (re-exported for backward compatibility) ─────────────
 
-export { LLMNetworkError, type NetworkErrorCause, type RetryConfig } from "./errors";
+export {
+  LLMNetworkError,
+  type NetworkErrorCause,
+  type RetryConfig,
+} from "./errors";
 
 // ─── OpenAIRetryConfig (deprecated alias) ────────────────────────────────────
 
@@ -28,7 +37,8 @@ export function isNetworkError(error: unknown): boolean {
   if (error instanceof OpenAI.APIError) {
     // 429 (rate-limit) and 5xx (server) are retryable
     if (error.status === 429) return true;
-    if (error.status !== undefined && error.status >= 500 && error.status < 600) return true;
+    if (error.status !== undefined && error.status >= 500 && error.status < 600)
+      return true;
     return false;
   }
 
@@ -56,7 +66,8 @@ export function isNetworkError(error: unknown): boolean {
 function classifyError(error: unknown): import("./errors").NetworkErrorCause {
   if (error instanceof OpenAI.APIError) {
     if (error.status === 429) return "rate_limit";
-    if (error.status !== undefined && error.status >= 500) return "server_error";
+    if (error.status !== undefined && error.status >= 500)
+      return "server_error";
   }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
@@ -112,21 +123,22 @@ export class OpenAIProvider implements LLMProvider {
   private timeout: number | undefined;
 
   constructor(config: OpenAIConfig) {
+    this.timeout = config.timeout ?? 60000;
     this.client = new OpenAI({
       apiKey: config.apiKey,
+      timeout: this.timeout,
       baseURL: config.baseURL,
     });
     if (!config.model) {
       throw new Error(
         "OpenAIProvider: `model` is required. " +
-        "Provide a model name (e.g. \"gpt-4o\", \"gpt-4o-mini\", \"claude-sonnet-4-6\") " +
-        "when constructing the provider."
+          'Provide a model name (e.g. "gpt-4o", "gpt-4o-mini", "claude-sonnet-4-6") ' +
+          "when constructing the provider.",
       );
     }
     this.model = config.model;
     this.temperature = config.temperature ?? 0.7;
     this.maxTokens = config.maxTokens ?? 4096;
-    this.timeout = config.timeout;
     this.retryConfig = {
       maxRetries: config.retry?.maxRetries ?? 3,
       baseDelayMs: config.retry?.baseDelayMs ?? 1000,
@@ -134,7 +146,11 @@ export class OpenAIProvider implements LLMProvider {
     };
   }
 
-  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
+  async chat(
+    messages: MessageData[],
+    tools?: Tool[],
+    signal?: AbortSignal,
+  ): Promise<LLMResponse> {
     // Convert internal Tool definitions to OpenAI tool format
     const openaiTools = tools?.map((t) => ({
       type: "function" as const,
@@ -195,7 +211,8 @@ export class OpenAIProvider implements LLMProvider {
     if (choice.finish_reason === "length") {
       result.responseError = {
         code: LLMResponseErrorCode.MAX_TOKENS,
-        message: "Response truncated: max_tokens reached. Content or tool call arguments may be incomplete.",
+        message:
+          "Response truncated: max_tokens reached. Content or tool call arguments may be incomplete.",
       };
     }
 
@@ -244,8 +261,7 @@ export class OpenAIProvider implements LLMProvider {
             signal,
             ...(this.timeout !== undefined ? { timeout: this.timeout } : {}),
           },
-        )) as unknown as Stream<OpenAI.Chat.ChatCompletionChunk>
-      ,
+        )) as unknown as Stream<OpenAI.Chat.ChatCompletionChunk>,
       this.retryConfig,
       { isRetryable: isNetworkError, classifyError },
     );
@@ -283,7 +299,8 @@ export class OpenAIProvider implements LLMProvider {
             completion_tokens: chunk.usage.completion_tokens,
             total_tokens: chunk.usage.total_tokens,
           },
-          stop_reason: finishReason === "stop" ? undefined : (finishReason || undefined),
+          stop_reason:
+            finishReason === "stop" ? undefined : finishReason || undefined,
         };
       }
     }

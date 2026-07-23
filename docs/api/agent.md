@@ -137,7 +137,22 @@ interface OrchestratorAgentConfig extends AgentConfig {
   maxRetriesPerNode?: number
 
   /** 失败处理策略 (默认: "retry-subtree") */
-  failureStrategy?: "retry-subtree" }
+  failureStrategy?: FailureStrategy
+
+  // ── Git Worktree 隔离 ──
+  /** 是否启用 git worktree 隔离 (默认 false) */
+  enableWorktrees?: boolean
+  /** 仓库根目录 (enableWorktrees=true 时必填) */
+  worktreeRepoPath?: string
+  /** worktree 父目录 (默认 .kagent-worktrees/) */
+  worktreesDir?: string
+  /** 分支名前缀 (默认 "kagent") */
+  worktreeBranchPrefix?: string
+  /** 节点完成后自动 merge 并清理 worktree (默认 false) */
+  autoMergeWorktrees?: boolean
+  /** 会话结束时强制清理所有 worktree (默认 true) */
+  autoCleanupWorktrees?: boolean
+}
 ```
 
 ---
@@ -168,7 +183,7 @@ interface AgentConfig {
   // ── 人工审批 (HITL) ──
   onToolApproval?: ApprovalCallback                 // 工具审批回调
   approvalTimeoutMs?: number                        // 审批超时 (ms)
-  approvalTimeoutStrategy?: "deny" | "approve"      // 超时策略
+  approvalTimeoutStrategy?: "deny" | "allow"        // 超时策略
   // ── 并行执行 ──
   enableParallelToolExecution?: boolean             // 启用并行工具调用
 
@@ -187,11 +202,16 @@ interface AgentConfig {
   // ── RAG ──
   rag?: RAGConfig                                   // RAG 知识检索配置
 
+  // ── 项目规则 ──
+  rulesPath?: string                                // 项目规则文件/目录路径
+
   // ── 子 Agent ──
   subAgentsDir?: string                             // 子 Agent 定义目录
   disableSubAgents?: boolean                        // 禁用子 Agent
   skipAutoTools?: boolean                           // 跳过子 Agent 工具自动注册
   maxPending?: number                               // 最大并行子 Agent 数 (默认: 3)
+  maxQueueSize?: number                             // 子 Agent 等待队列上限 (默认: 20)
+  subAgentFastTimeoutMs?: number                    // 快结果等待时间 ms (默认: 30000, 0 禁用)
 
   /**
    * 子 Agent 的生命周期钩子。

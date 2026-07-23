@@ -19,7 +19,7 @@ features:
     details: 支持 ReAct、Plan-Solve、Fusion（混合）和 Orchestrator（多agent编排）四种 Agent 循环范式，灵活应对不同复杂度的任务。
   - icon: 🔧
     title: 完善的工具系统
-    details: 内置 15 种工具（文件读写、搜索、Shell 执行、网络抓取、知识检索等），支持 Circuit Breaker 熔断、JSON Schema 参数验证、工具输出截断和 HITL 审批。
+    details: 内置 13 种工具（文件读写、搜索、Shell 执行、网络抓取、知识检索等），支持 Circuit Breaker 熔断、JSON Schema 参数验证、工具输出截断和 HITL 审批。
   - icon: 🔌
     title: 多 LLM 后端
     details: 同时支持 OpenAI 和 Anthropic，内置 Fallback 降级、Rate Limiter 限流、Model Router 路由和 Token Budget 预算控制。
@@ -102,9 +102,10 @@ kagent-ts
 │   ├── tool-validator.ts         # JSON Schema 参数验证
 │   ├── tool-output-truncator.ts  # 大输出裁剪到磁盘
 │   ├── tool-filter.ts            # 子代理工具权限过滤
-│   └── builtin/            # 15 个内置工具（bash, read_file, write_file, edit_file,
+│   └── builtin/            # 13 个内置工具（bash, read_file, write_file, edit_file,
 │                            #   grep_search, glob_search, web_fetch, skill,
-│                            #   spawn_subagent, remember, recall）
+│                            #   spawn_subagent, remember, recall, search_knowledge,
+│                            #   list_knowledge_documents）
 ├── session/        # 会话持久化与恢复（Checkpoint + 优雅关闭）
 ├── context/        # 上下文窗口管理（Token 预算 + 智能裁剪）
 ├── compression/    # 4 步渐进式上下文压缩

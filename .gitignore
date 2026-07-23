@@ -22,3 +22,4 @@ mcp.txt
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 analysis/
+scripts/

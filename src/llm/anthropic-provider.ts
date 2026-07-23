@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageStream } from "@anthropic-ai/sdk/resources/messages/messages";
-import { LLMProvider, LLMResponse, LLMStreamEvent, LLMResponseErrorCode } from "./interface";
+import {
+  LLMProvider,
+  LLMResponse,
+  LLMStreamEvent,
+  LLMResponseErrorCode,
+} from "./interface";
 import { MessageData, Role } from "../messages/types";
 import { Tool } from "../tools/types";
 import { countTokens } from "../utils/token-counter";
@@ -19,7 +24,8 @@ function isNetworkError(error: unknown): boolean {
   if (error instanceof Anthropic.APIError) {
     // 429 (rate-limit) and 5xx (server) are retryable
     if (error.status === 429) return true;
-    if (error.status !== undefined && error.status >= 500 && error.status < 600) return true;
+    if (error.status !== undefined && error.status >= 500 && error.status < 600)
+      return true;
     return false;
   }
 
@@ -47,7 +53,8 @@ function isNetworkError(error: unknown): boolean {
 function classifyError(error: unknown): NetworkErrorCause {
   if (error instanceof Anthropic.APIError) {
     if (error.status === 429) return "rate_limit";
-    if (error.status !== undefined && error.status >= 500) return "server_error";
+    if (error.status !== undefined && error.status >= 500)
+      return "server_error";
   }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
@@ -144,22 +151,22 @@ export class AnthropicProvider implements LLMProvider {
     if (!config.model) {
       throw new Error(
         "AnthropicProvider: `model` is required. " +
-        "Provide a model name (e.g. \"claude-sonnet-4-6\", \"claude-opus-4-8\") " +
-        "when constructing the provider."
+          'Provide a model name (e.g. "claude-sonnet-4-6", "claude-opus-4-8") ' +
+          "when constructing the provider.",
       );
     }
 
     this.model = config.model;
+    this.timeout = config.timeout ?? 60000;
 
     this.client = new Anthropic({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
-      timeout: config.timeout,
+      timeout: this.timeout ?? 60000,
       maxRetries: 0, // We handle retries ourselves via withRetry
     });
     this.temperature = config.temperature ?? 0.7;
     this.maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
-    this.timeout = config.timeout;
     this.cacheSystemPrompt = config.cacheSystemPrompt ?? false;
     this.retryConfig = {
       maxRetries: config.retry?.maxRetries ?? 3,
@@ -175,9 +182,14 @@ export class AnthropicProvider implements LLMProvider {
    * When `cacheSystemPrompt` is enabled and the system prompt is non-empty,
    * wraps it in a content block with `cache_control` so Anthropic caches it.
    */
-  private buildSystemParam(
-    systemPrompt: string | undefined,
-  ): string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> | undefined {
+  private buildSystemParam(systemPrompt: string | undefined):
+    | string
+    | Array<{
+        type: "text";
+        text: string;
+        cache_control?: { type: "ephemeral" };
+      }>
+    | undefined {
     if (!systemPrompt) return undefined;
     if (!this.cacheSystemPrompt) return systemPrompt;
 
@@ -187,23 +199,37 @@ export class AnthropicProvider implements LLMProvider {
         text: systemPrompt,
         cache_control: { type: "ephemeral" },
       },
-    ] as Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }>;
+    ] as Array<{
+      type: "text";
+      text: string;
+      cache_control?: { type: "ephemeral" };
+    }>;
   }
 
-  async chat(messages: MessageData[], tools?: Tool[], signal?: AbortSignal): Promise<LLMResponse> {
-    const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
-    const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
+  async chat(
+    messages: MessageData[],
+    tools?: Tool[],
+    signal?: AbortSignal,
+  ): Promise<LLMResponse> {
+    const { systemPrompt, formattedMessages } =
+      AnthropicProvider.convertMessages(messages);
+    const anthropicTools = tools?.length
+      ? AnthropicProvider.convertTools(tools)
+      : undefined;
 
     const response = await withRetry(
       () =>
-        this.client.messages.create({
-          model: this.model,
-          system: this.buildSystemParam(systemPrompt),
-          messages: formattedMessages,
-          tools: anthropicTools,
-          max_tokens: this.maxTokens,
-          temperature: this.temperature,
-        }, { signal }),
+        this.client.messages.create(
+          {
+            model: this.model,
+            system: this.buildSystemParam(systemPrompt),
+            messages: formattedMessages,
+            tools: anthropicTools,
+            max_tokens: this.maxTokens,
+            temperature: this.temperature,
+          },
+          { signal },
+        ),
       this.retryConfig,
       anthropicRetryCallbacks,
     );
@@ -216,8 +242,11 @@ export class AnthropicProvider implements LLMProvider {
     tools?: Tool[],
     signal?: AbortSignal,
   ): AsyncIterable<LLMStreamEvent> {
-    const { systemPrompt, formattedMessages } = AnthropicProvider.convertMessages(messages);
-    const anthropicTools = tools?.length ? AnthropicProvider.convertTools(tools) : undefined;
+    const { systemPrompt, formattedMessages } =
+      AnthropicProvider.convertMessages(messages);
+    const anthropicTools = tools?.length
+      ? AnthropicProvider.convertTools(tools)
+      : undefined;
 
     // The Anthropic SDK's stream() is synchronous — it returns a MessageStream
     // without initiating a network request. The actual connection happens on
@@ -226,14 +255,17 @@ export class AnthropicProvider implements LLMProvider {
     // by the agent's outer loop, same as the OpenAI provider.
     const stream: MessageStream = await withRetry(
       async () =>
-        this.client.messages.stream({
-          model: this.model,
-          system: this.buildSystemParam(systemPrompt),
-          messages: formattedMessages,
-          tools: anthropicTools,
-          max_tokens: this.maxTokens,
-          temperature: this.temperature,
-        }, { signal }),
+        this.client.messages.stream(
+          {
+            model: this.model,
+            system: this.buildSystemParam(systemPrompt),
+            messages: formattedMessages,
+            tools: anthropicTools,
+            max_tokens: this.maxTokens,
+            temperature: this.temperature,
+          },
+          { signal },
+        ),
       this.retryConfig,
       anthropicRetryCallbacks,
     );
@@ -287,7 +319,9 @@ export class AnthropicProvider implements LLMProvider {
           usage: {
             prompt_tokens: finalMessage.usage.input_tokens,
             completion_tokens: finalMessage.usage.output_tokens,
-            total_tokens: finalMessage.usage.input_tokens + finalMessage.usage.output_tokens,
+            total_tokens:
+              finalMessage.usage.input_tokens +
+              finalMessage.usage.output_tokens,
           },
         };
       }
@@ -353,9 +387,7 @@ export class AnthropicProvider implements LLMProvider {
       return {
         type: "object",
         properties: params.properties as Record<string, unknown>,
-        ...(params.required
-          ? { required: params.required as string[] }
-          : {}),
+        ...(params.required ? { required: params.required as string[] } : {}),
       } satisfies Anthropic.Tool.InputSchema;
     }
 
@@ -370,7 +402,9 @@ export class AnthropicProvider implements LLMProvider {
     return tools.map((t) => ({
       name: t.name,
       description: t.description,
-      input_schema: AnthropicProvider.buildInputSchema(t.parameters as Record<string, unknown> | undefined),
+      input_schema: AnthropicProvider.buildInputSchema(
+        t.parameters as Record<string, unknown> | undefined,
+      ),
     }));
   }
 
@@ -383,7 +417,10 @@ export class AnthropicProvider implements LLMProvider {
    * - Usage → mapped from Anthropic's input_tokens/output_tokens
    * - Stop reason → preserved for agents to detect truncation / tool-use
    */
-  private static convertResponse(response: Anthropic.Messages.Message, model: string): LLMResponse {
+  private static convertResponse(
+    response: Anthropic.Messages.Message,
+    model: string,
+  ): LLMResponse {
     const textBlocks = response.content.filter(
       (b) => b.type === "text",
     ) as Array<{ type: "text"; text: string }>;
@@ -409,21 +446,23 @@ export class AnthropicProvider implements LLMProvider {
 
     const result: LLMResponse = {
       content,
-      tool_calls: toolUseBlocks.length > 0
-        ? toolUseBlocks.map((b) => ({
-            id: b.id,
-            type: "function" as const,
-            function: {
-              name: b.name,
-              arguments: JSON.stringify(b.input),
-            },
-          }))
-        : undefined,
+      tool_calls:
+        toolUseBlocks.length > 0
+          ? toolUseBlocks.map((b) => ({
+              id: b.id,
+              type: "function" as const,
+              function: {
+                name: b.name,
+                arguments: JSON.stringify(b.input),
+              },
+            }))
+          : undefined,
       usage: response.usage
         ? {
             prompt_tokens: response.usage.input_tokens,
             completion_tokens: response.usage.output_tokens,
-            total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+            total_tokens:
+              response.usage.input_tokens + response.usage.output_tokens,
           }
         : undefined,
       stop_reason: response.stop_reason ?? undefined,
@@ -516,8 +555,7 @@ export class AnthropicProvider implements LLMProvider {
             ] as unknown as Anthropic.MessageParam["content"];
           } else if (Array.isArray(last.content)) {
             // Append tool_result blocks to the existing content array.
-            const lastBlocks =
-              last.content as Anthropic.ToolResultBlockParam[];
+            const lastBlocks = last.content as Anthropic.ToolResultBlockParam[];
             last.content = [
               ...lastBlocks,
               ...newBlocks,
@@ -579,9 +617,7 @@ export class AnthropicProvider implements LLMProvider {
    * was skipped due to an internal error.  The LLM can then decide to
    * retry or work around it.
    */
-  private static repairToolPairing(
-    messages: Anthropic.MessageParam[],
-  ): void {
+  private static repairToolPairing(messages: Anthropic.MessageParam[]): void {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (msg.role !== "assistant") continue;
@@ -595,9 +631,8 @@ export class AnthropicProvider implements LLMProvider {
       if (toolUses.length === 0) continue;
 
       const next = messages[i + 1];
-      const nextBlocks = next && Array.isArray(next.content)
-        ? (next.content as any[])
-        : [];
+      const nextBlocks =
+        next && Array.isArray(next.content) ? (next.content as any[]) : [];
       const resultIds = new Set(
         nextBlocks
           .filter((b: any) => b.type === "tool_result")
@@ -612,14 +647,19 @@ export class AnthropicProvider implements LLMProvider {
         type: "tool_result" as const,
         tool_use_id: tu.id,
         is_error: true,
-        content: `[Tool "${tu.name ?? "unknown"}" was skipped due to an internal message-ordering error and was not executed. ` +
+        content:
+          `[Tool "${tu.name ?? "unknown"}" was skipped due to an internal message-ordering error and was not executed. ` +
           `Please retry the tool call or use an alternative approach.]`,
       }));
 
       if (next && next.role === "user" && Array.isArray(next.content)) {
         // Append synthetic results to the existing next user message.
         (next.content as any[]).push(...syntheticResults);
-      } else if (next && next.role === "user" && typeof next.content === "string") {
+      } else if (
+        next &&
+        next.role === "user" &&
+        typeof next.content === "string"
+      ) {
         // Convert plain-text user message to content-block array so we
         // can append tool_result blocks alongside the text.
         next.content = [
@@ -700,7 +740,8 @@ export class AnthropicProvider implements LLMProvider {
 
         return {
           role: "assistant",
-          content: contentBlocks as unknown as Anthropic.MessageParam["content"],
+          content:
+            contentBlocks as unknown as Anthropic.MessageParam["content"],
         };
       }
 
