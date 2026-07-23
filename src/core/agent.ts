@@ -563,16 +563,18 @@ export abstract class Agent {
     this.disableSubAgents = cfg.disableSubAgents;
     this.skipAutoTools = cfg.skipAutoTools;
 
-    // Auto-load mcp.json from project root; skip for sub-agents
-    // (they inherit MCP tools from the parent's ToolRegistry).
-    const effectiveMcpPath = cfg.toolRegistry
-      ? undefined
-      : (cfg.mcpConfigPath ?? "mcp.json");
-    this.mcpServerConfigs = Agent.loadMcpConfig(
-      effectiveMcpPath,
-      cfg.mcpServers,
-      this.logger,
-    );
+    // Load MCP server config only when the user explicitly configured it.
+    // Skip for sub-agents (they inherit MCP tools from the parent's ToolRegistry).
+    if (cfg.mcpConfigPath || cfg.mcpServers) {
+      const effectiveMcpPath = cfg.toolRegistry
+        ? undefined
+        : cfg.mcpConfigPath;
+      this.mcpServerConfigs = Agent.loadMcpConfig(
+        effectiveMcpPath,
+        cfg.mcpServers,
+        this.logger,
+      );
+    }
     this.subAgentHooks = cfg.subAgentHooks;
     this.skillsDir = cfg.skillsDir;
     this.workdir = cfg.workdir;

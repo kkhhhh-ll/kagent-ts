@@ -104,5 +104,4 @@ export const EditFileTool: Tool = {
       return `Error editing file "${resolvedPath}": ${message}`;
     }
   },
-  requireApproval: true,
 };

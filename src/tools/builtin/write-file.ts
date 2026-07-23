@@ -61,5 +61,4 @@ export const WriteFileTool: Tool = {
     }
   },
   sequential: true,
-  requireApproval: true,
 };
