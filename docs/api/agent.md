@@ -19,11 +19,6 @@ interface ReActAgentConfig extends AgentConfig {
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
-
-  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
-  precipitationMaxIterations?: number
 }
 ```
 
@@ -58,11 +53,6 @@ interface PlanSolveAgentConfig extends AgentConfig {
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
-
-  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
-  precipitationMaxIterations?: number
 }
 ```
 
@@ -112,11 +102,6 @@ interface FusionAgentConfig extends AgentConfig {
 
   /** 连续工具失败 N 次后注入 replan 提示 (默认: 2，设为 0 禁用) */
   replanThreshold?: number
-
-  /** Skill 沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" 
-  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
-  precipitationMaxIterations?: number
 }
 
 type PlanConfirmCallback = (
@@ -230,13 +215,6 @@ interface AgentConfig {
   skillsDir?: string                                // 技能文件目录
 
   // ── 后处理 ──
-  /** 技能沉淀模式 (默认: "off") — fire-and-forget */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 */
-  precipitationMaxIterations?: number
-  /** 技能沉淀专用 LLM Provider（不设置时自动走 ModelRouter.forPrecipitation() 或复用 llm） */
-  precipitationLLM?: LLMProvider
-
   /** 记忆提取模式 (默认: "off") — fire-and-forget */
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 */
@@ -258,7 +236,7 @@ type ApprovalCallback = (
 ) => Promise<boolean>
 ```
 
-> **注意**：`maxIterations` 等 Agent 特有字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中。`precipitation`、`memoryReflection` 及其 LLM 配置在 `AgentConfig` 基类中，所有 Agent 共享。
+> **注意**：`maxIterations` 等 Agent 特有字段不在 `AgentConfig` 基类中，而是定义在各具体 Agent 的 Config 中。`memoryReflection` 及其 LLM 配置在 `AgentConfig` 基类中，所有 Agent 共享。
 
 ---
 

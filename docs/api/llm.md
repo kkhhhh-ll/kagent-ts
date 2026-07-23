@@ -192,9 +192,6 @@ interface ModelRouterConfig {
   /** 轻量任务专用模型（默认: main） */
   lightweight?: LLMProvider
 
-  /** Skill 沉淀专用模型（默认: main） */
-  precipitation?: LLMProvider
-
   /** 记忆提取专用模型（默认: main） */
   memory?: LLMProvider
 
@@ -212,7 +209,6 @@ interface ModelRouterConfig {
 router.forSubAgent(): LLMProvider
 router.forReflection(): LLMProvider
 router.forLightweight(): LLMProvider
-router.forPrecipitation(): LLMProvider
 router.forMemory(): LLMProvider
 router.forVerification(): LLMProvider
 ```

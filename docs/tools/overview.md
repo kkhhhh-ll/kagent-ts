@@ -12,8 +12,6 @@ ToolRegistry (注册中心)
   ├── ToolValidator   → JSON Schema 验证
   └── ToolOutputTruncator → 输出截断
   ↓
-ToolErrorTracker (错误追踪)
-  ↓
 BUILTIN_TOOLS (15 个内置工具)
 ```
 
@@ -43,7 +41,7 @@ interface Tool {
 }
 ```
 
-> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串），不是 `ToolResult`。`ToolRegistry.execute()` 会在执行前后添加熔断保护、参数验证和错误追踪，并将结果包装为 `ToolResult`。
+> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串），不是 `ToolResult`。`ToolRegistry.execute()` 会在执行前后添加熔断保护和参数验证，并将结果包装为 `ToolResult`。
 
 ## ToolResult
 

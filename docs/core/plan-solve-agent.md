@@ -91,11 +91,6 @@ interface PlanSolveAgentConfig extends AgentConfig {
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
-
-  /** 技能沉淀模式 (默认: "off") */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
-  precipitationMaxIterations?: number
 }
 ```
 

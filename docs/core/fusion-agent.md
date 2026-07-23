@@ -35,20 +35,6 @@ Final Answer
 [MEMORY] (可选，post-hoc):
   ├── MemoryReflector 提取长期记忆
   └── 写入 MemoryManager (.k-memory/)
-  ↓
-[PRECIPITATE] (可选，post-hoc):
-  ├── PrecipitateAgent 提取可复用技能
-  ├── 写入 SKILL.md 文件
-  └── 对比已有 Skills 去重
-  ↓
-[MEMORY] (可选，post-hoc):
-  ├── MemoryReflector 提取长期记忆
-  └── 写入 MemoryManager (.k-memory/)
-  ↓
-[PRECIPITATE] (可选，post-hoc):
-  ├── PrecipitateAgent 提取可复用技能
-  ├── 写入 SKILL.md 文件
-  └── 对比已有 Skills 去重
 ```
 
 ## 基本用法
@@ -73,10 +59,7 @@ const agent = new FusionAgent({
   // onPlanConfirm: async (plan, reason) => { return true },
 
   // ── Post-hoc 子系统 ──
-  // ── 沉淀配置 ──
   skillsDir: './skills',               // 技能存储目录
-  precipitation: 'post-hoc',           // "off" | "post-hoc"
-  precipitationMaxIterations: 5,       // (默认: 5)
 })
 ```
 
@@ -108,9 +91,6 @@ interface FusionAgentConfig extends AgentConfig {
   maxPlanSteps?: number                 // (默认: 12)
   replanThreshold?: number              // (默认: 2，设为 0 禁用)
 
-  // ── 沉淀配置 ──
-  precipitation?: 'off' | 'post-hoc'
-  precipitationMaxIterations?: number   // (默认: 15)
 }
 ```
 
@@ -160,18 +140,6 @@ memoryReflection: 'post-hoc'  // 开启
 
 Fork 一个 `MemoryReflector` 从会话中提取长期记忆（规则、项目事实、用户偏好），写入 `.k-memory/` 目录。
 
-### 技能沉淀
-
-```ts
-precipitation: 'post-hoc'  // 开启
-```
-
-触发条件：
-- `"post-hoc"` 模式：每次成功完成都触发
-- 踩坑后成功（`consecutiveFailures >= 2`）：框架自动检测
-- 用户说"记住"：输入关键词匹配
-
-详见 [Precipitation 沉淀](/advanced/precipitation)。
 ## 计划确认
 
 通过 `planConfirmation` 和 `onPlanConfirm` 实现人机协作：

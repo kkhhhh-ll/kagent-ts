@@ -34,7 +34,7 @@ features:
     details: 多层 Prompt Injection 防御体系：系统提示引导 + 边界标记包裹 + 签名模式扫描 + 名称字段检测。
   - icon: 📦
     title: 渐进式 Skill 系统
-    details: 基于 SKILL.md 文件的渐进式技能加载，Lazy-loading 按需激活。执行后自动沉淀可复用技能（Precipitation），让 Agent 越用越聪明。
+    details: 基于 SKILL.md 文件的渐进式技能加载，Lazy-loading 按需激活。技能由用户手动创建为 SKILL.md 文件。
   - icon: 🌐
     title: MCP 协议支持
     details: 支持 Model Context Protocol，可连接外部 MCP Server（stdio/SSE），自动发现工具并注册到 Tool Registry。
@@ -102,7 +102,6 @@ kagent-ts
 │   ├── tool-validator.ts         # JSON Schema 参数验证
 │   ├── tool-output-truncator.ts  # 大输出裁剪到磁盘
 │   ├── tool-filter.ts            # 子代理工具权限过滤
-│   ├── error-tracker.ts          # 工具错误追踪
 │   └── builtin/            # 15 个内置工具（bash, read_file, write_file, edit_file,
 │                            #   grep_search, glob_search, web_fetch, skill,
 │                            #   spawn_subagent, remember, recall）
@@ -127,7 +126,6 @@ kagent-ts
 │   ├── cross-encoder-reranker.ts  # Cross-Encoder 重排序（默认）
 │   └── rag-types.ts           # 类型定义
 ├── reflection/     # 记忆提取 (MemoryReflector)
-├── precipitation/  # 技能沉淀 (提取可复用 Skills)
 ├── security/       # Prompt Injection 防御（边界标记 + 注入签名扫描）
 ├── git/            # Git Worktree 隔离（子代理并行执行文件隔离）
 ├── memory/         # 长期记忆 (MEMORY.md)

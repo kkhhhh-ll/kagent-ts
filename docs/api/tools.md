@@ -13,7 +13,7 @@ interface Tool {
 }
 ```
 
-> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串）。`ToolRegistry.execute()` 会将其包装为 `ToolResult` 对象，并附加熔断保护和错误追踪。
+> **注意**：`execute()` 返回 `Promise<string>`（纯文本字符串）。`ToolRegistry.execute()` 会将其包装为 `ToolResult` 对象，并附加熔断保护。
 
 ---
 
@@ -81,7 +81,6 @@ class ToolRegistry {
   get toolNames(): string[]
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>
   filter(filter: ToolFilter): ToolRegistry
-  getErrorTracker(): ToolErrorTracker
   getBreakerStatus(name: string): BreakerStatus
   getAllBreakerStatuses(): BreakerStatus[]
   resetBreaker(name: string): void
@@ -169,70 +168,6 @@ class ToolOutputTruncator {
 
 ---
 
-## ToolErrorTracker
-
-会话内的工具失败链追踪（纯内存，无持久化）。错误信息通过工具输出的 `[RETRYABLE:*]` / `[FATAL:*]` 标签直接返回给 LLM。
-
-> **注意**：跨会话的错误学习和规则注入请使用 [Memory 记忆](/advanced/memory) 系统。
-
-```ts
-import { ToolErrorTracker, categorizeError } from 'kagent-ts'
-
-const tracker = new ToolErrorTracker()
-
-class ToolErrorTracker {
-  constructor()
-  recordFailure(toolName: string, args: object, error: string, retriesRemaining: number, breakerState?: string): string
-  recordRecovery(toolName: string, traceId: string, resolution?: string): void
-  recordAnalysis(traceId: string, analysis: string): void
-  getActiveTraceId(toolName: string): string   getActiveTraces(): Array<{ toolName: string; traceId: string }>
-  getAllSummaries(): ErrorTraceSummary[]
-  generateMarkdownReport(): string
-  clear(): void
-}
-```
-
----
-
-## Error Trace 类型
-
-```ts
-interface TraceEvent {
-  type: "failure" | "recovery" | "analysis"
-  timestamp: string
-  error?: string
-  attemptNumber?: number
-  retriesRemaining?: number
-  analysis?: string
-  resolution?: string
-  arguments?: Record<string, unknown>
-}
-
-interface ToolErrorTrace {
-  traceId: string
-  toolName: string
-  sessionId?: string
-  createdAt: string
-  updatedAt: string
-  resolved: boolean
-  originalArguments: Record<string, unknown>
-  events: TraceEvent[]
-  resolution?: string
-}
-
-interface ErrorTraceSummary {
-  traceId: string
-  toolName: string
-  createdAt: string
-  resolved: boolean
-  errorCount: number
-  firstError: string
-  resolution?: string
-}
-```
-
----
-
 ## 内置工具
 
 ```ts
@@ -251,7 +186,6 @@ import {
   createRememberTool,
   createRecallTool,
   createSpawnSubagentTool,
-  createListErrorsTool,
 } from 'kagent-ts'
 ```
 

@@ -25,10 +25,6 @@ const router = new ModelRouter({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
   }),
-  precipitation: new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    model: 'gpt-4o-mini',
-  }),
 
   verification: new AnthropicProvider({
     apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -49,7 +45,6 @@ const router = new ModelRouter({
 | `subAgent` | 子代理 | `main` |
 | `reflection` | 反思 | `main` |
 | `memory` | 记忆提取 | `main` |
-| `precipitation` | 技能沉淀 | `main` |
 | `verification` | 答案验证 | `main` |
 | `lightweight` | 轻量任务 | `main` |
 
@@ -67,9 +62,6 @@ interface ModelRouterConfig {
 
   /** 记忆提取专用模型（默认: main） */
   memory?: LLMProvider
-
-  /** Skill 沉淀专用模型（默认: main） */
-  precipitation?: LLMProvider
 
   /** 答案验证专用模型（默认: main） */
 
@@ -91,9 +83,6 @@ const subProvider = router.forSubAgent()
 
 // 获取记忆提取专用的 Provider
 const memoryProvider = router.forMemory()
-
-// 获取 Skill 沉淀专用的 Provider
-const precipitationProvider = router.forPrecipitation()
 
 // 获取轻量任务专用的 Provider
 const lightProvider = router.forLightweight()
@@ -121,20 +110,14 @@ const router = new ModelRouter({
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-4o-mini',
   }),
-  precipitation: new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    model: 'gpt-4o-mini',
-  }),
 })
 
 const agent = new FusionAgent({
   llm: router,
-  precipitation: "post-hoc",
   // Agent 会自动:
   // - 使用 main 路由执行主循环
   // - 使用 lightweight 路由进行任务复杂度分类（routeLLM）
   // - 使用 subAgent 路由运行子代理
-  // - 使用 precipitation 路由进行 Skill 沉淀
 })
 ```
 
@@ -145,7 +128,6 @@ const agent = new FusionAgent({
 | 主循环 | `main` | 必填，直接使用 |
 | 子代理 | `forSubAgent()` | 自动检测 ModelRouter |
 | 复杂度分类 | `forLightweight()` | FusionAgent routing: "auto" |
-| 技能沉淀 | `forPrecipitation()` | 自动检测 ModelRouter |
 | 记忆提取 | `forMemory()` | 自动检测 ModelRouter |
 
 ## 与 Reflection / Memory 集成
@@ -201,5 +183,4 @@ const router = new ModelRouter({
 
 - [Token Budget](/llm/token-budget) — 控制会话 Token 消耗
 - [Fallback Provider](/llm/fallback) — 主备自动切换
-- [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能
 - [Sub-Agent 子代理](/advanced/subagents) — 子代理的详细配置

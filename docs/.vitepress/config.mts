@@ -85,7 +85,7 @@ export default defineConfig({
             { text: '会话持久化', link: '/advanced/session' },
             { text: '上下文管理', link: '/advanced/context-compression' },
             { text: 'Skill 渐进式技能', link: '/advanced/skills' },
-            { text: 'Skill Precipitation 技能沉淀', link: '/advanced/precipitation' },
+
             { text: 'Sub-Agent 子代理', link: '/advanced/subagents' },
             { text: 'Git Worktree 隔离', link: '/advanced/git' },
             { text: 'MCP 协议', link: '/advanced/mcp' },

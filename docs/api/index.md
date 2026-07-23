@@ -15,7 +15,7 @@ import {
   // Tools
   ToolRegistry, CircuitBreaker, BUILTIN_TOOLS, BUILTIN_TOOL_NAMES,
   toolSuccess, toolError, validateToolArgs,
-  ToolOutputTruncator, ToolErrorTracker, categorizeError,
+  ToolOutputTruncator,
   allowlist, denylist, pattern, all, any, filterTools,
   // Messages
   Message, Role,
@@ -25,8 +25,6 @@ import {
   SessionManager,
   // Skills
   SkillManager, FileSkillLoader, parseFrontmatter,
-  // Precipitation
-  PrecipitateAgent,
   // Intent
   detectSignals, planHasRiskyOps, matchSkills, buildMatchedSkillsPrompt,
   // MCP
@@ -105,7 +103,6 @@ type ReRanker / LLMReRankerConfig / CrossEncoderReRankerConfig
 // 工具系统
 type Tool / ToolResult / ToolErrorCode
 type ToolFilter
-type ToolErrorTrace / TraceEvent / ErrorTraceSummary
 type BreakerState / BreakerStatus / CircuitBreakerConfig
 
 // 意图识别
@@ -116,8 +113,6 @@ type ReflectionFinding
 type 
 type MemoryReflectorConfig / MemoryReflectionInput / ExtractedMemory
 type Memory / MemoryType
-type PrecipitateAgentConfig / PrecipitationInput / SkillCandidate
-
 // 意图识别
 type UserSignals / SkillMatch
 

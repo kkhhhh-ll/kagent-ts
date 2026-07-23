@@ -19,7 +19,7 @@ Agent 框架有三种行为控制方式：
 ```text
 用户输入 → Agent.run()
   ├── detectInputSignals(input)               ← 正则匹配（< 1ms）
-  │     ├── wantsRemember → 强制触发 Precipitation + MemoryReflection
+  │     ├── wantsRemember → 强制触发 MemoryReflection
   │     └── riskLevel     → "none" / "low" / "high"（否定感知）
   │
   ├── matchInputContext(input)                ← BM25 检索 + 记忆检索（< 1.5ms）
@@ -79,29 +79,28 @@ detectSignals("don't delete files. Drop the table.").riskLevel // "high" — 只
 
 | 信号 | 触发的行为 |
 |------|---------|
-| `wantsRemember` | 强制 Precipitation + MemoryReflection |
+| `wantsRemember` | 强制 MemoryReflection |
 | `riskLevel: "high"` | Fusion planConfirmation 自动请求确认 |
 
 ### wantsRemember vs mode 配置
 
-关键设计：用户说"记住"时，**无视** `precipitation` 和 `memoryReflection` 的 mode 配置：
+关键设计：用户说"记住"时，**无视** `memoryReflection` 的 mode 配置：
 
 ```ts
 // 不管 mode 是 "off" 还是 "post-hoc"，用户显式表态就执行
 if (this.inputSignals.wantsRemember) {
-  shouldPrecipitate = true;
   shouldReflectMemory = true;
 }
 ```
 
 | mode | `wantsRemember = true` | `wantsRemember = false` |
 |------|--------|---------------|
-| `"post-hoc"` | 触发两种 | 触发两种 |
-| `"off"` | 触发两种 | 不触发 |
+| `"post-hoc"` | 触发 | 触发 |
+| `"off"` | 触发 | 不触发 |
 
 ### hard-won success（踩坑后成功）
 
-当 Agent 连续失败 ≥ 2 次后最终成功时，框架自动触发 Precipitation（保存来之不易的解决方案）。MemoryReflection 不受此条件触发——记忆提取与工具失败无关。
+MemoryReflection 不受工具失败条件触发——记忆提取仅受配置模式和 wantsRemember 信号控制。
 
 ## Skill 与 Memory BM25 检索
 
@@ -144,7 +143,7 @@ Skill: "test-writer"  keywords: ["测试", "单元测试"]
 ```ts
 // AgentConfig 中已有的配置（控制后续行为）
 {
-  precipitation: "off"   memoryReflection: "off"   skillsDir: "./skills",                  // Skill 扫描目录
+  memoryReflection: "off"   skillsDir: "./skills",                  // Skill 扫描目录
 }
 ```
 
@@ -170,10 +169,7 @@ keywords: ["keyword1", "keyword2", "keyword3"]
 ---
 ```
 
-PrecipitateAgent 自动沉淀时也会生成关键词。
-
 ## 下一步
 
 - [Skills 渐进式技能](/advanced/skills) — Skill 定义、关键词、自动激活
-- [Precipitation 沉淀](/advanced/precipitation) — 自动提取技能并生成关键词
 - [Fusion Agent](/core/fusion-agent) — `planConfirmation` 如何使用 `riskLevel`

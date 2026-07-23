@@ -59,11 +59,6 @@ interface AgentConfig {
   // ── 记忆提取专用 LLM Provider（默认复用 llm）──
   memoryReflectorLLM?: LLMProvider
 
-  // ── Skill 沉淀专用 LLM Provider（默认复用 llm）──
-  precipitationLLM?: LLMProvider
-
-  // ── Skill 沉淀模式 (默认: "off") ──
-  precipitation?: "off" 
   // ── 记忆提取模式 (默认: "off") ──
   memoryReflection?: "off" 
 
@@ -77,13 +72,13 @@ interface AgentConfig {
 
 ### 子系统的 LLM 分配
 
-Reflection、Memory、Precipitation、Verification 四个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
+Reflection、Memory、Verification 三个子系统都可以使用独立模型，不配时默认复用主模型 `llm`：
 
 推荐使用 `ModelRouter` 集中管理所有模型路由，详见 [Model Router](/llm/model-router)。
 
 ## LLM Provider 配置
 
-> **推荐**：使用 `ModelRouter` 为不同任务分配不同模型（主循环 / 子代理 / 反思 / 记忆提取 / 沉淀），详见 [Model Router](/llm/model-router)。
+> **推荐**：使用 `ModelRouter` 为不同任务分配不同模型（主循环 / 子代理 / 反思 / 记忆提取），详见 [Model Router](/llm/model-router)。
 
 ### OpenAI
 

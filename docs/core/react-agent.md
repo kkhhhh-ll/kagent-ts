@@ -34,9 +34,6 @@ Observation (观察): 解析工具返回的结果
 [MEMORY] (可选, post-hoc):
   ├── MemoryReflector Fork — 记忆提取
   └── 持久化 → MemoryManager (.k-memory/)
-  ↓
-[PRECIPITATE] (可选, post-hoc):
-  └── PrecipitateAgent Fork — 技能沉淀
 ```
 
 ## 基本用法
@@ -98,11 +95,6 @@ interface ReActAgentConfig extends AgentConfig {
   memoryReflection?: "off" | "post-hoc"
   /** 记忆提取子 Agent 最大迭代次数 (默认: 5) */
   memoryReflectionMaxIterations?: number
-
-  /** 技能沉淀模式 (默认: "off") */
-  precipitation?: "off" | "post-hoc"
-  /** 沉淀子 Agent 最大迭代次数 (默认: 15) */
-  precipitationMaxIterations?: number
 }
 ```
 

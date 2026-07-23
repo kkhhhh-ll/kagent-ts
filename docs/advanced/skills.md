@@ -197,5 +197,5 @@ await agent.run('怎么部署这个项目？')
 ## 下一步
 
 - [Intent Recognition 意图识别](/advanced/intent) — 信号检测 + Skill 关键词匹配
-- [Precipitation 沉淀](/advanced/precipitation) — 自动提取可复用技能（含关键词）
+
 - [Memory 记忆](/advanced/memory) — 长期记忆管理

@@ -72,13 +72,9 @@ It cannot be used again in this session.
 Please find a completely different approach.
 ```
 
-## 与错误追踪集成
+## 错误标签
 
-Circuit Breaker 与 `ToolErrorTracker` 协同工作：
-
-- 电路 breaker 在每次工具执行过程中自动追踪失败计数和熔断状态
-- `[RETRYABLE:*]` / `[FATAL:*]` 标签会直接返回给 LLM，无需额外查询
-- 跨会话的错误学习由 [Memory 记忆](/advanced/memory) 系统负责。
+Circuit Breaker 通过 `[RETRYABLE:*]` / `[FATAL:*]` 标签直接向 LLM 返回错误信息，无需额外查询。跨会话的错误学习由 [Memory 记忆](/advanced/memory) 系统负责。
 
 ## 完整示例
 
