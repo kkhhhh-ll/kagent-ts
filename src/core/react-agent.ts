@@ -71,6 +71,17 @@ export class ReActAgent extends Agent {
   }
 
   async run(input: string): Promise<string> {
+    // Prevent concurrent runs from corrupting shared state
+    // (_cancelled, _abortController, contextManager, inputSignals, etc.).
+    // The flag is cleared on normal return, cancellation, and reset() —
+    // if the agent throws unexpectedly the caller should call reset().
+    this._acquireRunLock();
+    // Pre-emptively reset cancellation state so a cancelled-then-resumed
+    // session doesn't exit immediately on the first iteration check.
+    // reset() clears _isRunning, so the lock above still guards correctly.
+    this._cancelled = false;
+
+    try {
     // ── Pre-flight: reject oversized input before any setup ───────────
     const sizeError = this.validateInputSize(input);
     if (sizeError) return sizeError;
@@ -267,6 +278,17 @@ export class ReActAgent extends Agent {
       }
       const answer = parsed.answer || rawContent;
 
+      // Empty response — ask the model to try again (single retry, not a counter)
+      if (!answer.trim()) {
+        const retryMsg = Message.user(
+          "Your last response was empty. Please provide a complete answer.",
+        );
+        this.contextManager.addMessage(retryMsg.toDict());
+        this.logger.info("ReAct", "Empty answer — retrying once.");
+        iteration++;
+        continue;
+      }
+
       // If truncated, don't return yet — inject continuation
       if (isTruncated) {
         const continueMsg = Message.user(
@@ -307,11 +329,16 @@ export class ReActAgent extends Agent {
 
       return answer;
     }
+    } finally {
+      this._isRunning = false;
+    }
   }
 
   // ─── Streaming ────────────────────────────────────────────────────────
 
   protected async *executeStream(input: string): AsyncIterable<string> {
+    this._acquireRunLock();
+    try {
     const sizeError = this.validateInputSize(input);
     if (sizeError) {
       yield sizeError;
@@ -593,6 +620,9 @@ export class ReActAgent extends Agent {
 
       yield "\n\n[DONE]";
       return;
+    }
+    } finally {
+      this._isRunning = false;
     }
   }
 

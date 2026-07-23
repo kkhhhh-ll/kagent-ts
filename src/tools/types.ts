@@ -25,6 +25,10 @@ export enum ToolErrorCode {
   APPROVAL_DENIED = "approval_denied",
   /** Arguments failed JSON Schema validation against the tool's parameters. */
   VALIDATION_ERROR = "validation_error",
+  /** MCP server connection lost — further calls to this server may fail. */
+  MCP_CONNECTION_LOST = "mcp_connection_lost",
+  /** Tool execution was skipped — the agent was cancelled mid-batch. */
+  CANCELLED = "cancelled",
 }
 
 /**

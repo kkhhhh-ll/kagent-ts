@@ -12,6 +12,31 @@ import type { MessageData } from "../messages/types";
 import { Role } from "../messages/types";
 
 /**
+ * Filter out assistant messages whose tool_calls haven't been answered yet.
+ *
+ * Context inheritance copies the parent's conversation into the fork, but
+ * if the parent just received an LLM response with tool_calls and hasn't
+ * executed them yet, those unpaired assistant(tool_calls) messages break
+ * the API's tool_call / tool_result pairing requirement.
+ *
+ * This function removes incomplete turns so the fork only sees settled state.
+ */
+export function filterIncompleteTurns(messages: MessageData[]): MessageData[] {
+  const answeredIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === Role.Tool && msg.tool_call_id) {
+      answeredIds.add(msg.tool_call_id);
+    }
+  }
+  return messages.filter((msg) => {
+    if (msg.role === Role.Assistant && msg.tool_calls && msg.tool_calls.length > 0) {
+      return msg.tool_calls.every((tc) => answeredIds.has(tc.id));
+    }
+    return true;
+  });
+}
+
+/**
  * Whitelist of tool names allowed in fork agents.
  *
  * Forks are read-only reviewers — they verify existing information, not
@@ -104,20 +129,34 @@ export async function forkAgent(
   logger.info("ForkAgent", "Starting fork agent...");
 
   // ── Inherit parent context ──────────────────────────────────────────
-  // Pre-populate a ContextManager with the parent agent's messages so the
-  // fork "sees" the full conversation instead of a serialized summary.
-  // System messages are filtered out — the fork has its own system prompt.
-  let contextManager: ContextManager | undefined;
+  // Serialize the parent's conversation into a clean text block so the
+  // fork sees the content without inheriting raw API messages (which can
+  // contain tool_calls / tool result names that break the fork's API calls).
+  let serializedContext = "";
   if (options.contextMessages && options.contextMessages.length > 0) {
-    contextManager = new ContextManager();
-    for (const msg of options.contextMessages) {
-      if (msg.role !== Role.System) {
-        contextManager.addMessage(msg);
+    const filtered = filterIncompleteTurns(options.contextMessages);
+    const lines: string[] = [];
+    for (const msg of filtered) {
+      if (msg.role === Role.System) continue;
+      // Skip tool outputs from tools the fork doesn't have — prevents
+      // the model from hallucinating calls to fork_agent, spawn_subagent, etc.
+      if (msg.role === Role.Tool && msg.name && msg.name !== "read_file" && msg.name !== "grep_search") {
+        continue;
+      }
+      const content = (msg.content ?? "").trim();
+      if (!content) continue;
+      if (msg.role === Role.User) {
+        lines.push(`User: ${content}`);
+      } else if (msg.role === Role.Assistant) {
+        lines.push(`Assistant: ${content}`);
+      } else if (msg.role === Role.Tool) {
+        lines.push(`Tool output: ${content}`);
       }
     }
+    serializedContext = lines.join("\n\n");
     logger.info(
       "ForkAgent",
-      `Inherited ${options.contextMessages.length} context message(s) from parent agent.`,
+      `Serialized ${options.contextMessages.length} context message(s) from parent agent.`,
     );
   }
 
@@ -155,8 +194,7 @@ export async function forkAgent(
     tools.register(GrepSearchTool);
   }
 
-  // Fork label for trace separation — first line or first 40 chars of system prompt
-  const forkLabel = systemPrompt.split("\n")[0].slice(0, 40).trim() || "fork-analysis";
+  const forkLabel = "fork-sync";
   const forkHooks = options.hooks
     ? TraceLogger.wrapHooksForFork(options.hooks, forkLabel)
     : undefined;
@@ -168,7 +206,6 @@ export async function forkAgent(
     name: "fork",
     logger,
     hooks: forkHooks,
-    contextManager,
     // Disable sub-agent discovery explicitly — no falsy string hack.
     disableSubAgents: preventSubAgents,
     // Forks are read-only reviewers — skip `remember`, `recall`, `skill`,
@@ -189,8 +226,17 @@ export async function forkAgent(
   }
 
   try {
-    const result = await agent.run(input);
+    // Prepend serialized parent context as a background block so the fork
+    // sees the full conversation as plain text — no raw API messages that
+    // could break tool-call ordering or hallucinate unavailable tools.
+    const enrichedInput = serializedContext
+      ? `=== Background Context ===\n\nBelow is the conversation history from the parent agent. You may see references to tools (fork_agent, spawn_subagent, etc.) that the parent used, but these are NOT available to you. You only have the tools listed in your system prompt. Focus on the Task at the bottom, not on replicating the parent's tool usage.\n\n${serializedContext}\n\n=== End Background Context ===\n\n---\n\nTask: ${input}`
+      : input;
+    const result = await agent.run(enrichedInput);
     logger.info("ForkAgent", "Fork completed.");
+    if (!result || !result.trim()) {
+      return "Fork agent produced no output. The task may need a smaller scope or a more specific system prompt.";
+    }
     return result;
   } finally {
     // Clean up the listener to avoid leaks on repeated forkAgent calls

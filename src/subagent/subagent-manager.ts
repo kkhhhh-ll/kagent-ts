@@ -563,18 +563,30 @@ export class SubAgentManager {
    * After collecting results, any freed slots are filled from the wait
    * queue (FIFO order).
    *
+   * @param signal Optional AbortSignal — when aborted, the wait is
+   *               short-circuited so the caller can exit promptly
+   *               (e.g. on user cancellation). Already-completed
+   *               results are still returned.
    * @returns Array of completed sub-agent results (empty if none finished).
    */
-  async pollCompleted(): Promise<SubAgentResult[]> {
+  async pollCompleted(signal?: AbortSignal): Promise<SubAgentResult[]> {
     if (this.pending.length === 0 && this.waitQueue.length === 0) return [];
 
     // Block until at least one pending sub-agent completes.
     // This prevents the main agent from spinning the LLM loop while
     // waiting for async sub-agent results — no wasted iterations.
     if (this.pending.length > 0) {
-      await Promise.race(
-        this.pending.map((r) => r.promise),
-      );
+      const racers: Promise<unknown>[] = [...this.pending.map((r) => r.promise)];
+      if (signal) {
+        racers.push(
+          new Promise<"aborted">((resolve) => {
+            if (signal.aborted) { resolve("aborted"); return; }
+            const onAbort = () => resolve("aborted");
+            signal.addEventListener("abort", onAbort, { once: true });
+          }),
+        );
+      }
+      await Promise.race(racers);
       // Quick yield so any other recently-completed runs also surface
       await new Promise((r) => setImmediate(r));
     }
@@ -802,7 +814,7 @@ export class SubAgentManager {
     contextMessages?: import("../messages/types").MessageData[],
     traceKind?: "fork" | "subagent",
   ): Promise<SubAgentResult> {
-    const agent = await this.buildSubAgent(
+    const { agent, contextText } = await this.buildSubAgent(
       definition, options?.workdir, contextMessages, traceKind,
     );
 
@@ -839,7 +851,12 @@ export class SubAgentManager {
       }
     }
 
-    const output = await agent.run(input);
+    // Enrich the input with serialized parent context so the sub-agent
+    // sees the full conversation as plain text — no raw API messages.
+    const enrichedInput = contextText
+      ? `=== Background Context ===\n\nBelow is the conversation history from the parent agent. You may see references to tools (fork_agent, spawn_subagent, etc.) that the parent used, but these are NOT available to you. You only have the tools listed in your system prompt. Focus on the Task at the bottom, not on replicating the parent's tool usage.\n\n${contextText}\n\n=== End Background Context ===\n\n---\n\nTask: ${input}`
+      : input;
+    const output = await agent.run(enrichedInput);
     const durationMs = Date.now() - startedAt;
     return {
       subAgentId: runId,
@@ -866,7 +883,7 @@ export class SubAgentManager {
     workdir?: string,
     contextMessages?: import("../messages/types").MessageData[],
     traceKind?: "fork" | "subagent",
-  ): Promise<ReActAgent> {
+  ): Promise<{ agent: ReActAgent; contextText: string }> {
     // Look up declared tools from the main agent's registry.
     // Supports wildcard patterns (e.g. "filesystem_*" matches all tools
     // from the "filesystem" MCP server). Uses a Map for deduplication.
@@ -959,7 +976,7 @@ export class SubAgentManager {
     workdir?: string,
     contextMessages?: import("../messages/types").MessageData[],
     traceKind?: "fork" | "subagent",
-  ): Promise<ReActAgent> {
+  ): Promise<{ agent: ReActAgent; contextText: string }> {
 
     // Build a dedicated SkillManager with declared skills pre-activated.
     // Use registerFromDirectory when skillsDir is available so lazy-loading
@@ -986,19 +1003,36 @@ export class SubAgentManager {
     // subAgentLLM (from AgentConfig) takes priority over the main model.
     const effectiveLLM = this.subAgentLLM ?? this.llmProvider!;
 
-    // Context inheritance: when contextMessages are provided (ad-hoc runs),
-    // pre-populate a ContextManager so the sub-agent sees the parent's
-    // conversation history. System messages are filtered out — the sub-agent
-    // has its own system prompt.
-    let contextManager: import("../context/context-manager").ContextManager | undefined;
+    // Context inheritance: serialize parent conversation to plain text so
+    // the sub-agent sees the content without inheriting raw API messages
+    // (which can break tool-call ordering or hallucinate unavailable tools).
+    let contextText = "";
     if (contextMessages && contextMessages.length > 0) {
-      const { ContextManager } = await import("../context/context-manager.js");
-      contextManager = new ContextManager();
+      const answeredIds = new Set<string>();
       for (const msg of contextMessages) {
-        if (msg.role !== "system") {
-          contextManager.addMessage(msg);
-        }
+        if (msg.role === "tool" && msg.tool_call_id) answeredIds.add(msg.tool_call_id);
       }
+      const filtered = contextMessages.filter((msg) => {
+        if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+          return msg.tool_calls.every((tc: { id: string }) => answeredIds.has(tc.id));
+        }
+        return true;
+      });
+      const lines: string[] = [];
+      for (const msg of filtered) {
+        if (msg.role === "system") continue;
+        // Skip tool outputs from tools the fork doesn't have — prevents
+        // the model from hallucinating calls to fork_agent, spawn_subagent, etc.
+        if (msg.role === "tool" && msg.name && msg.name !== "read_file" && msg.name !== "grep_search") {
+          continue;
+        }
+        const content = (msg.content ?? "").trim();
+        if (!content) continue;
+        if (msg.role === "user") lines.push(`User: ${content}`);
+        else if (msg.role === "assistant") lines.push(`Assistant: ${content}`);
+        else if (msg.role === "tool") lines.push(`Tool output: ${content}`);
+      }
+      contextText = lines.join("\n\n");
     }
 
     // Trace separation: wrap hooks for fork-kind runs so they appear in
@@ -1020,14 +1054,13 @@ export class SubAgentManager {
     // Dynamic import to break CJS circular dependency:
     // agent.ts → subagent-manager.ts → react-agent.ts → agent.ts
     const { ReActAgent: ReActAgentCtor } = await import("../core/react-agent.js");
-    return new ReActAgentCtor({
+    const agent = new ReActAgentCtor({
       llm: effectiveLLM,
       systemPrompt,
       toolRegistry,
       skillManager,
       name: definition.name,
       hooks,
-      contextManager,
       // Prevent infinite recursion: sub-agents should NOT auto-register
       // sub-agents from the project directory.
       // "" explicitly disables the default (undefined would be overridden
@@ -1043,6 +1076,7 @@ export class SubAgentManager {
       // write_file don't get auto-denied in sub-agents.
       onToolApproval: this.onToolApproval,
     });
+    return { agent, contextText };
   }
 
   /**

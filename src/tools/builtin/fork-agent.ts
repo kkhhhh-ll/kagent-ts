@@ -66,7 +66,7 @@ export function createForkAgentTool(
       if (wantAsync && subAgentManager) {
         try {
           const runId = subAgentManager.spawnAdHoc({
-            label: systemPrompt.slice(0, 40).replace(/\n/g, " ").trim() || "fork",
+            label: "fork-async",
             systemPrompt,
             task,
             tools: ["read_file", "grep_search"],

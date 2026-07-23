@@ -148,7 +148,11 @@ export class ToolRegistry {
    * - `EXECUTION_FAILURE`  — tool threw an exception; retries may remain.
    * - `TRUNCATED_OUTPUT`   — tool output was truncated.
    */
-  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       return toolError(

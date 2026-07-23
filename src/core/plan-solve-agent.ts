@@ -458,7 +458,12 @@ export class PlanSolveAgent extends Agent {
         continue;
       }
 
-
+      // ── Empty response — ask model to try again (once) ────────────
+      const retryMsg = Message.user(
+        "Your last response was empty. Please provide a complete answer.",
+      );
+      this.contextManager.addMessage(retryMsg.toDict());
+      this.logger.info("Plan-Solve", "Empty response — retrying once.");
     }
   }
 
@@ -849,6 +854,13 @@ export class PlanSolveAgent extends Agent {
         iteration++;
         continue;
       }
+
+      // ── Empty response — ask model to try again (once) ────────────
+      this.contextManager.addMessage(
+        Message.user("Your last response was empty. Please provide a complete answer.").toDict(),
+      );
+      this.logger.info("Plan-Solve", "Empty response — retrying once.");
+      iteration++;
     }
     // while(true) — all exits are explicit returns inside the loop body
   }

@@ -312,9 +312,13 @@ export class McpClientManager {
       parameters: (mcpTool.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>,
 
       execute: async (args: Record<string, unknown>): Promise<string> => {
-        // Check connection is still alive
+        // Check connection is still alive — throw so the ToolRegistry
+        // records a proper failure (errorCode = EXECUTION_FAILURE) instead
+        // of treating this as a successful tool result.
         if (!this.connections.has(serverName)) {
-          return `Error: MCP server "${serverName}" is no longer connected. Tool "${prefixedName}" is unavailable.`;
+          throw new McpConnectionError(
+            `MCP server "${serverName}" is no longer connected. Tool "${prefixedName}" is unavailable.`,
+          );
         }
 
         try {
@@ -350,7 +354,20 @@ export class McpClientManager {
           }
           return output;
         } catch (err: unknown) {
+          // Re-throw McpConnectionError as-is so callers can detect it
+          if (err instanceof McpConnectionError) throw err;
+
           const message = err instanceof Error ? err.message : String(err);
+
+          // Detect transport-level failures (connection drops mid-call)
+          // and throw so the ToolRegistry records a proper failure.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code && /^(ECONNREFUSED|ENOTFOUND|ECONNRESET|EPIPE|ETIMEDOUT)$/.test(code)) {
+            throw new McpConnectionError(
+              `MCP server "${serverName}" connection lost: ${code} — ${message}`,
+            );
+          }
+
           return `Error executing MCP tool "${serverName}/${mcpTool.name}": ${message}`;
         }
       },

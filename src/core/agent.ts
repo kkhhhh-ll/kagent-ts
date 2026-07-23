@@ -372,8 +372,19 @@ export abstract class Agent {
   /** Whether the current run has been cancelled by the user. */
   protected _cancelled = false;
 
+  /**
+   * Running lock — prevents concurrent run() / chat() calls from
+   * corrupting shared mutable state (_cancelled, _abortController,
+   * contextManager, inputSignals, etc.). Set at the start of run() and
+   * cleared in a finally block by subclasses.
+   */
+  protected _isRunning = false;
+
   /** Controller for aborting in-flight LLM requests on cancellation. */
   protected _abortController?: AbortController;
+
+  /** Controller for aborting in-flight tool execution on cancellation. */
+  protected _toolAbortController?: AbortController;
 
   // ─── MCP (Model Context Protocol) ─────────────────────────────────────
 
@@ -383,8 +394,23 @@ export abstract class Agent {
   /** MCP client manager for dynamic tool discovery (lazily initialized). */
   protected mcpClientManager?: McpClientManager;
 
-  /** Guards async init() from running more than once per instance. */
-  private _mcpInitialized = false;
+  /**
+   * Cached initialization promise — guards async init() from running more
+   * than once per instance and prevents TOCTOU races. Concurrent callers
+   * await the same promise instead of one caller proceeding before the
+   * other's async work finishes.
+   */
+  private _initPromise: Promise<void> | null = null;
+
+  /**
+   * Monotonically increasing generation counter for init() lifecycle.
+   *
+   * Incremented by reset() to invalidate any in-flight init.  _doInit()
+   * captures the generation at entry and discards its results if the
+   * counter moved before the async work finishes — preventing a stale
+   * init from overwriting the state that reset() just cleared.
+   */
+  private _initGeneration = 0;
 
   // ─── RAG ────────────────────────────────────────────────────────────────
 
@@ -1199,7 +1225,24 @@ export abstract class Agent {
       executable.length > 1;
 
     // ── Step 4: Execute ────────────────────────────────────────────────
-    if (shouldParallelize) {
+    // Short-circuit: if the agent was cancelled during approval, skip
+    // execution entirely — the loop will detect isCancelled on the next
+    // iteration and exit cleanly.
+    if (this._cancelled) {
+      for (const slot of executable) {
+        slot.result = toolError(
+          ToolErrorCode.CANCELLED,
+          `[FATAL:CANCELLED] Tool "${slot.toolCall.function.name}" skipped — agent cancelled.`,
+          "fatal",
+        );
+      }
+      // Fall through to Step 5 so context gets the cancellation markers.
+    } else if (shouldParallelize) {
+      // Create a fresh AbortController for this batch so cancel() can
+      // interrupt in-flight tool execution (tools that honour the signal
+      // can short-circuit long-running work).
+      this._toolAbortController = new AbortController();
+      const toolSignal = this._toolAbortController.signal;
       // Log and fire hooks before concurrent execution
       for (const slot of executable) {
         this.logger.info("Action", slot.toolCall.function.name);
@@ -1215,34 +1258,71 @@ export abstract class Agent {
       // Each task fires its own onToolEnd / onToolError hooks so the
       // TraceLogger (and other hook consumers) see events in actual
       // completion order rather than array order.
+      //
+      // Wrapped in try/catch: if toolRegistry.execute() ever rejects
+      // (returns a rejected Promise instead of a resolved ToolResult),
+      // the catch block converts it into a proper ToolResult so
+      // slot.result is never left undefined (which would crash at the
+      // non-null assertion in Step 5).
       await Promise.allSettled(
         executable.map(async (slot) => {
-          const result = await this.toolRegistry.execute(
-            slot.toolCall.function.name,
-            slot.args,
-          );
-          slot.result = result;
+          try {
+            const result = await this.toolRegistry.execute(
+              slot.toolCall.function.name,
+              slot.args,
+              toolSignal,
+            );
+            slot.result = result;
 
-          if (result.success) {
-            for (const h of this.hooks)
-              h.onToolEnd?.(
-                slot.toolCall.function.name,
-                result.content,
-                slot.toolCall.id,
-              );
-          } else {
+            if (result.success) {
+              for (const h of this.hooks)
+                h.onToolEnd?.(
+                  slot.toolCall.function.name,
+                  result.content,
+                  slot.toolCall.id,
+                );
+            } else {
+              for (const h of this.hooks)
+                h.onToolError?.(
+                  slot.toolCall.function.name,
+                  result.content,
+                  slot.toolCall.id,
+                );
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            slot.result = toolError(
+              ToolErrorCode.EXECUTION_FAILURE,
+              `[FATAL:EXECUTION_FAILURE] Tool "${slot.toolCall.function.name}" threw an unexpected error: ${message}`,
+              "fatal",
+            );
             for (const h of this.hooks)
               h.onToolError?.(
                 slot.toolCall.function.name,
-                result.content,
+                slot.result.content,
                 slot.toolCall.id,
               );
           }
         }),
       );
+      this._toolAbortController = undefined;
     } else {
       // Serial path (legacy behaviour or forced by sequential tools)
+      this._toolAbortController = new AbortController();
+      const toolSignal = this._toolAbortController.signal;
+
       for (const slot of executable) {
+        // Short-circuit between serial tool executions: if the agent was
+        // cancelled while the previous tool was running, skip the rest.
+        if (this._cancelled) {
+          slot.result = toolError(
+            ToolErrorCode.CANCELLED,
+            `[FATAL:CANCELLED] Tool "${slot.toolCall.function.name}" skipped — agent cancelled.`,
+            "fatal",
+          );
+          continue;
+        }
+
         this.logger.info("Action", slot.toolCall.function.name);
         for (const h of this.hooks)
           h.onToolStart?.(
@@ -1251,10 +1331,30 @@ export abstract class Agent {
             slot.toolCall.id,
           );
 
-        slot.result = await this.toolRegistry.execute(
-          slot.toolCall.function.name,
-          slot.args,
-        );
+        try {
+          slot.result = await this.toolRegistry.execute(
+            slot.toolCall.function.name,
+            slot.args,
+            toolSignal,
+          );
+        } catch (err: unknown) {
+          // Unexpected rejection — convert to ToolResult and fire hooks
+          // directly (same pattern as the parallel path).  continue skips
+          // the unified if/else below so hooks don't fire twice.
+          const message = err instanceof Error ? err.message : String(err);
+          slot.result = toolError(
+            ToolErrorCode.EXECUTION_FAILURE,
+            `[FATAL:EXECUTION_FAILURE] Tool "${slot.toolCall.function.name}" threw an unexpected error: ${message}`,
+            "fatal",
+          );
+          for (const h of this.hooks)
+            h.onToolError?.(
+              slot.toolCall.function.name,
+              slot.result.content,
+              slot.toolCall.id,
+            );
+          continue;
+        }
 
         if (slot.result.success) {
           for (const h of this.hooks)
@@ -1272,6 +1372,7 @@ export abstract class Agent {
             );
         }
       }
+      this._toolAbortController = undefined;
     }
 
     // ── Step 5: Inject results into context & post-process ─────────────
@@ -1280,6 +1381,13 @@ export abstract class Agent {
     for (const slot of slots) {
       const result = slot.result!;
       const toolName = slot.toolCall.function.name;
+
+      // Skip context injection for tools skipped due to cancellation —
+      // their error markers add no value and would persist in saved sessions.
+      if (result.errorCode === ToolErrorCode.CANCELLED) {
+        hadFailure = true;
+        continue;
+      }
 
       const toolMessage = Message.tool(
         wrapAndScan(`tool:${toolName}`, result.content),
@@ -1299,15 +1407,21 @@ export abstract class Agent {
         || slot.toolCall.function.name === "fork_agent";
       if (result.success && isSpawnCall) {
         hadSpawnCalls = true;
+        const spawnedLabel = slot.toolCall.function.name === "fork_agent"
+          ? "async-fork"
+          : slot.args.name ?? "unknown";
         this.logger.info(
           "SubAgent",
-          `Spawned "${slot.args.name ?? "unknown"}" — ` +
+          `Spawned "${spawnedLabel}" — ` +
             `result will arrive in a later iteration.`,
         );
       }
 
       // MCP tool failure — warn about potential connection loss.
       // Only warn once per server per batch to avoid duplicate messages.
+      // Uses `errorCode` as the primary signal (structured, reliable);
+      // narrow system-error-code matching as a fallback for tools that
+      // throw transport-level errors.
       if (
         !result.success &&
         !BUILTIN_TOOL_NAMES.has(slot.toolCall.function.name)
@@ -1316,10 +1430,11 @@ export abstract class Agent {
           slot.toolCall.function.name.split("_")[0] ?? "unknown";
         if (!mcpWarnedServers.has(serverName)) {
           const isConnErr =
-            result.content.includes("connection") ||
-            result.content.includes("not connected") ||
-            result.content.includes("ECONNREFUSED") ||
-            result.content.includes("ENOTFOUND");
+            result.errorCode === ToolErrorCode.EXECUTION_FAILURE &&
+            (result.content.includes("McpConnectionError") ||
+              /\b(ECONNREFUSED|ENOTFOUND|ECONNRESET|EPIPE|ETIMEDOUT)\b/.test(
+                result.content,
+              ));
           if (isConnErr) {
             mcpWarnedServers.add(serverName);
             this.logger.info(
@@ -1374,8 +1489,15 @@ export abstract class Agent {
     // Abort the in-flight LLM request first so the agent doesn't keep
     // waiting for a response that's about to be discarded anyway.
     this._abortController?.abort();
+    // Propagate to tool execution — tools that honour the signal can
+    // short-circuit long-running work (bash commands, MCP calls, etc.).
+    this._toolAbortController?.abort();
     this._cancelled = true;
     this.subAgentManager?.cancelAll();
+    // Note: _isRunning is NOT cleared here. The run() finally block
+    // handles it. Clearing it here would create a race where a new
+    // run() acquires the lock before the old finally fires, and the
+    // old finally overwrites _isRunning = false.
   }
 
   /**
@@ -1559,7 +1681,13 @@ export abstract class Agent {
   /** Reset agent to initial state — clears history, session, and runtime state. */
   reset(): void {
     this._abortController?.abort();
+    this._toolAbortController?.abort();
     this._cancelled = false;
+    this._isRunning = false;
+    // Bump the generation so any in-flight _doInit() discards its results
+    // instead of writing stale state after we've cleared everything.
+    this._initGeneration++;
+    this._initPromise = null;
     this.contextManager.clear();
     this.coreSystemPrompt = "";
     this.tokenBudget?.reset();
@@ -1574,6 +1702,23 @@ export abstract class Agent {
     return "react";
   }
 
+  /**
+   * Acquire the run lock — throws if the agent is already executing.
+   *
+   * Call at the top of run() (before any async work) so that
+   * concurrent callers get a clear error instead of silently
+   * corrupting shared mutable state.
+   */
+  protected _acquireRunLock(): void {
+    if (this._isRunning) {
+      throw new Error(
+        "Agent is already running. Wait for the current run to complete, " +
+        "or call cancel() / reset() to interrupt it before starting a new one.",
+      );
+    }
+    this._isRunning = true;
+  }
+
   // ─── MCP / Async Initialization ─────────────────────────────────────────
 
   /**
@@ -1581,9 +1726,51 @@ export abstract class Agent {
    * and auto-registered tools. Idempotent — safe to call multiple times.
    */
   protected async init(): Promise<void> {
-    if (this._mcpInitialized) return;
-    this._mcpInitialized = true;
+    // Promise-based dedup: concurrent callers await the same initialization
+    // instead of one proceeding while the other's async work is still in flight.
+    if (this._initPromise) return this._initPromise;
 
+    const gen = this._initGeneration;
+    this._initPromise = this._doInit(gen);
+    try {
+      await this._initPromise;
+      // If reset() was called during init, _doInit() may have succeeded
+      // but its results should not persist — the generation mismatch
+      // signals that reset() already cleared the agent's state.
+      // _doInit() handles its own cleanup on mismatch; we just clear the
+      // cached promise here so the next caller retries from scratch.
+      if (this._initGeneration !== gen) {
+        this._initPromise = null;
+      }
+    } catch (_err: unknown) {
+      // On failure, tear down any partially-established resources before
+      // clearing the cached promise. Without this, retrying init() would
+      // create duplicate MCP connections (old ones leak) and re-register
+      // sub-agents from an already-scanned directory.
+      this.logger.warn(
+        "Init",
+        `Initialization failed — cleaning up partial state: ${_err instanceof Error ? _err.message : String(_err)}`,
+      );
+      await this.mcpClientManager?.disconnectAll().catch(() => {});
+      this.mcpClientManager = undefined;
+      this.subAgentManager = undefined;
+      this.ragManager = undefined;
+      this._initPromise = null;
+      throw _err;
+    }
+  }
+
+  /**
+   * Actual initialization body. Kept separate so init() can wrap it with
+   * Promise-based dedup and retry-on-failure semantics.
+   *
+   * @param gen The init generation captured at entry.  After all async
+   *            work completes, this is compared against the live
+   *            {@link _initGeneration}.  A mismatch means reset() was
+   *            called mid-init — results are discarded so stale state
+   *            doesn't overwrite the freshly-cleared agent.
+   */
+  private async _doInit(gen: number): Promise<void> {
     this.logger.info("Init", "Starting agent initialization...");
 
     // ── Kick off parallel subsystem initialization ───────────────────
@@ -1604,6 +1791,26 @@ export abstract class Agent {
 
     if (tasks.length > 0) {
       await Promise.all(tasks);
+    }
+
+    // ── Guard: reset() superseded this init ───────────────────────────
+    // All async work above writes to `this.mcpClientManager`,
+    // `this.subAgentManager`, etc.  If reset() was called mid-flight,
+    // those fields point to connections / state that the caller already
+    // decided to discard.  Tear them down and bail out so the next
+    // run() re-initializes from scratch.
+    if (this._initGeneration !== gen) {
+      this.logger.info(
+        "Init",
+        "Init superseded by reset() — discarding results and cleaning up.",
+      );
+      await this.mcpClientManager?.disconnectAll().catch(() => {});
+      this.mcpClientManager = undefined;
+      // subAgentManager has no async cleanup; its spawned agents are
+      // already aborted by reset() → cancel() → cancelAll().
+      this.subAgentManager = undefined;
+      this.ragManager = undefined;
+      return;
     }
 
     // ── Fast tool registration (independent of I/O-heavy subsystems) ──
@@ -1671,12 +1878,22 @@ export abstract class Agent {
     this.safeRegister(createListKnowledgeDocumentsTool(this.ragManager));
   }
 
-  /** Register a tool, silently keeping the existing one on name collision. */
+  /**
+   * Register a tool, silently keeping the existing one on name collision.
+   *
+   * Only swallows the expected duplicate-registration error. Programming
+   * errors (TypeError, etc.) propagate — silent catch-all would mask bugs
+   * in tool constructors.
+   */
   private safeRegister(tool: Tool): void {
     try {
       this.toolRegistry.register(tool);
-    } catch {
-      this.logger.debug("Init", `"${tool.name}" already registered — keeping existing.`);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("already registered")) {
+        this.logger.debug("Init", `"${tool.name}" already registered — keeping existing.`);
+        return;
+      }
+      throw err;
     }
   }
 
@@ -1689,7 +1906,22 @@ export abstract class Agent {
     this.subAgentManager?.cancelAll();
     await this.subAgentManager?.awaitAll();
 
-    await this.mcpClientManager?.disconnectAll();
+    // Disconnect MCP with a deadline — stuck transports shouldn't
+    // hang the process on exit.  After the timeout we move on;
+    // the OS cleans up sockets when the process terminates.
+    const MCP_DISCONNECT_TIMEOUT_MS = 10_000;
+    const disconnectResult = await Promise.race([
+      this.mcpClientManager?.disconnectAll().then(() => "ok" as const),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), MCP_DISCONNECT_TIMEOUT_MS),
+      ),
+    ]);
+    if (disconnectResult === "timeout") {
+      this.logger.warn(
+        "Shutdown",
+        `MCP disconnect timed out after ${MCP_DISCONNECT_TIMEOUT_MS / 1000}s — forcing exit.`,
+      );
+    }
   }
 
   // ─── Sub-Agent ────────────────────────────────────────────────────────
@@ -1783,7 +2015,7 @@ export abstract class Agent {
   /** Poll for completed sub-agent results (call at start of each iteration). */
   protected async pollSubAgentResults(): Promise<SubAgentResult[]> {
     if (!this.subAgentManager) return [];
-    return this.subAgentManager.pollCompleted();
+    return this.subAgentManager.pollCompleted(this._abortController?.signal);
   }
 
   /**
