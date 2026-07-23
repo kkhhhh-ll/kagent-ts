@@ -8,17 +8,13 @@ import {
   parseFusionRouteResponse,
   parseFusionResponse,
 } from "./response-schema";
-import {
-  SECURITY_GUIDANCE,
-  TOOL_ERROR_RECOVERY,
-} from "./system-prompts";
+import { SECURITY_GUIDANCE, TOOL_ERROR_RECOVERY } from "./system-prompts";
 import { LLMNetworkError } from "../llm/errors";
 import { LLMResponse, LLMResponseErrorCode } from "../llm/interface";
 import { wrapAndScan } from "../security/boundaries";
 import { StreamingAnswerExtractor } from "./streaming-answer-extractor";
 import { SessionState, SessionStatus } from "../session/session-types";
 import type { FusionSessionState } from "../session/session-types";
-
 
 // ─── System Prompt ────────────────────────────────────────────────────────
 
@@ -36,9 +32,6 @@ ${TOOL_ERROR_RECOVERY}${FUSION_EXECUTION_INSTRUCTIONS}`;
 
 /**
  * Callback for plan confirmation.
- *
- * Called after a plan is generated. Return `true` to proceed with execution,
- * `false` to abort and return the plan as the answer.
  */
 export type PlanConfirmCallback = (
   plan: string[],
@@ -49,79 +42,13 @@ export type PlanConfirmCallback = (
 
 /**
  * Configuration for the Fusion Agent.
- *
- * Combines routing, plan confirmation, reflection, and loop control options
- * into a single configurable agent.
  */
 export interface FusionAgentConfig extends AgentConfig {
-  // ── Routing ─────────────────────────────────────────────────────────
-
-  /**
-   * How to determine the execution strategy:
-   * - "auto":        LLM classifies task complexity (one extra LLM call).
-   * - "force-plan":  Always Plan → Execute (skip routing).
-   * - "force-react": Always direct ReAct (skip routing + plan).
-   *
-   * Default: "auto".
-   */
-  routing?: "auto" | "force-plan" | "force-react";
-
-  // ── Plan ────────────────────────────────────────────────────────────
-
-  /**
-   * When to ask for user confirmation of the plan:
-   * - "never":  Execute immediately after plan generation.
-   * - "always": Always ask before executing.
-   * - "auto":   Ask only when risky tool calls are detected in the plan.
-   *
-   * Default: "auto".
-   */
   planConfirmation?: "auto" | "always" | "never";
-
-  /**
-   * Callback invoked when plan confirmation is needed.
-   * Return `true` to approve the plan, `false` to abort.
-   *
-   * If not set and confirmation is needed, the plan is returned as-is
-   * (no execution).
-   */
   onPlanConfirm?: PlanConfirmCallback;
-
-  /** Maximum number of steps in a plan (default: 12). */
   maxPlanSteps?: number;
-
-  // ── Reflection ──────────────────────────────────────────────────────
-
-  /**
-   * Error reflection mode:
-   * - "off":       No reflection.
-   * - "post-hoc":  After execution, fork a ReflectionAgent to review
-   *                the session and persist findings to the ErrorNotebook.
-   *
-   * Default: "off".
-   */
-  reflection?: "off" | "post-hoc";
-
-  /** Max iterations for the reflection sub-agent. Default: 6. */
-  reflectionMaxIterations?: number;
-
-  // ── Loop control ────────────────────────────────────────────────────
-
-  /** Maximum iterations for the execution loop (default: 15). */
-  maxIterations?: number;
-
-  /**
-   * Number of consecutive tool failures before a replan hint is injected.
-   * Set to 0 to disable auto-replanning hints. Default: 2.
-   */
   replanThreshold?: number;
-
-  // ── Memory Reflection ───────────────────────────────────────────────
-
-  /** Memory reflection mode. Default: "off". */
   memoryReflection?: "off" | "post-hoc";
-
-  /** Max iterations for the memory reflection sub-agent. Default: 5. */
   memoryReflectionMaxIterations?: number;
 }
 
@@ -149,43 +76,20 @@ export interface FusionAgentConfig extends AgentConfig {
  *   ↓
  * Final Answer
  * ```
- *
- * ## Session persistence
- * When `enableCheckpointing` is set, the agent auto-saves checkpoints
- * that include full fusion state (complexity, plan, reflection progress)
- * so the session can be resumed after a network interruption.
  */
 export class FusionAgent extends Agent {
-  // ── Configuration ───────────────────────────────────────────────────
-
-  private routing: "auto" | "force-plan" | "force-react";
   private planConfirmation: "auto" | "always" | "never";
   private onPlanConfirm?: PlanConfirmCallback;
   private maxPlanSteps: number;
-
-  private maxIterations: number;
   private replanThreshold: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
-
-  // ── Runtime state ───────────────────────────────────────────────────
-
-  /** Task complexity determined during routing. */
   private complexity: "simple" | "complex" = "complex";
-  /** Whether routing has been completed. */
-  private routed = false;
-  /** The current plan steps (empty until the plan is created). */
   private currentPlan: string[] = [];
-  /** Whether a plan has been created in this run. */
   private hasPlan = false;
-  /** How many plan steps have been completed. */
   private completedSteps = 0;
-  /** Consecutive tool failures (resets on success). */
   private consecutiveFailures = 0;
-  /** Internal flag: when true, run() skips state reset (used by resume()). */
   private _skipStateReset = false;
-
-  /** Routing reason for logging. */
   private routeReason = "";
 
   constructor(config: FusionAgentConfig) {
@@ -195,43 +99,33 @@ export class FusionAgent extends Agent {
     };
     super(mergedConfig);
 
-    this.routing = config.routing ?? "auto";
     this.planConfirmation = config.planConfirmation ?? "always";
     this.onPlanConfirm = config.onPlanConfirm;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
-    this.maxIterations = config.maxIterations ?? 15;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
-    this.memoryReflectionMaxIterations = config.memoryReflectionMaxIterations ?? 5;
-
+    this.memoryReflectionMaxIterations =
+      config.memoryReflectionMaxIterations ?? 5;
     this.rebuildSystemPrompt();
   }
 
   // ─── Main Entry Point ───────────────────────────────────────────────
 
   async run(input: string): Promise<string> {
-    // Consume the skip-reset flag immediately
     const skipStateReset = this._skipStateReset;
     this._skipStateReset = false;
-
-    // ── Pre-flight: reject oversized input ───────────────────────────
     const sizeError = this.validateInputSize(input);
     if (sizeError) return sizeError;
-
-    // ── Create fresh abort controller for this run ───────────────────
     this._abortController = new AbortController();
 
-    // ── Async initialization ─────────────────────────────────────────
     await this.init();
 
-    // ── Reload dynamic resources ─────────────────────────────────────
     await this.reloadDynamicResources();
 
-    // ── Recover orphaned sub-agent results ───────────────────────────
     this.recoverOrphanedSubAgentResults();
 
-    // ── Intent detection (zero LLM cost, runs once per run) ────────
     this.detectInputSignals(input);
+
     this.matchInputContext(input);
 
     // ── Create user message ──────────────────────────────────────────
@@ -241,7 +135,6 @@ export class FusionAgent extends Agent {
     // ── Reset runtime state for this run ─────────────────────────────
     if (!skipStateReset) {
       this.complexity = "complex";
-      this.routed = false;
       this.routeReason = "";
       this.currentPlan = [];
       this.hasPlan = false;
@@ -255,26 +148,13 @@ export class FusionAgent extends Agent {
     }
 
     // ── Phase 1: Route ───────────────────────────────────────────────
-    if (this.routing === "auto") {
-      const routeResult = await this.route(input);
-      this.complexity = routeResult.complexity;
-      this.routeReason = routeResult.reason;
-      this.routed = true;
-
-      this.logger.info(
-        "Fusion",
-        `Route: ${this.complexity} — ${this.routeReason}`,
-      );
-    } else if (this.routing === "force-react") {
-      this.complexity = "simple";
-      this.routed = true;
-      this.logger.info("Fusion", "Route: simple (forced)");
-    } else {
-      // force-plan
-      this.complexity = "complex";
-      this.routed = true;
-      this.logger.info("Fusion", "Route: complex (forced)");
-    }
+    const routeResult = await this.route(input);
+    this.complexity = routeResult.complexity;
+    this.routeReason = routeResult.reason;
+    this.logger.info(
+      "Fusion",
+      `Route: ${this.complexity} — ${this.routeReason}`,
+    );
 
     // Save checkpoint after routing
     if (this.checkpointingEnabled) {
@@ -303,7 +183,7 @@ export class FusionAgent extends Agent {
     // ── Phase 3: ReAct Execute Loop ───────────────────────────────────
     let answer = await this.executeReActLoop();
 
-    // ── Phase 7: Memory Reflection ────────────────────────────────────
+    // ── Phase 4: Memory Reflection ────────────────────────────────────
     const FAILURE_THRESHOLD = 2;
     const shouldReflectMemory =
       this.memoryReflectionMode === "post-hoc" ||
@@ -311,8 +191,12 @@ export class FusionAgent extends Agent {
         this.consecutiveFailures >= FAILURE_THRESHOLD) ||
       this.inputSignals.wantsRemember;
     if (shouldReflectMemory) {
-      this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
-        this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+      this.trackBackground(this.runMemoryReflection(input, answer)).catch(
+        (err: unknown) =>
+          this.logger.warn(
+            "MemoryReflection",
+            `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
       );
     }
 
@@ -337,7 +221,11 @@ export class FusionAgent extends Agent {
     ];
 
     try {
-      const response = await (this.routeLLM ?? this.llm).chat(messages, [], this._abortController?.signal);
+      const response = await (this.routeLLM ?? this.llm).chat(
+        messages,
+        [],
+        this._abortController?.signal,
+      );
       const parsed = parseFusionRouteResponse(response.content);
 
       // Record token usage
@@ -359,7 +247,8 @@ export class FusionAgent extends Agent {
       // Default to complex for safety
       return {
         complexity: "complex",
-        reason: "Route classification failed; defaulting to complex to be safe.",
+        reason:
+          "Route classification failed; defaulting to complex to be safe.",
       };
     }
   }
@@ -380,7 +269,7 @@ export class FusionAgent extends Agent {
     const planPrompt =
       this.buildSystemPrompt() +
       "\n\nYou are in the PLANNING phase. Analyze the user's request and create a detailed, " +
-      "step-by-step plan. Output ONLY: {\"thought\": \"...\", \"plan\": [\"Step 1: ...\", ...]}\n" +
+      'step-by-step plan. Output ONLY: {"thought": "...", "plan": ["Step 1: ...", ...]}\n' +
       `Maximum ${this.maxPlanSteps} steps. Each step must be concrete and actionable.`;
 
     this.contextManager.setSystemMessage(planPrompt);
@@ -392,18 +281,11 @@ export class FusionAgent extends Agent {
     const budgetError = this.checkTokenBudget(estimatedInput);
     if (budgetError) return budgetError;
 
-    for (const h of this.hooks) h.onLLMStart?.(
-      contextMessages,
-      this.toolRegistry.getTools(),
-    );
+    for (const h of this.hooks)
+      h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
 
     let response: LLMResponse;
     try {
-      // The planning phase should NOT have access to tools — the LLM is
-      // supposed to generate a plan, not execute actions.  Passing tools
-      // can cause the model (especially weaker ones) to emit tool_calls
-      // that are never executed, producing orphaned tool_calls in context
-      // that break subsequent API calls.
       response = await this.llm.chat(
         contextMessages,
         [],
@@ -437,12 +319,6 @@ export class FusionAgent extends Agent {
     }
 
     const parsed = parseFusionResponse(response.content);
-
-    // Store the assistant message in context.
-    // Deliberately strip tool_calls — the planning phase passes no tools
-    // to the LLM, but some providers may still hallucinate tool_calls.
-    // Orphaned tool_calls in context would break subsequent API calls
-    // (which require every tool_call to have a matching tool result).
     const assistantMessage = Message.assistant(response.content);
     this.contextManager.addMessage(assistantMessage.toDict());
 
@@ -505,9 +381,6 @@ export class FusionAgent extends Agent {
       case "never":
         return false;
       case "auto":
-        // Auto: only confirm for genuinely destructive operations.
-        // Low-risk ops (deploy, migrate, reset) are routine and
-        // shouldn't interrupt the user every time.
         return planHasRiskyOps(_plan) === "high";
       default:
         return false;
@@ -522,7 +395,9 @@ export class FusionAgent extends Agent {
    * config inherited from {@link AgentConfig}.
    */
   private async confirmPlanWithTimeout(plan: string[]): Promise<boolean> {
-    const signal = (this as any)._abortController?.signal as AbortSignal | undefined;
+    const signal = (this as any)._abortController?.signal as
+      | AbortSignal
+      | undefined;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
 
@@ -530,7 +405,10 @@ export class FusionAgent extends Agent {
       const result = await Promise.race([
         this.onPlanConfirm!(plan, this.routeReason),
         new Promise<"timeout">((resolve) => {
-          timeoutId = setTimeout(() => resolve("timeout"), (this as any).approvalTimeoutMs ?? 120_000);
+          timeoutId = setTimeout(
+            () => resolve("timeout"),
+            (this as any).approvalTimeoutMs ?? 120_000,
+          );
         }),
         new Promise<"cancelled">((resolve) => {
           if (signal?.aborted) {
@@ -546,19 +424,25 @@ export class FusionAgent extends Agent {
         this.logger.warn(
           "Fusion",
           `Plan confirmation timed out (${(this as any).approvalTimeoutMs ?? 120_000}ms) — ` +
-          `showing plan for manual review.`,
+            `showing plan for manual review.`,
         );
         return false;
       }
 
       if (result === "cancelled") {
-        this.logger.info("Fusion", "Plan confirmation cancelled (agent aborted).");
+        this.logger.info(
+          "Fusion",
+          "Plan confirmation cancelled (agent aborted).",
+        );
         return false;
       }
 
       return result;
     } catch {
-      this.logger.warn("Fusion", "Plan confirmation callback threw — showing plan for review.");
+      this.logger.warn(
+        "Fusion",
+        "Plan confirmation callback threw — showing plan for review.",
+      );
       return false;
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
@@ -576,15 +460,11 @@ export class FusionAgent extends Agent {
     // Rebuild system prompt for execution mode
     this.rebuildContextWithPlan();
 
-    let consecutiveEmptyIterations = 0;
-    const EMPTY_ITERATION_LIMIT = 5;
-
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
-    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
-      // Fresh AbortController per iteration so the signal's listener
-      // count doesn't accumulate across LLM calls and retries.
+    let iteration = 0;
+    while (true) {
       this._abortController = new AbortController();
 
       // ── Check cancellation ──────────────────────────────────────────
@@ -620,10 +500,8 @@ export class FusionAgent extends Agent {
       if (budgetError) return budgetError;
 
       // ── LLM call ────────────────────────────────────────────────────
-      for (const h of this.hooks) h.onLLMStart?.(
-        contextMessages,
-        this.toolRegistry.getTools(),
-      );
+      for (const h of this.hooks)
+        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
 
       let response: LLMResponse;
       try {
@@ -665,7 +543,6 @@ export class FusionAgent extends Agent {
 
       const parsed = parseFusionResponse(response.content);
 
-
       // ── Store assistant message ─────────────────────────────────────
       const assistantMessage = Message.assistant(
         response.content,
@@ -700,13 +577,13 @@ export class FusionAgent extends Agent {
       // ── Tool calls ──────────────────────────────────────────────────
       if (response.tool_calls && response.tool_calls.length > 0) {
         // Intercept hallucinated "answer" tool calls before execution
-        const extractedAnswer = this.extractAnswerFromToolCalls(response.tool_calls);
+        const extractedAnswer = this.extractAnswerFromToolCalls(
+          response.tool_calls,
+        );
         if (extractedAnswer) {
           this.consecutiveFailures = 0;
           return extractedAnswer;
         }
-
-        consecutiveEmptyIterations = 0;
 
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
@@ -730,12 +607,6 @@ export class FusionAgent extends Agent {
           response.tool_calls!,
           mcpWarnedServers,
         );
-
-        // Inject the continuation instruction AFTER tool execution so it
-        // does not sit between the assistant's tool_use blocks and their
-        // tool_result blocks (which would violate the Anthropic API's
-        // requirement that tool_results appear in the immediately next
-        // message after tool_use blocks).
         if (isTruncated) {
           const continueMsg = Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -755,7 +626,6 @@ export class FusionAgent extends Agent {
                 ? ` — threshold reached`
                 : ""),
           );
-
         } else {
           this.consecutiveFailures = 0;
 
@@ -787,23 +657,16 @@ export class FusionAgent extends Agent {
 
         // Opportunistic fast wait for sub-agent results.
         await this.collectFastSubAgentResults(hadSpawnCalls);
-
+        iteration++;
         continue;
       }
 
       // ── Final answer ────────────────────────────────────────────────
       if (parsed.answer) {
         if (isTruncated) {
-          consecutiveEmptyIterations = 0;
           if (parsed.thought) {
             this.logger.info("Thought", parsed.thought);
             for (const h of this.hooks) h.onThought?.(parsed.thought);
-          }
-          if (iteration === this.maxIterations - 1) {
-            return (
-              parsed.answer +
-              "\n\n[Note: Response may be incomplete due to output length constraints.]"
-            );
           }
           // Inject continuation instruction so the LLM knows to complete
           // its truncated response (no tool calls were present).
@@ -816,6 +679,7 @@ export class FusionAgent extends Agent {
             "Fusion",
             "Answer truncated — continuing in next iteration.",
           );
+          iteration++;
           continue;
         }
 
@@ -824,7 +688,8 @@ export class FusionAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         // ── Hold the answer while sub-agents are still running ──────
-        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        if (this.holdAnswerForPendingSubAgents()) {
+          iteration++;
           continue;
         }
 
@@ -843,7 +708,6 @@ export class FusionAgent extends Agent {
         Array.isArray(parsed.plan) &&
         parsed.plan.length > 0
       ) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
         this.hasPlan = true;
         this.logger.info(
@@ -858,6 +722,7 @@ export class FusionAgent extends Agent {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
@@ -867,7 +732,6 @@ export class FusionAgent extends Agent {
         Array.isArray(parsed.revised_plan) &&
         parsed.revised_plan.length > 0
       ) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0;
         this.consecutiveFailures = 0;
@@ -883,64 +747,28 @@ export class FusionAgent extends Agent {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Thought-only iteration ──────────────────────────────────────
       if (parsed.thought) {
-        consecutiveEmptyIterations++;
         this.logger.info("Thought", parsed.thought);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-
-        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-          const stuckMsg =
-            "I apologize, but I'm having difficulty making progress on your request. " +
-            "Please try rephrasing or breaking it down into smaller, more specific steps.";
-          const stuckAssistantMessage = Message.assistant(stuckMsg);
-          this.contextManager.addMessage(stuckAssistantMessage.toDict());
-          return stuckMsg;
-        }
-
+        iteration++;
         continue;
       }
-
-      // ── Empty response ──────────────────────────────────────────────
-      consecutiveEmptyIterations++;
-      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-        const stuckMsg =
-          "I apologize, but I'm having difficulty making progress on your request. " +
-          "Please try rephrasing or breaking it down into smaller, more specific steps.";
-        const stuckAssistantMessage = Message.assistant(stuckMsg);
-        this.contextManager.addMessage(stuckAssistantMessage.toDict());
-        return stuckMsg;
-      }
     }
-
-    // ── Max iterations reached ────────────────────────────────────────
-    const timeoutMsg =
-      `I apologize, but I was unable to complete the task within ${this.maxIterations} iterations. ` +
-      `Please try breaking your request into smaller steps.`;
-    const timeoutAssistantMessage = Message.assistant(timeoutMsg);
-    this.contextManager.addMessage(timeoutAssistantMessage.toDict());
-    return timeoutMsg;
   }
-
-
 
   // ─── Memory Reflection ──────────────────────────────────────────────
 
-  /**
-   * Run post-hoc memory extraction after a successful completion.
-   * Best-effort — failures are logged but never affect the answer.
-   *
-   * No guard for `skillsDir` is needed here:
-   * MemoryManager is always created by the base Agent constructor.
-   */
   private async runMemoryReflection(
     input: string,
     answer: string,
   ): Promise<void> {
-    const { MemoryReflector } = await import("../reflection/memory-reflector.js");
+    const { MemoryReflector } =
+      await import("../reflection/memory-reflector.js");
 
     try {
       const reflector = new MemoryReflector({
@@ -974,11 +802,6 @@ export class FusionAgent extends Agent {
 
   // ─── System Prompt Management ───────────────────────────────────────
 
-  /**
-   * Rebuild the system prompt to include plan progress and replan hints.
-   *
-   * Called each iteration so the LLM always sees the up-to-date state.
-   */
   private rebuildContextWithPlan(): void {
     let prompt = this.buildSystemPrompt();
 
@@ -1047,7 +870,6 @@ export class FusionAgent extends Agent {
       fusionState: {
         complexity: this.complexity,
         routeReason: this.routeReason,
-        routed: this.routed,
         currentPlan: this.currentPlan,
         hasPlan: this.hasPlan,
         completedSteps: this.completedSteps,
@@ -1066,7 +888,6 @@ export class FusionAgent extends Agent {
       const fs = state.fusionState as FusionSessionState;
       this.complexity = fs.complexity;
       this.routeReason = fs.routeReason ?? "";
-      this.routed = fs.routed;
       this.currentPlan = fs.currentPlan;
       this.hasPlan = fs.hasPlan;
       this.completedSteps = fs.completedSteps;
@@ -1089,7 +910,10 @@ export class FusionAgent extends Agent {
    */
   protected async *executeStream(input: string): AsyncIterable<string> {
     const sizeError = this.validateInputSize(input);
-    if (sizeError) { yield sizeError; return; }
+    if (sizeError) {
+      yield sizeError;
+      return;
+    }
 
     await this.init();
     await this.reloadDynamicResources();
@@ -1111,25 +935,25 @@ export class FusionAgent extends Agent {
     if (this.checkpointingEnabled) this.saveCheckpoint("active");
 
     // ── Phase 1: Route (non-streaming) ──────────────────────────────
-    if (this.routing === "auto") {
-      const routeResult = await this.route(input);
-      this.complexity = routeResult.complexity;
-      this.routeReason = routeResult.reason;
-      this.routed = true;
-      yield `[Route: ${routeResult.complexity} — ${routeResult.reason}]\n\n`;
-    } else {
-      this.complexity = this.routing === "force-react" ? "simple" : "complex";
-      this.routed = true;
-    }
+    const routeResult = await this.route(input);
+    this.complexity = routeResult.complexity;
+    this.routeReason = routeResult.reason;
+    yield `[Route: ${routeResult.complexity} — ${routeResult.reason}]\n\n`;
 
     // ── Phase 2: Plan for complex tasks (non-streaming, no tools) ──
     if (this.complexity === "complex") {
       const planResult = await this.createPlan(input);
-      if (typeof planResult === "string") { yield planResult; return; }
+      if (typeof planResult === "string") {
+        yield planResult;
+        return;
+      }
       if (planResult.length > 0) {
         this.currentPlan = planResult;
         this.hasPlan = true;
-        const planText = "\n## Plan\n" + planResult.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
+        const planText =
+          "\n## Plan\n" +
+          planResult.map((s, i) => `${i + 1}. ${s}`).join("\n") +
+          "\n";
         yield planText;
         for (const h of this.hooks) h.onPlanCreated?.(planResult);
       }
@@ -1137,9 +961,6 @@ export class FusionAgent extends Agent {
 
     // ── Phase 3: Streaming Execute Loop ─────────────────────────────
     this.rebuildContextWithPlan();
-
-    let consecutiveEmptyIterations = 0;
-    const EMPTY_ITERATION_LIMIT = 5;
 
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
@@ -1150,7 +971,8 @@ export class FusionAgent extends Agent {
       shouldReflectMemory = true;
     }
 
-    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+    let iteration = 0;
+    while (true) {
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
@@ -1164,7 +986,9 @@ export class FusionAgent extends Agent {
       for (const r of subResults) {
         const source = `subagent:${r.name}`;
         this.contextManager.addMessage(
-          new Message(Role.User, wrapAndScan(source, r.output), { name: source }).toDict(),
+          new Message(Role.User, wrapAndScan(source, r.output), {
+            name: source,
+          }).toDict(),
         );
       }
 
@@ -1175,14 +999,27 @@ export class FusionAgent extends Agent {
       const budgetError = this.checkTokenBudget(
         this.tokenBudget ? this.contextManager.getCurrentTokens() : 0,
       );
-      if (budgetError) { yield budgetError; return; }
+      if (budgetError) {
+        yield budgetError;
+        return;
+      }
 
-      for (const h of this.hooks) h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+      for (const h of this.hooks)
+        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
 
       let rawContent = "";
       let isTruncated = false;
-      let toolCallsMap = new Map<number, { id?: string; name?: string; args?: string }>();
-      let streamUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+      let toolCallsMap = new Map<
+        number,
+        { id?: string; name?: string; args?: string }
+      >();
+      let streamUsage:
+        | {
+            prompt_tokens: number;
+            completion_tokens: number;
+            total_tokens: number;
+          }
+        | undefined;
       // Filters the structured JSON envelope out of the display stream —
       // consumers see the decoded `answer` text, not `{"thought": ...`.
       const answerExtractor = new StreamingAnswerExtractor();
@@ -1207,7 +1044,8 @@ export class FusionAgent extends Agent {
                 const ex = toolCallsMap.get(tc.index) ?? { args: "" };
                 if (tc.id) ex.id = tc.id;
                 if (tc.function?.name) ex.name = tc.function.name;
-                if (tc.function?.arguments) ex.args = (ex.args ?? "") + tc.function.arguments;
+                if (tc.function?.arguments)
+                  ex.args = (ex.args ?? "") + tc.function.arguments;
                 toolCallsMap.set(tc.index, ex);
               }
             }
@@ -1245,7 +1083,10 @@ export class FusionAgent extends Agent {
         }));
 
       if (streamUsage) {
-        this.tokenBudget?.recordUsage(streamUsage.prompt_tokens, streamUsage.completion_tokens);
+        this.tokenBudget?.recordUsage(
+          streamUsage.prompt_tokens,
+          streamUsage.completion_tokens,
+        );
       }
 
       for (const h of this.hooks) {
@@ -1259,7 +1100,6 @@ export class FusionAgent extends Agent {
 
       const parsed = parseFusionResponse(rawContent);
 
-
       // ── Tool calls ────────────────────────────────────────────────
       if (toolCalls.length > 0) {
         // Intercept hallucinated "answer" tool calls before execution
@@ -1271,7 +1111,6 @@ export class FusionAgent extends Agent {
           return;
         }
 
-        consecutiveEmptyIterations = 0;
         if (parsed.thought) {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
@@ -1283,7 +1122,8 @@ export class FusionAgent extends Agent {
           if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
             // Don't add truncated junk to context — bail out cleanly.
             const fallback = parsed.answer
-              ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+              ? parsed.answer +
+                "\n\n[Note: Response may be incomplete due to repeated output limits.]"
               : "I apologize, but I'm unable to complete this response due to output length constraints. " +
                 "Please try breaking your request into smaller steps.";
             this.fireOnFinish(fallback);
@@ -1299,7 +1139,10 @@ export class FusionAgent extends Agent {
         this.contextManager.addMessage(assistantMessage.toDict());
 
         const mcpWarnedServers = new Set<string>();
-        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(toolCalls, mcpWarnedServers);
+        const { hadFailure, hadSpawnCalls } = await this.executeToolCallsBatch(
+          toolCalls,
+          mcpWarnedServers,
+        );
 
         // Inject truncation continuation AFTER tool execution so the
         // assistant(tool_calls) → tool_result pairing is preserved.
@@ -1307,7 +1150,7 @@ export class FusionAgent extends Agent {
           this.contextManager.addMessage(
             Message.user(
               "Your previous response was cut off (max output tokens reached). " +
-              "Continue exactly where you left off — do NOT repeat any content already written."
+                "Continue exactly where you left off — do NOT repeat any content already written.",
             ).toDict(),
           );
         }
@@ -1317,9 +1160,15 @@ export class FusionAgent extends Agent {
         } else {
           this.consecutiveFailures = 0;
           if (parsed.currentStep && this.hasPlan) {
-            this.completedSteps = Math.max(this.completedSteps, Math.min(parsed.currentStep - 1, this.currentPlan.length));
+            this.completedSteps = Math.max(
+              this.completedSteps,
+              Math.min(parsed.currentStep - 1, this.currentPlan.length),
+            );
           } else if (this.hasPlan) {
-            this.completedSteps = Math.min(this.completedSteps + 1, this.currentPlan.length);
+            this.completedSteps = Math.min(
+              this.completedSteps + 1,
+              this.currentPlan.length,
+            );
           }
         }
 
@@ -1328,6 +1177,7 @@ export class FusionAgent extends Agent {
         // Opportunistic fast wait for sub-agent results.
         await this.collectFastSubAgentResults(hadSpawnCalls);
 
+        iteration++;
         continue;
       }
 
@@ -1340,7 +1190,8 @@ export class FusionAgent extends Agent {
         if (consecutiveTruncations > MAX_TRUNCATION_CONTINUES) {
           // Don't add truncated junk to context — bail out cleanly.
           const fallback = parsed.answer
-            ? parsed.answer + "\n\n[Note: Response may be incomplete due to repeated output limits.]"
+            ? parsed.answer +
+              "\n\n[Note: Response may be incomplete due to repeated output limits.]"
             : "I apologize, but I'm unable to complete this response due to output length constraints. " +
               "Please try breaking your request into smaller steps.";
           this.fireOnFinish(fallback);
@@ -1352,7 +1203,7 @@ export class FusionAgent extends Agent {
         this.contextManager.addMessage(
           Message.user(
             "Your previous response was cut off (max output tokens reached). " +
-            "Continue exactly where you left off — do NOT repeat any content already written."
+              "Continue exactly where you left off — do NOT repeat any content already written.",
           ).toDict(),
         );
         continue;
@@ -1368,8 +1219,9 @@ export class FusionAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         // ── Hold the answer while sub-agents are still running ──────
-        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        if (this.holdAnswerForPendingSubAgents()) {
           yield "\n\n[Waiting for sub-agent results...]\n\n";
+          iteration++;
           continue;
         }
 
@@ -1388,8 +1240,12 @@ export class FusionAgent extends Agent {
 
         // ── Memory reflection (fire-and-forget, post-hoc) ──────
         if (shouldReflectMemory) {
-          this.trackBackground(this.runMemoryReflection(input, answer)).catch((err: unknown) =>
-            this.logger.warn("MemoryReflection", `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`),
+          this.trackBackground(this.runMemoryReflection(input, answer)).catch(
+            (err: unknown) =>
+              this.logger.warn(
+                "MemoryReflection",
+                `Background memory reflection failed: ${err instanceof Error ? err.message : String(err)}`,
+              ),
           );
         }
 
@@ -1399,55 +1255,47 @@ export class FusionAgent extends Agent {
 
       // ── Mid-execution plan ────────────────────────────────────────
       if (!this.hasPlan && parsed.plan && parsed.plan.length > 0) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
         this.hasPlan = true;
-        const planText = "\n## Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
+        const planText =
+          "\n## Plan\n" +
+          this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") +
+          "\n";
         yield planText;
         for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
         if (parsed.thought) {
-
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Revised plan ─────────────────────────────────────────────
       if (parsed.revised_plan && parsed.revised_plan.length > 0) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0;
         this.consecutiveFailures = 0;
-        const revText = "\n## Revised Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
+        const revText =
+          "\n## Revised Plan\n" +
+          this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") +
+          "\n";
         yield revText;
         for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
         if (parsed.thought) {
-
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Thought only ──────────────────────────────────────────────
       if (parsed.thought) {
-        consecutiveEmptyIterations++;
-
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-          yield "\n\n[Unable to make progress. Please try rephrasing.]";
-          return;
-        }
+        iteration++;
         continue;
       }
-
-      consecutiveEmptyIterations++;
-      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-        yield "\n\n[Unable to make progress. Please try rephrasing.]";
-        return;
-      }
     }
-
-    yield `\n\n[Unable to complete within ${this.maxIterations} iterations.]`;
+    // while(true) — all exits are explicit returns inside the loop body
   }
 
   async resume(sessionId: string, input: string): Promise<string> {

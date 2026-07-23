@@ -13,7 +13,11 @@ export type AgentType = "react" | "plan-solve" | "fusion" | "orchestrator";
  * - "completed":   Session finished normally.
  * - "cancelled":   User cancelled (Ctrl+C); session preserved for later resume.
  */
-export type SessionStatus = "active" | "interrupted" | "completed" | "cancelled";
+export type SessionStatus =
+  | "active"
+  | "interrupted"
+  | "completed"
+  | "cancelled";
 
 /**
  * Serializable plan state for PlanSolveAgent sessions.
@@ -34,7 +38,6 @@ export interface FusionSessionState {
   /** Short explanation of why this complexity was chosen. Optional — absent in checkpoints saved before v1.1. */
   routeReason?: string;
   /** Whether routing has been completed. */
-  routed: boolean;
   currentPlan: string[];
   hasPlan: boolean;
   completedSteps: number;

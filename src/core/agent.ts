@@ -1380,6 +1380,18 @@ export abstract class Agent {
     return this._cancelled;
   }
 
+  /** Save a cancelled checkpoint and return the session id. */
+  protected cancelCheckpoint(): string {
+    this.saveCheckpoint("cancelled");
+    return this.sessionManager?.getSessionId() ?? "unknown";
+  }
+
+  /** Build the full cancellation message for run() methods. */
+  protected cancelMessage(sid: string): string {
+    return `Execution cancelled by user. Session "${sid}" preserved — ` +
+      `resume with agent.resume("${sid}", "<your prompt>").`;
+  }
+
   // ─── Session ID ──────────────────────────────────────────────────────
 
   /**

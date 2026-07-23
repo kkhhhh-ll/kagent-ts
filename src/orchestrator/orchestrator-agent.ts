@@ -174,9 +174,7 @@ export interface OrchestratorAgentConfig extends AgentConfig {
 export class OrchestratorAgent extends Agent {
   // ── Configuration ───────────────────────────────────────────────────
 
-  private maxRounds: number;
   private maxParallelNodes: number;
-  private maxTotalNodes: number;
 
   // ── Retry config ─────────────────────────────────────────────────────
 
@@ -220,9 +218,7 @@ export class OrchestratorAgent extends Agent {
     };
     super(mergedConfig);
 
-    this.maxRounds = config.maxRounds ?? 3;
     this.maxParallelNodes = config.maxParallelNodes ?? 5;
-    this.maxTotalNodes = config.maxTotalNodes ?? 20;
 
     this.maxRetriesPerNode = config.maxRetriesPerNode ?? 2;
     this.failureStrategy = config.failureStrategy ?? "retry-subtree";
@@ -350,7 +346,8 @@ export class OrchestratorAgent extends Agent {
     }
 
     // ── Phase 2-4: Orchestration Loop ──────────────────────────────────
-    for (let round = 0; round < this.maxRounds; round++) {
+    let round = 0;
+    while (true) {
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");
         if (this.autoCleanupWorktrees) {
@@ -383,28 +380,6 @@ export class OrchestratorAgent extends Agent {
         }
         this.fireOnFinish(synthesis.finalAnswer);
         return synthesis.finalAnswer;
-      }
-
-      // Check if this was the last round
-      if (round === this.maxRounds - 1) {
-        this.logger.info("Orchestrator", `Max rounds (${this.maxRounds}) reached — forcing synthesis.`);
-        const forced = await this.forceSynthesize(input);
-        if (this.checkpointingEnabled) {
-          this.saveCheckpoint("completed");
-        }
-        this.fireOnFinish(forced);
-        return forced;
-      }
-
-      // Check total node limit
-      if (this.taskGraph.nodes.length >= this.maxTotalNodes) {
-        this.logger.info("Orchestrator", `Max total nodes (${this.maxTotalNodes}) reached — forcing synthesis.`);
-        const forced = await this.forceSynthesize(input);
-        if (this.checkpointingEnabled) {
-          this.saveCheckpoint("completed");
-        }
-        this.fireOnFinish(forced);
-        return forced;
       }
 
       // Adapt: generate new nodes for gaps
@@ -449,10 +424,7 @@ export class OrchestratorAgent extends Agent {
       }
     }
 
-    // Should not reach here — caught by last-round check above
-    const forced = await this.forceSynthesize(input);
-    this.fireOnFinish(forced);
-    return forced;
+    // while(true) — all exits are explicit returns inside the loop body
   }
 
   // ─── Streaming ──────────────────────────────────────────────────────
@@ -531,7 +503,8 @@ export class OrchestratorAgent extends Agent {
     if (this.checkpointingEnabled) this.saveCheckpoint("active");
 
     // ── Phase 2-4: Orchestration Loop ──────────────────────────────────
-    for (let round = 0; round < this.maxRounds; round++) {
+    let round = 0;
+    while (true) {
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");
         if (this.autoCleanupWorktrees) {
@@ -542,7 +515,7 @@ export class OrchestratorAgent extends Agent {
         return;
       }
 
-      yield `## Round ${round + 1}/${this.maxRounds}\n\n`;
+      yield `## Round ${round + 1}\n\n`;
 
       // Dispatch
       yield "### Dispatch\n\n";
@@ -562,22 +535,6 @@ export class OrchestratorAgent extends Agent {
         const finalAnswer = synthesis.finalAnswer;
         yield `\n## Final Answer\n\n${finalAnswer}`;
         this.fireOnFinish(finalAnswer);
-        return;
-      }
-
-      if (round === this.maxRounds - 1) {
-        this.logger.info("Orchestrator", `Max rounds (${this.maxRounds}) reached — forcing synthesis.`);
-        yield "\n### Final Synthesis\n\n";
-        const forced = await this.forceSynthesizeStream(input);
-        this.fireOnFinish(forced);
-        return;
-      }
-
-      if (this.taskGraph.nodes.length >= this.maxTotalNodes) {
-        this.logger.info("Orchestrator", `Max total nodes (${this.maxTotalNodes}) reached — forcing synthesis.`);
-        yield "\n### Final Synthesis\n\n";
-        const forced = await this.forceSynthesizeStream(input);
-        this.fireOnFinish(forced);
         return;
       }
 
@@ -616,8 +573,7 @@ export class OrchestratorAgent extends Agent {
       if (this.checkpointingEnabled) this.saveCheckpoint("active");
     }
 
-    const forced = await this.forceSynthesizeStream(input);
-    this.fireOnFinish(forced);
+    // while(true) — all exits are explicit returns inside the loop body
   }
 
   /**

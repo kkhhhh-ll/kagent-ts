@@ -40,9 +40,6 @@ ${TOOL_ERROR_RECOVERY}
  * Configuration specific to the Plan-and-Solve Agent.
  */
 export interface PlanSolveAgentConfig extends AgentConfig {
-  /** Maximum iterations for the Plan-Solve loop (default: 15). */
-  maxIterations?: number;
-
   /** Maximum number of steps in a plan (default: 12). */
   maxPlanSteps?: number;
 
@@ -65,28 +62,11 @@ export interface PlanSolveAgentConfig extends AgentConfig {
 /**
  * Plan-and-Solve Agent implementing a structured Plan → Resolve → Final Answer loop.
  *
- * This paradigm separates high-level planning from step-by-step execution:
- * - **Phase 1 (Plan):**  The LLM analyzes the request and creates a numbered plan.
- * - **Phase 2 (Resolve):** The LLM executes each step, using tools. The plan is
- *   injected into the system prompt to keep the LLM focused. If obstacles arise,
- *   the LLM can output a `revised_plan` to adjust remaining steps.
- * - **Final:** When all steps are complete, the LLM provides the final answer.
- *
- * Compared to ReAct, Plan-and-Solve encourages more deliberate decomposition
- * up front, reducing the chance of the agent getting lost mid-task.
- *
- * Session persistence:
- * When `enableCheckpointing` is set, the agent auto-saves checkpoints that
- * include full plan state (current plan, completed steps, replan info) so the
- * session can be resumed after a network interruption.
  */
 export class PlanSolveAgent extends Agent {
-  private maxIterations: number;
   private maxPlanSteps: number;
   private memoryReflectionMode: "off" | "post-hoc";
   private memoryReflectionMaxIterations: number;
-
-
 
   /** The current plan steps (empty until the plan is created). */
   private currentPlan: string[] = [];
@@ -116,7 +96,6 @@ export class PlanSolveAgent extends Agent {
     };
     super(mergedConfig);
 
-    this.maxIterations = config.maxIterations ?? 15;
     this.maxPlanSteps = config.maxPlanSteps ?? 12;
     this.replanThreshold = config.replanThreshold ?? 2;
     this.memoryReflectionMode = config.memoryReflection ?? "off";
@@ -167,10 +146,6 @@ export class PlanSolveAgent extends Agent {
       this.saveCheckpoint("active");
     }
 
-    // Track consecutive unproductive iterations (no tool calls, no answer)
-    let consecutiveEmptyIterations = 0;
-    const EMPTY_ITERATION_LIMIT = 5;
-
     // Track consecutive max_tokens truncations (to avoid infinite continuation loops)
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
@@ -182,15 +157,13 @@ export class PlanSolveAgent extends Agent {
 
 
     // ── Main Plan-Solve loop ────────────────────────────────────────
-    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
-      // Fresh AbortController per iteration so the signal's listener
-      // count doesn't accumulate across LLM calls and retries.
+    let iteration = 0;
+    while (true) {
       this._abortController = new AbortController();
 
-      // Check if user cancelled (SIGINT)
       if (this.isCancelled) {
         this.saveCheckpoint("cancelled");
-        const sid = this.sessionManager?.getSessionId() ?? "unknown";
+        const sid = this.sessionManager?.getSessionId() ?? "";
         const cancelMsg =
           `Execution cancelled by user. Session "${sid}" preserved — ` +
           `resume with agent.resume("${sid}", "<your prompt>").`;
@@ -247,7 +220,7 @@ export class PlanSolveAgent extends Agent {
         // Cancellation by user (AbortController) — exit the loop cleanly
         if (this.isCancelled) {
           this.saveCheckpoint("cancelled");
-          const sid = this.sessionManager?.getSessionId() ?? "unknown";
+          const sid = this.sessionManager?.getSessionId() ?? "";
           const cancelMsg =
             `Execution cancelled by user. Session "${sid}" preserved — ` +
             `resume with agent.resume("${sid}", "<your prompt>").`;
@@ -290,11 +263,6 @@ export class PlanSolveAgent extends Agent {
           this.fireOnFinish(fallback);
           return fallback;
         }
-
-        // Store the truncated message so the LLM has context for where it
-        // left off. The continuation instruction is injected AFTER tool
-        // execution (if any) so it does not break the tool_use/tool_result
-        // pairing required by the Anthropic API.
         this.contextManager.addMessage(assistantMessage.toDict());
       } else {
         // Normal (non-truncated) response — store it and reset the counter.
@@ -311,15 +279,11 @@ export class PlanSolveAgent extends Agent {
           return extractedAnswer;
         }
 
-        consecutiveEmptyIterations = 0;
 
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
-
-        // If the LLM response shows non-truncation quality issues, warn
-        // before executing tool calls. (max_tokens truncation is handled above.)
         if (response.responseError &&
             response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS &&
             response.responseError.code !== LLMResponseErrorCode.OK) {
@@ -334,12 +298,6 @@ export class PlanSolveAgent extends Agent {
           response.tool_calls!,
           mcpWarnedServers,
         );
-
-        // Inject the continuation instruction AFTER tool execution so it
-        // does not sit between the assistant's tool_use blocks and their
-        // tool_result blocks (which would violate the Anthropic API's
-        // requirement that tool_results appear in the immediately next
-        // message after tool_use blocks).
         if (isTruncated) {
           const continueMsg = Message.user(
             "Your previous response was cut off (max output tokens reached). " +
@@ -392,7 +350,7 @@ export class PlanSolveAgent extends Agent {
         // Opportunistic fast wait for sub-agent results.
         await this.collectFastSubAgentResults(hadSpawnCalls);
 
-        // Continue the loop for the next thought
+        iteration++;
         continue;
       }
 
@@ -401,18 +359,9 @@ export class PlanSolveAgent extends Agent {
         // If truncated, don't return — inject a continuation instruction
         // so the LLM knows to pick up where it left off.
         if (isTruncated) {
-          consecutiveEmptyIterations = 0;
-          if (parsed.thought) {
+            if (parsed.thought) {
             this.logger.info("Thought", parsed.thought);
             for (const h of this.hooks) h.onThought?.(parsed.thought);
-          }
-          // If this is the last iteration we can't continue — return
-          // what we have instead of the generic "max iterations" message.
-          if (iteration === this.maxIterations - 1) {
-            const fallback = parsed.answer +
-              "\n\n[Note: Response may be incomplete due to output length constraints.]";
-            this.fireOnFinish(fallback);
-            return fallback;
           }
           // Inject continuation instruction so the LLM knows to complete
           // its truncated response (no tool calls were present).
@@ -429,7 +378,8 @@ export class PlanSolveAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         // ── Hold the answer while sub-agents are still running ──────
-        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        if (this.holdAnswerForPendingSubAgents()) {
+          iteration++;
           continue;
         }
 
@@ -461,7 +411,6 @@ export class PlanSolveAgent extends Agent {
         Array.isArray(parsed.plan) &&
         parsed.plan.length > 0
       ) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
         this.hasPlan = true;
         this.logger.info("Plan", `Created ${this.currentPlan.length}-step plan:`);
@@ -473,6 +422,7 @@ export class PlanSolveAgent extends Agent {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
@@ -482,7 +432,6 @@ export class PlanSolveAgent extends Agent {
         Array.isArray(parsed.revised_plan) &&
         parsed.revised_plan.length > 0
       ) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0; // Remaining steps are now new
         this.consecutiveFailures = 0; // New plan, fresh failure counter
@@ -498,50 +447,19 @@ export class PlanSolveAgent extends Agent {
           this.logger.info("Thought", parsed.thought);
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Default: log thought and continue loop ──────────────────
       if (parsed.thought) {
-        consecutiveEmptyIterations++;
         this.logger.info("Thought", parsed.thought);
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-
-        // If stuck in thought-only loop, bail out
-        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-          const stuckMsg =
-            "I apologize, but I'm having difficulty making progress on your request. " +
-            "Please try rephrasing or breaking it down into smaller, more specific steps.";
-          const stuckAssistantMessage = Message.assistant(stuckMsg);
-          this.contextManager.addMessage(stuckAssistantMessage.toDict());
-          this.fireOnFinish(stuckMsg);
-          return stuckMsg;
-        }
-
         continue;
       }
 
-      // Empty response (no thought, no answer, no tool calls, no plan)
-      consecutiveEmptyIterations++;
-      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-        const stuckMsg =
-          "I apologize, but I'm having difficulty making progress on your request. " +
-          "Please try rephrasing or breaking it down into smaller, more specific steps.";
-        const stuckAssistantMessage = Message.assistant(stuckMsg);
-        this.contextManager.addMessage(stuckAssistantMessage.toDict());
-        this.fireOnFinish(stuckMsg);
-        return stuckMsg;
-      }
-    }
 
-    // ── Max iterations reached without final answer ──────────────
-    const timeoutMsg =
-      `I apologize, but I was unable to complete the task within ${this.maxIterations} iterations. ` +
-      `Please try breaking your request into smaller steps.`;
-    const timeoutAssistantMessage = Message.assistant(timeoutMsg);
-    this.contextManager.addMessage(timeoutAssistantMessage.toDict());
-    this.fireOnFinish(timeoutMsg);
-    return timeoutMsg;
+    }
   }
 
   // ─── Session Persistence Overrides ───────────────────────────────────
@@ -619,9 +537,6 @@ export class PlanSolveAgent extends Agent {
 
     if (this.checkpointingEnabled) this.saveCheckpoint("active");
 
-    let consecutiveEmptyIterations = 0;
-    const EMPTY_ITERATION_LIMIT = 5;
-
     let consecutiveTruncations = 0;
     const MAX_TRUNCATION_CONTINUES = 3;
 
@@ -633,7 +548,8 @@ export class PlanSolveAgent extends Agent {
     }
 
 
-    for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+    let iteration = 0;
+    while (true) {
       this._abortController = new AbortController();
 
       if (this.isCancelled) {
@@ -763,7 +679,6 @@ export class PlanSolveAgent extends Agent {
           return;
         }
 
-        consecutiveEmptyIterations = 0;
         if (parsed.thought) {
 
           for (const h of this.hooks) h.onThought?.(parsed.thought);
@@ -786,9 +701,6 @@ export class PlanSolveAgent extends Agent {
         } else {
           consecutiveTruncations = 0;
         }
-
-        // Add assistant BEFORE tool execution so tool results follow
-        // immediately after (API pairing requirement).
         this.contextManager.addMessage(assistantMessage.toDict());
 
         const mcpWarnedServers = new Set<string>();
@@ -824,6 +736,7 @@ export class PlanSolveAgent extends Agent {
         // Opportunistic fast wait for sub-agent results.
         await this.collectFastSubAgentResults(hadSpawnCalls);
 
+        iteration++;
         continue;
       }
 
@@ -865,8 +778,9 @@ export class PlanSolveAgent extends Agent {
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
         // ── Hold the answer while sub-agents are still running ──────
-        if (iteration < this.maxIterations - 1 && this.holdAnswerForPendingSubAgents()) {
+        if (this.holdAnswerForPendingSubAgents()) {
           yield "\n\n[Waiting for sub-agent results...]\n\n";
+          iteration++;
           continue;
         }
 
@@ -898,7 +812,6 @@ export class PlanSolveAgent extends Agent {
 
       // ── Initial plan ─────────────────────────────────────────────
       if (!this.hasPlan && parsed.plan && parsed.plan.length > 0) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.plan.slice(0, this.maxPlanSteps);
         this.hasPlan = true;
         const planText = "\n## Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
@@ -909,12 +822,12 @@ export class PlanSolveAgent extends Agent {
 
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Revised plan ─────────────────────────────────────────────
       if (parsed.revised_plan && parsed.revised_plan.length > 0) {
-        consecutiveEmptyIterations = 0;
         this.currentPlan = parsed.revised_plan.slice(0, this.maxPlanSteps);
         this.completedSteps = 0;
         this.consecutiveFailures = 0;
@@ -926,29 +839,18 @@ export class PlanSolveAgent extends Agent {
 
           for (const h of this.hooks) h.onThought?.(parsed.thought);
         }
+        iteration++;
         continue;
       }
 
       // ── Thought-only → accumulate, continue ──────────────────────
       if (parsed.thought) {
-        consecutiveEmptyIterations++;
-
         for (const h of this.hooks) h.onThought?.(parsed.thought);
-        if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-          yield "\n\n[Unable to make progress. Please try rephrasing.]";
-          return;
-        }
+        iteration++;
         continue;
       }
-
-      consecutiveEmptyIterations++;
-      if (consecutiveEmptyIterations >= EMPTY_ITERATION_LIMIT) {
-        yield "\n\n[Unable to make progress. Please try rephrasing.]";
-        return;
-      }
     }
-
-    yield `\n\n[Unable to complete within ${this.maxIterations} iterations.]`;
+    // while(true) — all exits are explicit returns inside the loop body
   }
 
   async resume(sessionId: string, input: string): Promise<string> {
@@ -1005,12 +907,6 @@ export class PlanSolveAgent extends Agent {
   /**
    * Compute a replan hint based on the current consecutive failure count.
    *
-   * When consecutive failures reach the configured threshold, a message is
-   * returned that will be appended to the system prompt, nudging the LLM
-   * to consider revising its plan rather than continuing with a failing approach.
-   *
-   * Returns undefined when no hint is needed (failures below threshold
-   * or auto-replan is disabled).
    */
   private computeReplanHint(): string | undefined {
     if (this.replanThreshold <= 0) return undefined;
