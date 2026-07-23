@@ -14,6 +14,7 @@ import { ToolFilter } from "../tools/tool-filter";
 import { SkillManager } from "../skills/skill-manager";
 import { Logger, ConsoleLogger } from "../logging/logger";
 import { AgentHooks } from "../core/hooks";
+import type { ApprovalCallback } from "../core/agent";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,13 @@ export class SubAgentManager {
    */
   private subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]);
 
+  /**
+   * Human-in-the-loop approval callback, inherited from the main agent.
+   * Passed to every sub-agent so tools like `bash` / `write_file` that
+   * require approval don't get auto-denied.
+   */
+  private onToolApproval?: ApprovalCallback;
+
   /** Counter for generating unique sub-agent run IDs. */
   private runIdCounter = 0;
 
@@ -188,6 +196,7 @@ export class SubAgentManager {
     subAgentHooks?: AgentHooks | AgentHooks[] | ((name: string, runId: string) => AgentHooks | AgentHooks[]),
     maxPending?: number,
     maxQueueSize?: number,
+    onToolApproval?: ApprovalCallback,
   ): void {
     this.llmProvider = llmProvider;
     this.toolRegistry = toolRegistry;
@@ -199,6 +208,7 @@ export class SubAgentManager {
     this.subAgentHooks = subAgentHooks;
     if (maxPending !== undefined) this.maxPending = maxPending;
     if (maxQueueSize !== undefined) this.maxQueueSize = maxQueueSize;
+    this.onToolApproval = onToolApproval;
   }
 
   // ─── Spawn ────────────────────────────────────────────────────────────────
@@ -882,7 +892,7 @@ export class SubAgentManager {
       toolRegistry,
       skillManager,
       name: definition.name,
-      maxIterations: 10,
+      maxIterations: 100,
       // Prevent infinite recursion: sub-agents should NOT auto-register
       // sub-agents from the project directory.
       // "" explicitly disables the default (undefined would be overridden
@@ -894,6 +904,9 @@ export class SubAgentManager {
       // or side-effect tools (remember, recall, skill, list_errors).
       skipAutoTools: true,
       workdir,
+      // Inherit the main agent's approval callback so tools like bash /
+      // write_file don't get auto-denied in sub-agents.
+      onToolApproval: this.onToolApproval,
     });
   }
 

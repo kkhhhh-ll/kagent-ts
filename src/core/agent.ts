@@ -1718,6 +1718,7 @@ export abstract class Agent {
       this.subAgentHooks,
       this.maxPending,
       this.maxQueueSize,
+      this.onToolApproval,
     );
     this.subAgentManager.registerFromDirectory(this.subAgentsDir!);
     this.safeRegister(createListSubagentsTool(this.subAgentManager));
