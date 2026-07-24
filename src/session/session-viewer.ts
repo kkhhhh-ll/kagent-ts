@@ -67,7 +67,10 @@ export class SessionViewer {
       return this.outputPath;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.error("Session", `Failed to write session report: ${message}`);
+      this.logger.error(
+        "Session",
+        `Failed to write session report: ${message}`,
+      );
       return "";
     }
   }
@@ -77,17 +80,23 @@ export class SessionViewer {
    * for reading the session files).
    */
   generateHTML(): string {
-    const sessions = new SessionManager({ sessionDir: this.sessionDir }).listSessions();
+    const sessions = new SessionManager({
+      sessionDir: this.sessionDir,
+    }).listSessions();
 
     const counts: Record<string, number> = {};
     for (const s of sessions) counts[s.status] = (counts[s.status] ?? 0) + 1;
     const countsStr = Object.entries(counts)
-      .map(([k, v]) => `<span class="stat"><span class="dot status-${k}"></span>${k}: <span class="val">${v}</span></span>`)
+      .map(
+        ([k, v]) =>
+          `<span class="stat"><span class="dot status-${k}"></span>${k}: <span class="val">${v}</span></span>`,
+      )
       .join("");
 
-    const cards = sessions.length > 0
-      ? sessions.map((s, i) => this.renderSessionCard(s, i)).join("\n")
-      : `<div class="empty">No sessions found in ${this.escapeHtml(this.sessionDir)}</div>`;
+    const cards =
+      sessions.length > 0
+        ? sessions.map((s, i) => this.renderSessionCard(s, i)).join("\n")
+        : `<div class="empty">No sessions found in ${this.escapeHtml(this.sessionDir)}</div>`;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -252,23 +261,23 @@ ${messages}
     const plan = s.planState ?? s.fusionState;
     if (!plan || !plan.hasPlan || plan.currentPlan.length === 0) {
       // Fusion sessions without a plan still carry routing info worth showing
-      if (s.fusionState?.routed) {
-        return `<div class="section"><h4>Routing</h4><pre>complexity: ${this.escapeHtml(s.fusionState.complexity)}${s.fusionState.routeReason ? ` — ${this.escapeHtml(s.fusionState.routeReason)}` : ""}</pre></div>`;
-      }
+
       return "";
     }
     const steps = plan.currentPlan
-      .map((step, i) => `<li${i < plan.completedSteps ? ' class="done"' : ""}>${this.escapeHtml(step)}${i < plan.completedSteps ? " ✓" : ""}</li>`)
+      .map(
+        (step, i) =>
+          `<li${i < plan.completedSteps ? ' class="done"' : ""}>${this.escapeHtml(step)}${i < plan.completedSteps ? " ✓" : ""}</li>`,
+      )
       .join("");
-    const routing = s.fusionState?.routed
-      ? ` · complexity: ${this.escapeHtml(s.fusionState.complexity)}`
-      : "";
-    return `<div class="section"><h4>Plan (${plan.completedSteps}/${plan.currentPlan.length} steps${routing})</h4><ol class="plan-steps">${steps}</ol></div>`;
+    return `<div class="section"><h4>Plan (${plan.completedSteps}/${plan.currentPlan.length})</h4><ol class="plan-steps">${steps}</ol></div>`;
   }
 
   private renderMessage(m: MessageData): string {
     const role = String(m.role);
-    const label = m.name ? `${role.toUpperCase()} · ${this.escapeHtml(m.name)}` : role.toUpperCase();
+    const label = m.name
+      ? `${role.toUpperCase()} · ${this.escapeHtml(m.name)}`
+      : role.toUpperCase();
     const time = m.timestamp
       ? `<span style="margin-left:auto;color:#8b949e;font-weight:400">${new Date(m.timestamp).toLocaleTimeString("en-US", { hour12: false })}</span>`
       : "";
@@ -297,12 +306,16 @@ ${messages}
   // ─── Utils ───────────────────────────────────────────────────────────
 
   private truncate(text: string, max: number): string {
-    return text.length > max ? text.slice(0, max) + `\n... (truncated, ${text.length} chars total)` : text;
+    return text.length > max
+      ? text.slice(0, max) + `\n... (truncated, ${text.length} chars total)`
+      : text;
   }
 
   private fmtTime(iso: string): string {
     const d = new Date(iso);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleString("zh-CN", { hour12: false });
+    return isNaN(d.getTime())
+      ? "—"
+      : d.toLocaleString("zh-CN", { hour12: false });
   }
 
   private escapeHtml(text: string): string {
