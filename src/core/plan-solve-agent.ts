@@ -208,7 +208,7 @@ export class PlanSolveAgent extends Agent {
       const toolsForRound = this.hasPlan
         ? this.toolRegistry.getTools()
         : [];
-      for (const h of this.hooks) h.onLLMStart?.(contextMessages, toolsForRound);
+      this.fireHook((h) => h.onLLMStart?.(contextMessages, toolsForRound));
       let response: LLMResponse;
       try {
         response = await this.llm.chat(
@@ -228,12 +228,12 @@ export class PlanSolveAgent extends Agent {
           return cancelMsg;
         }
         if (err instanceof LLMNetworkError) {
-          for (const h of this.hooks) h.onLLMError?.(err);
+          this.fireHook((h) => h.onLLMError?.(err));
           return this.handleNetworkError(err, iteration + 1, "continue with what you were doing");
         }
         throw err;
       }
-      for (const h of this.hooks) h.onLLMEnd?.(response);
+      this.fireHook((h) => h.onLLMEnd?.(response));
 
       // Record token usage against the session budget
       if (response.usage) {
@@ -282,7 +282,7 @@ export class PlanSolveAgent extends Agent {
 
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         if (response.responseError &&
             response.responseError.code !== LLMResponseErrorCode.MAX_TOKENS &&
@@ -361,7 +361,7 @@ export class PlanSolveAgent extends Agent {
         if (isTruncated) {
             if (parsed.thought) {
             this.logger.info("Thought", parsed.thought);
-            for (const h of this.hooks) h.onThought?.(parsed.thought);
+            this.fireHook((h) => h.onThought?.(parsed.thought));
           }
           // Inject continuation instruction so the LLM knows to complete
           // its truncated response (no tool calls were present).
@@ -375,7 +375,7 @@ export class PlanSolveAgent extends Agent {
         }
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         // ── Hold the answer while sub-agents are still running ──────
         if (this.holdAnswerForPendingSubAgents()) {
@@ -417,10 +417,10 @@ export class PlanSolveAgent extends Agent {
         for (let i = 0; i < this.currentPlan.length; i++) {
           this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
-        for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanCreated?.(this.currentPlan));
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -442,10 +442,10 @@ export class PlanSolveAgent extends Agent {
         for (let i = 0; i < this.currentPlan.length; i++) {
           this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
-        for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanRevised?.(this.currentPlan));
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -454,7 +454,7 @@ export class PlanSolveAgent extends Agent {
       // ── Default: log thought and continue loop ──────────────────
       if (parsed.thought) {
         this.logger.info("Thought", parsed.thought);
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        this.fireHook((h) => h.onThought?.(parsed.thought));
         continue;
       }
 
@@ -588,7 +588,7 @@ export class PlanSolveAgent extends Agent {
       // Buffer the raw output — don't stream raw JSON to the user.
       const isPlanRound = !this.hasPlan;
       const toolsForRound = isPlanRound ? [] : this.toolRegistry.getTools();
-      for (const h of this.hooks) h.onLLMStart?.(contextMessages, toolsForRound);
+      this.fireHook((h) => h.onLLMStart?.(contextMessages, toolsForRound));
 
       // ── Streaming LLM call ────────────────────────────────────────
       let rawContent = "";
@@ -612,7 +612,7 @@ export class PlanSolveAgent extends Agent {
               // Buffer plan-round output; stream execution-round output.
               if (!isPlanRound && display) {
                 yield display;
-                for (const h of this.hooks) h.onChunk?.(display);
+                this.fireHook((h) => h.onChunk?.(display));
               }
             }
             if (event.tool_calls) {
@@ -637,7 +637,7 @@ export class PlanSolveAgent extends Agent {
           return;
         }
         if (err instanceof LLMNetworkError) {
-          for (const h of this.hooks) h.onLLMError?.(err);
+          this.fireHook((h) => h.onLLMError?.(err));
           const msg = await this.handleNetworkError(
             err,
             iteration + 1,
@@ -661,14 +661,14 @@ export class PlanSolveAgent extends Agent {
         this.tokenBudget?.recordUsage(streamUsage.prompt_tokens, streamUsage.completion_tokens);
       }
 
-      for (const h of this.hooks) {
+      this.fireHook((h) =>
         h.onLLMEnd?.({
           content: rawContent,
           tool_calls: toolCalls,
           usage: streamUsage,
           providerMeta: { model: this.llm.model, isFallback: false },
-        });
-      }
+        }),
+      );
 
       const parsed = parsePlanSolveResponse(rawContent);
 
@@ -686,7 +686,7 @@ export class PlanSolveAgent extends Agent {
 
         if (parsed.thought) {
 
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
 
         const assistantMessage = Message.assistant(rawContent, toolCalls);
@@ -780,7 +780,7 @@ export class PlanSolveAgent extends Agent {
       if (parsed.answer) {
         if (parsed.thought) {
 
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         // ── Hold the answer while sub-agents are still running ──────
         if (this.holdAnswerForPendingSubAgents()) {
@@ -822,10 +822,10 @@ export class PlanSolveAgent extends Agent {
         const planText = "\n## Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
         yield planText;
         this.logger.info("Plan", `Created ${this.currentPlan.length}-step plan`);
-        for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanCreated?.(this.currentPlan));
         if (parsed.thought) {
 
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -839,10 +839,10 @@ export class PlanSolveAgent extends Agent {
         const revText = "\n## Revised Plan\n" + this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") + "\n";
         yield revText;
         this.logger.info("Plan", `Revised — ${this.currentPlan.length} steps`);
-        for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanRevised?.(this.currentPlan));
         if (parsed.thought) {
 
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -850,7 +850,7 @@ export class PlanSolveAgent extends Agent {
 
       // ── Thought-only → accumulate, continue ──────────────────────
       if (parsed.thought) {
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        this.fireHook((h) => h.onThought?.(parsed.thought));
         iteration++;
         continue;
       }

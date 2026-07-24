@@ -226,12 +226,12 @@ export class TraceLogger implements AgentHooks {
    *
    * @returns The absolute path to the generated HTML file.
    */
-  flush(): string {
+  async flush(): Promise<string> {
     try {
       const html = this.generateHTML();
-      fs.mkdirSync(this.outputDir, { recursive: true });
+      await fs.promises.mkdir(this.outputDir, { recursive: true });
       const filePath = path.join(this.outputDir, `${this.sessionId}.html`);
-      fs.writeFileSync(filePath, html, "utf-8");
+      await fs.promises.writeFile(filePath, html, "utf-8");
       this.logger.info("Trace", `Saved session trace → ${filePath}`);
       return filePath;
     } catch (err: unknown) {
@@ -307,7 +307,12 @@ export class TraceLogger implements AgentHooks {
         modelName: this.modelName,
       });
     } else {
-      this.flush();
+      this.flush().catch((err: unknown) =>
+        this.logger.warn(
+          "Trace",
+          `flush() failed in onLLMError: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
     }
   }
 
@@ -452,7 +457,12 @@ export class TraceLogger implements AgentHooks {
       });
     } else {
       // Main agent: flush to file.
-      this.flush();
+      this.flush().catch((err: unknown) =>
+        this.logger.warn(
+          "Trace",
+          `flush() failed in onFinish: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
     }
   }
 
@@ -468,7 +478,12 @@ export class TraceLogger implements AgentHooks {
     // Re-flush the parent HTML so new child traces are immediately reflected.
     // Safe to call multiple times (each fork/sub-agent that finishes triggers
     // a flush, overwriting the file with the latest state).
-    this.flush();
+    this.flush().catch((err: unknown) =>
+      this.logger.warn(
+        "Trace",
+        `flush() failed in addChildTrace: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────

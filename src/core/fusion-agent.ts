@@ -172,7 +172,7 @@ export class FusionAgent extends Agent {
       // planResult is string[] → plan was confirmed, continue
       this.currentPlan = planResult;
       this.hasPlan = true;
-      for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+      this.fireHook((h) => h.onPlanCreated?.(this.currentPlan));
 
       // Save checkpoint after plan creation
       if (this.checkpointingEnabled) {
@@ -281,8 +281,9 @@ export class FusionAgent extends Agent {
     const budgetError = this.checkTokenBudget(estimatedInput);
     if (budgetError) return budgetError;
 
-    for (const h of this.hooks)
-      h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+    this.fireHook((h) =>
+      h.onLLMStart?.(contextMessages, this.toolRegistry.getTools()),
+    );
 
     let response: LLMResponse;
     try {
@@ -303,13 +304,13 @@ export class FusionAgent extends Agent {
         return cancelMsg;
       }
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         return this.handleNetworkError(err, 0, "continue creating a plan");
       }
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.(response);
+    this.fireHook((h) => h.onLLMEnd?.(response));
 
     if (response.usage) {
       this.tokenBudget?.recordUsage(
@@ -355,7 +356,7 @@ export class FusionAgent extends Agent {
 
       if (parsed.thought) {
         this.logger.info("Thought", parsed.thought);
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        this.fireHook((h) => h.onThought?.(parsed.thought));
       }
 
       return plan;
@@ -500,8 +501,9 @@ export class FusionAgent extends Agent {
       if (budgetError) return budgetError;
 
       // ── LLM call ────────────────────────────────────────────────────
-      for (const h of this.hooks)
-        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+      this.fireHook((h) =>
+        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools()),
+      );
 
       let response: LLMResponse;
       try {
@@ -522,7 +524,7 @@ export class FusionAgent extends Agent {
           return cancelMsg;
         }
         if (err instanceof LLMNetworkError) {
-          for (const h of this.hooks) h.onLLMError?.(err);
+          this.fireHook((h) => h.onLLMError?.(err));
           return this.handleNetworkError(
             err,
             iteration + 1,
@@ -532,7 +534,7 @@ export class FusionAgent extends Agent {
         throw err;
       }
 
-      for (const h of this.hooks) h.onLLMEnd?.(response);
+      this.fireHook((h) => h.onLLMEnd?.(response));
 
       if (response.usage) {
         this.tokenBudget?.recordUsage(
@@ -587,7 +589,7 @@ export class FusionAgent extends Agent {
 
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
 
         // Non-truncation quality issues
@@ -666,7 +668,7 @@ export class FusionAgent extends Agent {
         if (isTruncated) {
           if (parsed.thought) {
             this.logger.info("Thought", parsed.thought);
-            for (const h of this.hooks) h.onThought?.(parsed.thought);
+            this.fireHook((h) => h.onThought?.(parsed.thought));
           }
           // Inject continuation instruction so the LLM knows to complete
           // its truncated response (no tool calls were present).
@@ -685,7 +687,7 @@ export class FusionAgent extends Agent {
 
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         // ── Hold the answer while sub-agents are still running ──────
         if (this.holdAnswerForPendingSubAgents()) {
@@ -717,10 +719,10 @@ export class FusionAgent extends Agent {
         for (let i = 0; i < this.currentPlan.length; i++) {
           this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
-        for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanCreated?.(this.currentPlan));
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -742,10 +744,10 @@ export class FusionAgent extends Agent {
         for (let i = 0; i < this.currentPlan.length; i++) {
           this.logger.info("Plan", `  ${i + 1}. ${this.currentPlan[i]}`);
         }
-        for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanRevised?.(this.currentPlan));
         if (parsed.thought) {
           this.logger.info("Thought", parsed.thought);
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -754,7 +756,7 @@ export class FusionAgent extends Agent {
       // ── Thought-only iteration ──────────────────────────────────────
       if (parsed.thought) {
         this.logger.info("Thought", parsed.thought);
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        this.fireHook((h) => h.onThought?.(parsed.thought));
         iteration++;
         continue;
       }
@@ -963,7 +965,7 @@ export class FusionAgent extends Agent {
           planResult.map((s, i) => `${i + 1}. ${s}`).join("\n") +
           "\n";
         yield planText;
-        for (const h of this.hooks) h.onPlanCreated?.(planResult);
+        this.fireHook((h) => h.onPlanCreated?.(planResult));
       }
     }
 
@@ -1012,8 +1014,9 @@ export class FusionAgent extends Agent {
         return;
       }
 
-      for (const h of this.hooks)
-        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools());
+      this.fireHook((h) =>
+        h.onLLMStart?.(contextMessages, this.toolRegistry.getTools()),
+      );
 
       let rawContent = "";
       let isTruncated = false;
@@ -1044,7 +1047,7 @@ export class FusionAgent extends Agent {
               const display = answerExtractor.feed(event.content);
               if (display) {
                 yield display;
-                for (const h of this.hooks) h.onChunk?.(display);
+                this.fireHook((h) => h.onChunk?.(display));
               }
             }
             if (event.tool_calls) {
@@ -1070,7 +1073,7 @@ export class FusionAgent extends Agent {
           return;
         }
         if (err instanceof LLMNetworkError) {
-          for (const h of this.hooks) h.onLLMError?.(err);
+          this.fireHook((h) => h.onLLMError?.(err));
           const msg = await this.handleNetworkError(
             err,
             iteration + 1,
@@ -1097,14 +1100,14 @@ export class FusionAgent extends Agent {
         );
       }
 
-      for (const h of this.hooks) {
+      this.fireHook((h) =>
         h.onLLMEnd?.({
           content: rawContent,
           tool_calls: toolCalls,
           usage: streamUsage,
           providerMeta: { model: this.llm.model, isFallback: false },
-        });
-      }
+        }),
+      );
 
       const parsed = parseFusionResponse(rawContent);
 
@@ -1120,7 +1123,7 @@ export class FusionAgent extends Agent {
         }
 
         if (parsed.thought) {
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
 
         const assistantMessage = Message.assistant(rawContent, toolCalls);
@@ -1224,7 +1227,7 @@ export class FusionAgent extends Agent {
       // ── Final answer ──────────────────────────────────────────────
       if (parsed.answer) {
         if (parsed.thought) {
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         // ── Hold the answer while sub-agents are still running ──────
         if (this.holdAnswerForPendingSubAgents()) {
@@ -1270,9 +1273,9 @@ export class FusionAgent extends Agent {
           this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") +
           "\n";
         yield planText;
-        for (const h of this.hooks) h.onPlanCreated?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanCreated?.(this.currentPlan));
         if (parsed.thought) {
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -1288,9 +1291,9 @@ export class FusionAgent extends Agent {
           this.currentPlan.map((s, i) => `${i + 1}. ${s}`).join("\n") +
           "\n";
         yield revText;
-        for (const h of this.hooks) h.onPlanRevised?.(this.currentPlan);
+        this.fireHook((h) => h.onPlanRevised?.(this.currentPlan));
         if (parsed.thought) {
-          for (const h of this.hooks) h.onThought?.(parsed.thought);
+          this.fireHook((h) => h.onThought?.(parsed.thought));
         }
         iteration++;
         continue;
@@ -1298,7 +1301,7 @@ export class FusionAgent extends Agent {
 
       // ── Thought only ──────────────────────────────────────────────
       if (parsed.thought) {
-        for (const h of this.hooks) h.onThought?.(parsed.thought);
+        this.fireHook((h) => h.onThought?.(parsed.thought));
         iteration++;
         continue;
       }

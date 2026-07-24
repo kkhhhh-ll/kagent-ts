@@ -328,7 +328,7 @@ export class OrchestratorAgent extends Agent {
       const planSteps = this.taskGraph.nodes.map(
         (n) => `[${n.id}] ${n.subAgentName}: ${n.description}`,
       );
-      for (const h of this.hooks) h.onPlanCreated?.(planSteps);
+      this.fireHook((h) => h.onPlanCreated?.(planSteps));
 
       this.logger.info("Orchestrator", `Decomposed into ${this.taskGraph.nodes.length} node(s).`);
       for (const n of this.taskGraph.nodes) {
@@ -417,7 +417,7 @@ export class OrchestratorAgent extends Agent {
       const revisedSteps = this.taskGraph.nodes.map(
         (n) => `[${n.id}] ${n.subAgentName}: ${n.description} (${n.status})`,
       );
-      for (const h of this.hooks) h.onPlanRevised?.(revisedSteps);
+      this.fireHook((h) => h.onPlanRevised?.(revisedSteps));
 
       if (this.checkpointingEnabled) {
         this.saveCheckpoint("active");
@@ -490,7 +490,7 @@ export class OrchestratorAgent extends Agent {
     const planSteps = this.taskGraph.nodes.map(
       (n) => `[${n.id}] ${n.subAgentName}: ${n.description}`,
     );
-    for (const h of this.hooks) h.onPlanCreated?.(planSteps);
+    this.fireHook((h) => h.onPlanCreated?.(planSteps));
     yield `Decomposed into ${this.taskGraph.nodes.length} node(s):\n`;
     for (const n of this.taskGraph.nodes) {
       const depStr = n.dependsOn.length > 0
@@ -568,7 +568,7 @@ export class OrchestratorAgent extends Agent {
       const revisedSteps = this.taskGraph.nodes.map(
         (n) => `[${n.id}] ${n.subAgentName}: ${n.description} (${n.status})`,
       );
-      for (const h of this.hooks) h.onPlanRevised?.(revisedSteps);
+      this.fireHook((h) => h.onPlanRevised?.(revisedSteps));
 
       if (this.checkpointingEnabled) this.saveCheckpoint("active");
     }
@@ -630,7 +630,7 @@ export class OrchestratorAgent extends Agent {
             workdir ? { workdir } : undefined,
           );
           node.runId = runId;
-          for (const h of this.hooks) h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId);
+          this.fireHook((h) => h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId));
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           node.status = "failed";
@@ -642,7 +642,8 @@ export class OrchestratorAgent extends Agent {
             durationMs: 0,
           };
           node.durationMs = 0;
-          for (const h of this.hooks) h.onToolError?.("spawn_subagent", node.result.output, undefined);
+          const spawnErrorResult = node.result;
+          this.fireHook((h) => h.onToolError?.("spawn_subagent", spawnErrorResult.output, undefined));
           yield `    ❌ Failed to spawn: ${message}\n`;
         }
       }
@@ -735,7 +736,7 @@ Rules:
       { role: Role.System, content: prompt },
     ];
 
-    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+    this.fireHook((h) => h.onLLMStart?.(messages, []));
 
     // Buffer the full response to parse JSON, but stream the answer portion
     let rawContent = "";
@@ -757,7 +758,7 @@ Rules:
       }
     } catch (err: unknown) {
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         const fallback = `Network error during final synthesis: ${err.message}. ` +
           `Partial results are preserved in the session.`;
         return fallback;
@@ -765,7 +766,7 @@ Rules:
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.({ content: rawContent, usage: streamUsage });
+    this.fireHook((h) => h.onLLMEnd?.({ content: rawContent, usage: streamUsage }));
 
     this.trackFallbackStream("ForceSynthesize", rawContent, streamUsage);
 
@@ -1067,7 +1068,7 @@ Rules:
       { role: Role.User, content: input },
     ];
 
-    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+    this.fireHook((h) => h.onLLMStart?.(messages, []));
 
     let response: LLMResponse;
     try {
@@ -1085,7 +1086,7 @@ Rules:
         return { thought: "Cancelled.", taskGraph: { nodes: [] } };
       }
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         const recovered = await this.handleNetworkError(err, 0, "continue creating a decomposition plan");
         // If recovery returned a string, wrap it
         if (typeof recovered === "string") {
@@ -1095,7 +1096,7 @@ Rules:
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.(response);
+    this.fireHook((h) => h.onLLMEnd?.(response));
 
     this.trackFallback("Decompose", response);
 
@@ -1122,7 +1123,7 @@ Rules:
 
     if (parsed.thought) {
       this.logger.info("Orchestrator", `Decompose: ${parsed.thought}`);
-      for (const h of this.hooks) h.onThought?.(parsed.thought);
+      this.fireHook((h) => h.onThought?.(parsed.thought));
     }
 
     return parsed;
@@ -1199,7 +1200,7 @@ Rules:
           this.logger.info("Orchestrator", `  Spawned [${node.id}] → ${node.subAgentName} (${runId})`);
 
           // Fire onToolStart so traces capture the sub-agent dispatch
-          for (const h of this.hooks) h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId);
+          this.fireHook((h) => h.onToolStart?.("spawn_subagent", { name: node.subAgentName, input: resolvedInput }, runId));
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.warn("Orchestrator", `  Failed to spawn [${node.id}]: ${message}`);
@@ -1214,7 +1215,8 @@ Rules:
           node.durationMs = 0;
 
           // Fire onToolError for the failed spawn
-          for (const h of this.hooks) h.onToolError?.("spawn_subagent", node.result.output, undefined);
+          const spawnErrorResult2 = node.result;
+          this.fireHook((h) => h.onToolError?.("spawn_subagent", spawnErrorResult2.output, undefined));
         }
       }
 
@@ -1327,9 +1329,9 @@ Rules:
 
               // Fire hooks so traces capture the sub-agent result
               if (result.success) {
-                for (const h of this.hooks) h.onToolEnd?.("spawn_subagent", result.output, node.runId);
+                this.fireHook((h) => h.onToolEnd?.("spawn_subagent", result.output, node.runId));
               } else {
-                for (const h of this.hooks) h.onToolError?.("spawn_subagent", result.output, node.runId);
+                this.fireHook((h) => h.onToolError?.("spawn_subagent", result.output, node.runId));
               }
 
               break;
@@ -1395,7 +1397,7 @@ Rules:
       { role: Role.System, content: prompt },
     ];
 
-    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+    this.fireHook((h) => h.onLLMStart?.(messages, []));
 
     let response: LLMResponse;
     try {
@@ -1409,7 +1411,7 @@ Rules:
         return { thought: "Cancelled.", isComplete: false, gaps: [] };
       }
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         return {
           thought: `Network error during synthesis: ${err.message}`,
           isComplete: false,
@@ -1419,7 +1421,7 @@ Rules:
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.(response);
+    this.fireHook((h) => h.onLLMEnd?.(response));
 
     this.trackFallback("Synthesize", response);
 
@@ -1480,7 +1482,7 @@ Rules:
       { role: Role.System, content: prompt },
     ];
 
-    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+    this.fireHook((h) => h.onLLMStart?.(messages, []));
 
     let response: LLMResponse;
     try {
@@ -1494,7 +1496,7 @@ Rules:
         return { thought: "Cancelled.", newNodes: [], stuck: true };
       }
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         return {
           thought: `Network error during adapt: ${err.message}`,
           newNodes: [],
@@ -1504,7 +1506,7 @@ Rules:
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.(response);
+    this.fireHook((h) => h.onLLMEnd?.(response));
 
     this.trackFallback("Adapt", response);
 
@@ -1533,7 +1535,7 @@ Rules:
 
     if (parsed.thought) {
       this.logger.info("Orchestrator", `Adapt: ${parsed.thought}`);
-      for (const h of this.hooks) h.onThought?.(parsed.thought);
+      this.fireHook((h) => h.onThought?.(parsed.thought));
     }
 
     return parsed;
@@ -1581,7 +1583,7 @@ Rules:
       { role: Role.System, content: prompt },
     ];
 
-    for (const h of this.hooks) h.onLLMStart?.(messages, []);
+    this.fireHook((h) => h.onLLMStart?.(messages, []));
 
     let response: LLMResponse;
     try {
@@ -1592,14 +1594,14 @@ Rules:
       );
     } catch (err: unknown) {
       if (err instanceof LLMNetworkError) {
-        for (const h of this.hooks) h.onLLMError?.(err);
+        this.fireHook((h) => h.onLLMError?.(err));
         return `Network error during final synthesis: ${err.message}. ` +
           `Partial results are preserved in the session.`;
       }
       throw err;
     }
 
-    for (const h of this.hooks) h.onLLMEnd?.(response);
+    this.fireHook((h) => h.onLLMEnd?.(response));
 
     this.trackFallback("ForceSynthesize", response);
 

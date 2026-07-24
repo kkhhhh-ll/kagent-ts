@@ -647,16 +647,48 @@ export abstract class Agent {
   getToolRegistry(): ToolRegistry {
     return this.toolRegistry;
   }
-  /** Fire the `onFinish` hook for every registered observer (fire-and-forget). */
-  protected fireOnFinish(answer: string): void {
+  /**
+   * Safely invoke a synchronous hook on every registered observer.
+   *
+   * Each hook call is wrapped in try/catch so a single misbehaving hook
+   * cannot crash the agent loop. Failures are logged and execution continues.
+   */
+  protected fireHook(fn: (h: AgentHooks) => void): void {
     for (const h of this.hooks) {
-      Promise.resolve(h.onFinish?.(answer)).catch((err: unknown) =>
+      try {
+        fn(h);
+      } catch (err: unknown) {
         this.logger.warn(
           "Hook",
-          `onFinish failed: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
+          `Hook failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
+  }
+
+  /**
+   * Safely invoke a possibly-async hook on every registered observer.
+   *
+   * Fire-and-forget: each hook runs in its own microtask. Failures are
+   * caught and logged — they never propagate to the caller. Use this for
+   * hooks that return `void | Promise<void>` (e.g. {@link AgentHooks.onFinish}).
+   */
+  protected fireHookAsync(fn: (h: AgentHooks) => void | Promise<void>): void {
+    for (const h of this.hooks) {
+      Promise.resolve()
+        .then(() => fn(h))
+        .catch((err: unknown) =>
+          this.logger.warn(
+            "Hook",
+            `Async hook failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+    }
+  }
+
+  /** Fire the `onFinish` hook for every registered observer (fire-and-forget). */
+  protected fireOnFinish(answer: string): void {
+    this.fireHookAsync((h) => h.onFinish?.(answer));
   }
 
   /**
@@ -881,17 +913,17 @@ export abstract class Agent {
     const beforeTokens = this.contextManager.getCurrentTokens(model);
     const state = this.contextManager.getState();
 
-    for (const h of this.hooks) {
-      h.onCompressionStart?.(beforeTokens, state.maxTokens, state.messageCount);
-    }
+    this.fireHook((h) =>
+      h.onCompressionStart?.(beforeTokens, state.maxTokens, state.messageCount),
+    );
 
     const { tokensSaved, details } = await this.contextManager.compress(this.llm);
 
     const afterTokens = this.contextManager.getCurrentTokens(model);
 
-    for (const h of this.hooks) {
-      h.onCompressionEnd?.(beforeTokens, afterTokens, tokensSaved, details);
-    }
+    this.fireHook((h) =>
+      h.onCompressionEnd?.(beforeTokens, afterTokens, tokensSaved, details),
+    );
   }
 
   /** Re-scan skills directory for new SKILL.md files added between runs. */
@@ -1162,8 +1194,9 @@ export abstract class Agent {
             `Please re-invoke the tool with correctly formatted JSON arguments.`,
           "retryable",
         );
-        for (const h of this.hooks)
-          h.onToolError?.(tc.function.name, result.content, tc.id);
+        this.fireHook((h) =>
+          h.onToolError?.(tc.function.name, result.content, tc.id),
+        );
         slots.push({ toolCall: tc, args: {}, result });
         continue;
       }
@@ -1177,8 +1210,9 @@ export abstract class Agent {
           args,
         );
         if (validationError) {
-          for (const h of this.hooks)
-            h.onToolError?.(tc.function.name, validationError.content, tc.id);
+          this.fireHook((h) =>
+            h.onToolError?.(tc.function.name, validationError.content, tc.id),
+          );
           slots.push({ toolCall: tc, args, result: validationError });
           continue;
         }
@@ -1203,12 +1237,14 @@ export abstract class Agent {
               `Do NOT retry this tool. Find a different approach.`,
             "fatal",
           );
-          for (const h of this.hooks)
+          const deniedResult = slot.result;
+          this.fireHook((h) =>
             h.onToolError?.(
               slot.toolCall.function.name,
-              slot.result.content,
+              deniedResult.content,
               slot.toolCall.id,
-            );
+            ),
+          );
         }
       }
     }
@@ -1246,12 +1282,13 @@ export abstract class Agent {
       // Log and fire hooks before concurrent execution
       for (const slot of executable) {
         this.logger.info("Action", slot.toolCall.function.name);
-        for (const h of this.hooks)
+        this.fireHook((h) =>
           h.onToolStart?.(
             slot.toolCall.function.name,
             slot.args,
             slot.toolCall.id,
-          );
+          ),
+        );
       }
 
       // Execute all in parallel.
@@ -1275,19 +1312,21 @@ export abstract class Agent {
             slot.result = result;
 
             if (result.success) {
-              for (const h of this.hooks)
+              this.fireHook((h) =>
                 h.onToolEnd?.(
                   slot.toolCall.function.name,
                   result.content,
                   slot.toolCall.id,
-                );
+                ),
+              );
             } else {
-              for (const h of this.hooks)
+              this.fireHook((h) =>
                 h.onToolError?.(
                   slot.toolCall.function.name,
                   result.content,
                   slot.toolCall.id,
-                );
+                ),
+              );
             }
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -1296,12 +1335,14 @@ export abstract class Agent {
               `[FATAL:EXECUTION_FAILURE] Tool "${slot.toolCall.function.name}" threw an unexpected error: ${message}`,
               "fatal",
             );
-            for (const h of this.hooks)
+            const execErrorResult = slot.result;
+            this.fireHook((h) =>
               h.onToolError?.(
                 slot.toolCall.function.name,
-                slot.result.content,
+                execErrorResult.content,
                 slot.toolCall.id,
-              );
+              ),
+            );
           }
         }),
       );
@@ -1324,12 +1365,13 @@ export abstract class Agent {
         }
 
         this.logger.info("Action", slot.toolCall.function.name);
-        for (const h of this.hooks)
+        this.fireHook((h) =>
           h.onToolStart?.(
             slot.toolCall.function.name,
             slot.args,
             slot.toolCall.id,
-          );
+          ),
+        );
 
         try {
           slot.result = await this.toolRegistry.execute(
@@ -1347,29 +1389,34 @@ export abstract class Agent {
             `[FATAL:EXECUTION_FAILURE] Tool "${slot.toolCall.function.name}" threw an unexpected error: ${message}`,
             "fatal",
           );
-          for (const h of this.hooks)
+          const serialErrorResult = slot.result;
+          this.fireHook((h) =>
             h.onToolError?.(
               slot.toolCall.function.name,
-              slot.result.content,
+              serialErrorResult.content,
               slot.toolCall.id,
-            );
+            ),
+          );
           continue;
         }
 
-        if (slot.result.success) {
-          for (const h of this.hooks)
+        const serialResult = slot.result;
+        if (serialResult.success) {
+          this.fireHook((h) =>
             h.onToolEnd?.(
               slot.toolCall.function.name,
-              slot.result.content,
+              serialResult.content,
               slot.toolCall.id,
-            );
+            ),
+          );
         } else {
-          for (const h of this.hooks)
+          this.fireHook((h) =>
             h.onToolError?.(
               slot.toolCall.function.name,
-              slot.result.content,
+              serialResult.content,
               slot.toolCall.id,
-            );
+            ),
+          );
         }
       }
       this._toolAbortController = undefined;
